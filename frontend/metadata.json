@@ -1,0 +1,6 @@
+{
+  "name": "SoloDev Studio",
+  "description": "Personal project lifecycle tracker, idea brainstorming with sketches, priority matrix, deadline timeline, and integrated focus time tracking for solo creators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

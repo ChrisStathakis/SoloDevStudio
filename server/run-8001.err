@@ -1,0 +1,7 @@
+Watching for file changes with StatReloader
+[22/Aug/2026 01:50:57] "OPTIONS /api/auth/login/ HTTP/1.1" 200 0
+[22/Aug/2026 01:50:58] "OPTIONS /api/auth/login/ HTTP/1.1" 200 0
+[22/Aug/2026 01:51:35] "OPTIONS /api/auth/register/ HTTP/1.1" 200 0
+Unauthorized: /api/
+[22/Aug/2026 02:06:46] "GET /api/ HTTP/1.1" 401 58
+[22/Aug/2026 02:06:52,364] - Broken pipe from ('127.0.0.1', 50180)

@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-surface:         var(--surface);
+  --color-surface-2:       var(--surface-2);
+  --color-surface-3:       var(--surface-3);
+  --color-surface-inverse: var(--surface-inverse);
+  --color-line:            var(--line);
+  --color-line-strong:     var(--line-strong);
+  --color-content:         var(--content-default);
+  --color-content-muted:   var(--content-muted);
+  --color-content-faint:   var(--content-faint);
+}
+
+/* Global font-size scale bump (~+1-2px) */
+@theme {
+  --text-xs:   0.8125rem;
+  --text-sm:   0.9375rem;
+  --text-base: 1.0625rem;
+  --text-lg:   1.1875rem;
+  --text-xl:   1.375rem;
+  --text-2xl:  1.625rem;
+  --text-3xl:  2rem;
+  --text-4xl:  2.5rem;
+  --text-5xl:  3.25rem;
+  --text-6xl:  4rem;
+  --text-7xl:  4.75rem;
+  --text-8xl:  6.25rem;
+  --text-9xl:  8.25rem;
+}
+
+:root {
+  --surface: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --surface-inverse: #0f0f12;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --content-default: #0f172a;
+  --content-muted: #475569;
+  --content-faint: #64748b;
+}
+
+.dark {
+  --surface: #0f0f12;
+  --surface-1: #0f0f12;
+  --surface-2: #111114;
+  --surface-3: #121216;
+  --surface-inverse: #0a0a0b;
+  --line: #1e293b;
+  --line-strong: #334155;
+  --content-default: #f1f5f9;
+  --content-muted: #cbd5e1;
+  --content-faint: #94a3b8;
+}
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: -0.01em;
+    @apply bg-slate-50 text-slate-900 dark:bg-[#0A0A0B] dark:text-slate-100 transition-colors duration-200;
+  }
+
+  code, kbd, samp, pre {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  ::selection {
+    background: rgba(99, 102, 241, 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Custom crisp scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+/* Markdown preview typography */
+.md-preview {
+  @apply text-content text-sm leading-relaxed;
+}
+.md-preview h1, .md-preview h2, .md-preview h3, .md-preview h4 {
+  @apply text-content font-black tracking-tight mt-5 mb-2 first:mt-0;
+}
+.md-preview h1 { @apply text-xl; }
+.md-preview h2 { @apply text-lg pb-1 border-b border-line; }
+.md-preview h3 { @apply text-base; }
+.md-preview h4 { @apply text-sm uppercase tracking-wider text-content-faint; }
+.md-preview p { @apply my-2.5; }
+.md-preview strong { @apply text-content font-bold; }
+.md-preview em { @apply italic text-content; }
+.md-preview del { @apply text-content-faint; }
+.md-preview a { @apply text-indigo-400 underline underline-offset-2 hover:text-indigo-300 break-all; }
+.md-preview ul { @apply list-disc pl-6 my-2.5 space-y-1; }
+.md-preview ol { @apply list-decimal pl-6 my-2.5 space-y-1; }
+.md-preview li > ul, .md-preview li > ol { @apply my-1; }
+.md-preview code {
+  @apply bg-surface-inverse text-indigo-300 rounded-md px-1.5 py-0.5 text-xs font-mono;
+}
+.md-preview pre {
+  @apply bg-surface-inverse border border-line rounded-xl p-4 overflow-x-auto my-3;
+}
+.md-preview pre code { @apply bg-transparent text-content p-0 text-xs leading-relaxed; }
+.md-preview blockquote {
+  @apply border-l-4 border-indigo-500/60 bg-indigo-500/5 rounded-r-lg pl-4 pr-3 py-2 my-3 text-content-faint italic;
+}
+.md-preview blockquote p { @apply my-0.5; }
+.md-preview hr { @apply border-line my-4; }
+.md-preview table { @apply w-full text-xs border-collapse my-3; }
+.md-preview th {
+  @apply text-left font-black text-content bg-surface-inverse border border-line-strong px-3 py-2;
+}
+.md-preview td { @apply border border-line px-3 py-1.5 align-top; }
+.md-preview img { @apply max-w-full rounded-xl my-3; }

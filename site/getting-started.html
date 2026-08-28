@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        
+        
+        
+        <link rel="shortcut icon" href="img/favicon.ico">
+        <title>Getting started - SoloDev Studio</title>
+        <link href="css/bootstrap.min.css" rel="stylesheet">
+        <link href="css/fontawesome.min.css" rel="stylesheet">
+        <link href="css/brands.min.css" rel="stylesheet">
+        <link href="css/solid.min.css" rel="stylesheet">
+        <link href="css/v4-font-face.min.css" rel="stylesheet">
+        <link href="css/base.css" rel="stylesheet">
+        <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" >
+        <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css" disabled>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script>hljs.highlightAll();</script> 
+    </head>
+
+    <body>
+        <div class="navbar fixed-top navbar-expand-lg navbar-dark bg-primary">
+            <div class="container">
+                <a class="navbar-brand" href="index.html">SoloDev Studio</a>
+                <!-- Expander button -->
+                <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#navbar-collapse" aria-controls="navbar-collapse" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <!-- Expanded navigation -->
+                <div id="navbar-collapse" class="navbar-collapse collapse">
+                        <!-- Main navigation -->
+                        <ul class="nav navbar-nav">
+                            <li class="nav-item">
+                                <a href="index.html" class="nav-link">Home</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="getting-started.html" class="nav-link active" aria-current="page">Getting started</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="user-guide.html" class="nav-link">User guide</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="architecture.html" class="nav-link">Architecture</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="api-reference.html" class="nav-link">API reference</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="operations.html" class="nav-link">Operations</a>
+                            </li>
+                        </ul>
+
+                    <ul class="nav navbar-nav ms-md-auto">
+                        <li class="nav-item">
+                            <a href="#" class="nav-link" data-bs-toggle="modal" data-bs-target="#mkdocs_search_modal">
+                                <i class="fa fa-search"></i> Search
+                            </a>
+                        </li>
+                            <li class="nav-item">
+                                <a rel="prev" href="index.html" class="nav-link">
+                                    <i class="fa fa-arrow-left"></i> Previous
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a rel="next" href="user-guide.html" class="nav-link">
+                                    Next <i class="fa fa-arrow-right"></i>
+                                </a>
+                            </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="container">
+            <div class="row">
+                    <div class="col-md-3"><div class="navbar-expand-md bs-sidebar hidden-print affix" role="complementary">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggler collapsed" data-bs-toggle="collapse" data-bs-target="#toc-collapse" title="Table of Contents">
+            <span class="fa fa-angle-down"></span>
+        </button>
+    </div>
+
+    
+    <div id="toc-collapse" class="navbar-collapse collapse card bg-body-tertiary">
+        <ul class="nav flex-column">
+            
+            <li class="nav-item" data-bs-level="1"><a href="#getting-started" class="nav-link">Getting started</a>
+              <ul class="nav flex-column">
+            <li class="nav-item" data-bs-level="2"><a href="#requirements" class="nav-link">Requirements</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#install-dependencies" class="nav-link">Install dependencies</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#configure-local-environment-files" class="nav-link">Configure local environment files</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#start-the-application" class="nav-link">Start the application</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#first-login" class="nav-link">First login</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#verify-the-services" class="nav-link">Verify the services</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+              </ul>
+            </li>
+        </ul>
+    </div>
+</div></div>
+                    <div class="col-md-9" role="main">
+
+<h1 id="getting-started">Getting started</h1>
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>Windows is required for the in-app CMD, script console, and Explorer folder actions.</li>
+<li>Python 3.11 or newer with Django dependencies available.</li>
+<li>Node.js 18 or newer and npm.</li>
+<li>The repository's Python and frontend dependencies installed.</li>
+</ul>
+<p>The backend uses Django 5.2 or newer below 6.0, Django REST Framework, SimpleJWT, CORS headers, django-filter, python-decouple, and pywinpty on Windows. The frontend uses React, Vite, TypeScript, Axios, xterm, and Lucide icons.</p>
+<h2 id="install-dependencies">Install dependencies</h2>
+<p>From the repository root:</p>
+<pre><code class="language-powershell">npm run install:all
+</code></pre>
+<p>To install only the documentation toolchain:</p>
+<pre><code class="language-powershell">pip install -r requirements-docs.txt
+</code></pre>
+<h2 id="configure-local-environment-files">Configure local environment files</h2>
+<p>Copy the example files and adjust values for the local machine:</p>
+<pre><code class="language-powershell">Copy-Item server\.env.example server\.env
+Copy-Item frontend\.env.example frontend\.env
+</code></pre>
+<p>The backend reads <code>SECRET_KEY</code>, <code>DEBUG</code>, <code>ALLOWED_HOSTS</code>, <code>CORS_ALLOWED_ORIGINS</code>, and <code>APP_URL</code>. The frontend reads <code>VITE_API_URL</code>; the checked-in example points to <code>http://localhost:8001/api</code>. The optional Gemini-powered research endpoints read <code>GEMINI_API_KEY</code> from the frontend server environment. Never place real credentials in documentation or source control.</p>
+<h2 id="start-the-application">Start the application</h2>
+<p>The recommended Windows launcher starts both services, checks ports, and can install missing dependencies:</p>
+<pre><code class="language-powershell">.\start.ps1
+</code></pre>
+<p>This serves the frontend at <code>http://localhost:3000</code> and Django at <code>http://localhost:8001</code>.</p>
+<p>Useful variants:</p>
+<pre><code class="language-powershell">.\start.ps1 -SkipInstall
+.\start.ps1 -UseVite
+.\start.ps1 -BackendPort 8001 -FrontendPort 3000
+</code></pre>
+<p>The <code>-UseVite</code> variant serves the standalone Vite frontend on port 5174. If you change the backend port, update <code>frontend/.env</code> so <code>VITE_API_URL</code> and the backend CORS setting agree.</p>
+<p>The equivalent root npm commands are:</p>
+<pre><code class="language-powershell">npm run dev
+npm run dev:vite
+</code></pre>
+<h2 id="first-login">First login</h2>
+<p>Open the frontend, register a user, and sign in. The API issues a short-lived access token and a refresh token; the frontend refreshes access automatically when an authenticated request expires. All application data is scoped to the signed-in owner.</p>
+<h2 id="verify-the-services">Verify the services</h2>
+<p>The Django health endpoint is unauthenticated:</p>
+<pre><code class="language-text">GET http://localhost:8001/api/health/
+</code></pre>
+<p>Run backend migrations before the first use:</p>
+<pre><code class="language-powershell">cd server
+python manage.py migrate
+</code></pre></div>
+            </div>
+        </div>
+
+        <footer class="col-md-12">
+            <hr>
+            <p>Documentation built with <a href="https://www.mkdocs.org/">MkDocs</a>.</p>
+        </footer>
+        <script src="js/bootstrap.bundle.min.js"></script>
+        <script>
+            var base_url = ".",
+                shortcuts = {"help": 191, "next": 78, "previous": 80, "search": 83};
+        </script>
+        <script src="js/base.js"></script>
+        <script src="search/main.js"></script>
+
+        <div class="modal" id="mkdocs_search_modal" tabindex="-1" role="dialog" aria-labelledby="searchModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="searchModalLabel">Search</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>From here you can search these documents. Enter your search terms below.</p>
+                <form>
+                    <div class="form-group">
+                        <input type="search" class="form-control" placeholder="Search..." id="mkdocs-search-query" title="Type search term here">
+                    </div>
+                </form>
+                <div id="mkdocs-search-results" data-no-results-text="No results found"></div>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div><div class="modal" id="mkdocs_keyboard_modal" tabindex="-1" role="dialog" aria-labelledby="keyboardModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="keyboardModalLabel">Keyboard Shortcuts</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th style="width: 20%;">Keys</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="help shortcut"><kbd>?</kbd></td>
+                    <td>Open this help</td>
+                  </tr>
+                  <tr>
+                    <td class="next shortcut"><kbd>n</kbd></td>
+                    <td>Next page</td>
+                  </tr>
+                  <tr>
+                    <td class="prev shortcut"><kbd>p</kbd></td>
+                    <td>Previous page</td>
+                  </tr>
+                  <tr>
+                    <td class="search shortcut"><kbd>s</kbd></td>
+                    <td>Search</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div>
+
+    </body>
+</html>

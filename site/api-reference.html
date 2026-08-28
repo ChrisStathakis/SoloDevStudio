@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        
+        
+        
+        <link rel="shortcut icon" href="img/favicon.ico">
+        <title>API reference - SoloDev Studio</title>
+        <link href="css/bootstrap.min.css" rel="stylesheet">
+        <link href="css/fontawesome.min.css" rel="stylesheet">
+        <link href="css/brands.min.css" rel="stylesheet">
+        <link href="css/solid.min.css" rel="stylesheet">
+        <link href="css/v4-font-face.min.css" rel="stylesheet">
+        <link href="css/base.css" rel="stylesheet">
+        <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" >
+        <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css" disabled>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script>hljs.highlightAll();</script> 
+    </head>
+
+    <body>
+        <div class="navbar fixed-top navbar-expand-lg navbar-dark bg-primary">
+            <div class="container">
+                <a class="navbar-brand" href="index.html">SoloDev Studio</a>
+                <!-- Expander button -->
+                <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#navbar-collapse" aria-controls="navbar-collapse" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <!-- Expanded navigation -->
+                <div id="navbar-collapse" class="navbar-collapse collapse">
+                        <!-- Main navigation -->
+                        <ul class="nav navbar-nav">
+                            <li class="nav-item">
+                                <a href="index.html" class="nav-link">Home</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="getting-started.html" class="nav-link">Getting started</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="user-guide.html" class="nav-link">User guide</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="architecture.html" class="nav-link">Architecture</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="api-reference.html" class="nav-link active" aria-current="page">API reference</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="operations.html" class="nav-link">Operations</a>
+                            </li>
+                        </ul>
+
+                    <ul class="nav navbar-nav ms-md-auto">
+                        <li class="nav-item">
+                            <a href="#" class="nav-link" data-bs-toggle="modal" data-bs-target="#mkdocs_search_modal">
+                                <i class="fa fa-search"></i> Search
+                            </a>
+                        </li>
+                            <li class="nav-item">
+                                <a rel="prev" href="architecture.html" class="nav-link">
+                                    <i class="fa fa-arrow-left"></i> Previous
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a rel="next" href="operations.html" class="nav-link">
+                                    Next <i class="fa fa-arrow-right"></i>
+                                </a>
+                            </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="container">
+            <div class="row">
+                    <div class="col-md-3"><div class="navbar-expand-md bs-sidebar hidden-print affix" role="complementary">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggler collapsed" data-bs-toggle="collapse" data-bs-target="#toc-collapse" title="Table of Contents">
+            <span class="fa fa-angle-down"></span>
+        </button>
+    </div>
+
+    
+    <div id="toc-collapse" class="navbar-collapse collapse card bg-body-tertiary">
+        <ul class="nav flex-column">
+            
+            <li class="nav-item" data-bs-level="1"><a href="#api-reference" class="nav-link">API reference</a>
+              <ul class="nav flex-column">
+            <li class="nav-item" data-bs-level="2"><a href="#authentication" class="nav-link">Authentication</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#resource-endpoints" class="nav-link">Resource endpoints</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#actions" class="nav-link">Actions</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#workspace-endpoints" class="nav-link">Workspace endpoints</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#terminal-endpoints" class="nav-link">Terminal endpoints</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+              </ul>
+            </li>
+        </ul>
+    </div>
+</div></div>
+                    <div class="col-md-9" role="main">
+
+<h1 id="api-reference">API reference</h1>
+<p>The Django API is mounted below <code>/api/</code>. Except for health and authentication endpoints, requests require <code>Authorization: Bearer &lt;access-token&gt;</code>. JSON uses the backend's snake_case field names.</p>
+<h2 id="authentication">Authentication</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Endpoint</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/api/health/</code></td>
+<td>Service health check.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/auth/register/</code></td>
+<td>Create a user from <code>username</code>, <code>email</code>, and <code>password</code>.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/auth/login/</code></td>
+<td>Return <code>access</code> and <code>refresh</code> JWTs.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/auth/refresh/</code></td>
+<td>Exchange a refresh token for a new access token.</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/auth/me/</code></td>
+<td>Return the authenticated user.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="resource-endpoints">Resource endpoints</h2>
+<p>DRF router resources support the usual list, retrieve, create, update/partial update, and delete methods unless noted otherwise:</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Endpoint</th>
+<th>Important fields or behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Projects</td>
+<td><code>/api/projects/</code></td>
+<td>Dates, lifecycle stage, links, local paths, environment, notes, milestones, and nullable <code>launch_prompt</code>.</td>
+</tr>
+<tr>
+<td>Milestones</td>
+<td><code>/api/milestones/</code></td>
+<td>Title, stage, target date, description, order, completion, and computed <code>task_ids</code>.</td>
+</tr>
+<tr>
+<td>Tasks</td>
+<td><code>/api/tasks/</code></td>
+<td>Project, stage, quadrant, category, completion, dates, estimates, subtasks, tags, and <code>milestones</code> UUID list.</td>
+</tr>
+<tr>
+<td>Ideas</td>
+<td><code>/api/ideas/</code></td>
+<td>Idea fields, status, sketch data/objects, tags, research, and <code>converted_project</code>.</td>
+</tr>
+<tr>
+<td>Time entries</td>
+<td><code>/api/time-entries/</code></td>
+<td>Project/task, stage, duration, mode, notes, and timestamp. Only GET, POST, and DELETE are enabled.</td>
+</tr>
+<tr>
+<td>Project docs</td>
+<td><code>/api/docs/</code></td>
+<td>Content linked to many projects and optionally an agent filter.</td>
+</tr>
+<tr>
+<td>Agent filters</td>
+<td><code>/api/agent-filters/</code></td>
+<td>Name, generated slug, and order.</td>
+</tr>
+</tbody>
+</table>
+<p>List responses use standard DRF pagination (<code>count</code>, <code>next</code>, <code>previous</code>, <code>results</code>). The frontend commonly requests <code>page_size=100</code> for workspace collections.</p>
+<h2 id="actions">Actions</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Endpoint</th>
+<th>Request / result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST</td>
+<td><code>/api/projects/{id}/advance-stage/</code></td>
+<td><code>{ "nextStage": "development" }</code>; returns the updated project.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/projects/{id}/open-folder/</code></td>
+<td>Opens the validated configured directory on Windows.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/projects/{id}/run-script/</code></td>
+<td>Runs the configured <code>.bat</code>/<code>.cmd</code> script with optional arguments and virtual environment.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/projects/{id}/open-cmd/</code></td>
+<td>Opens a validated Windows CMD directory.</td>
+</tr>
+<tr>
+<td>PUT/PATCH</td>
+<td><code>/api/milestones/{id}/tasks/</code></td>
+<td><code>{ "task_ids": ["task-uuid", ...] }</code>; atomically replaces links.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/tasks/{id}/toggle-complete/</code></td>
+<td>Toggles completion and timestamp.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/tasks/{id}/move-quadrant/</code></td>
+<td><code>{ "quadrant": "q1_do" }</code>.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/tasks/{id}/subtasks/</code></td>
+<td><code>{ "title": "..." }</code>; creates a subtask.</td>
+</tr>
+<tr>
+<td>POST/PATCH</td>
+<td><code>/api/tasks/{id}/subtasks/{sub_id}/toggle/</code></td>
+<td>Toggles a subtask.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/ideas/{id}/convert/</code></td>
+<td>Creates the project, launch prompt, milestones, MVP tasks, and conversion state transactionally.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="workspace-endpoints">Workspace endpoints</h2>
+<ul>
+<li><code>GET /api/dashboard/</code> returns aggregate project, task, time, and recent-session metrics.</li>
+<li><code>GET /api/timeline/</code> returns launch, milestone, and task deadline items. Query with <code>search</code>, <code>type</code>, and <code>projectId</code> (or <code>project</code>).</li>
+<li><code>GET /api/export/</code> returns a versioned JSON snapshot.</li>
+<li><code>POST /api/import/</code> imports a snapshot and remaps IDs and relationships.</li>
+<li><code>GET /api/filesystem/?path=&lt;directory&gt;</code> lists local drives or directory entries for the path picker. It is read-only.</li>
+</ul>
+<h2 id="terminal-endpoints">Terminal endpoints</h2>
+<ul>
+<li><code>POST /api/projects/{id}/terminals/</code> with <code>{ "mode": "cmd" | "script", "cols": 110, "rows": 28 }</code> creates or reuses a project/mode session. The response includes <code>reused</code>.</li>
+<li><code>GET /api/terminals/?project={project-uuid}&amp;alive=true</code> lists sessions for one project.</li>
+<li><code>GET /api/terminals/{session-id}/output/?after=&lt;cursor&gt;</code> streams NDJSON events (<code>d</code> data, <code>t</code> cursor, <code>e</code> exit, <code>p</code> keep-alive, and related lifecycle markers).</li>
+<li><code>POST /api/terminals/{session-id}/input/</code> with <code>{ "data": "..." }</code> writes to the selected session.</li>
+<li><code>POST /api/terminals/{session-id}/resize/</code> with integer <code>cols</code> and <code>rows</code> resizes it.</li>
+<li><code>DELETE /api/terminals/{session-id}/</code> stops only that owner’s selected session.</li>
+</ul>
+<p>Terminal and filesystem actions return useful 4xx/5xx errors for missing paths, unsupported platforms, invalid modes, unavailable sessions, and validation failures. Paths are not required to exist when saved, but action endpoints validate them before use.</p></div>
+            </div>
+        </div>
+
+        <footer class="col-md-12">
+            <hr>
+            <p>Documentation built with <a href="https://www.mkdocs.org/">MkDocs</a>.</p>
+        </footer>
+        <script src="js/bootstrap.bundle.min.js"></script>
+        <script>
+            var base_url = ".",
+                shortcuts = {"help": 191, "next": 78, "previous": 80, "search": 83};
+        </script>
+        <script src="js/base.js"></script>
+        <script src="search/main.js"></script>
+
+        <div class="modal" id="mkdocs_search_modal" tabindex="-1" role="dialog" aria-labelledby="searchModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="searchModalLabel">Search</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>From here you can search these documents. Enter your search terms below.</p>
+                <form>
+                    <div class="form-group">
+                        <input type="search" class="form-control" placeholder="Search..." id="mkdocs-search-query" title="Type search term here">
+                    </div>
+                </form>
+                <div id="mkdocs-search-results" data-no-results-text="No results found"></div>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div><div class="modal" id="mkdocs_keyboard_modal" tabindex="-1" role="dialog" aria-labelledby="keyboardModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="keyboardModalLabel">Keyboard Shortcuts</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th style="width: 20%;">Keys</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="help shortcut"><kbd>?</kbd></td>
+                    <td>Open this help</td>
+                  </tr>
+                  <tr>
+                    <td class="next shortcut"><kbd>n</kbd></td>
+                    <td>Next page</td>
+                  </tr>
+                  <tr>
+                    <td class="prev shortcut"><kbd>p</kbd></td>
+                    <td>Previous page</td>
+                  </tr>
+                  <tr>
+                    <td class="search shortcut"><kbd>s</kbd></td>
+                    <td>Search</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div>
+
+    </body>
+</html>

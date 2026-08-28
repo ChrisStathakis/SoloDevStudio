@@ -1,0 +1,12 @@
+site_name: SoloDev Studio
+site_description: Local-first project planning and development workspace documentation
+site_dir: site
+use_directory_urls: false
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - User guide: user-guide.md
+  - Architecture: architecture.md
+  - API reference: api-reference.md
+  - Operations: operations.md

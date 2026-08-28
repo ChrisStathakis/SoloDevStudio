@@ -1,0 +1,22 @@
+{
+  "name": "solodev-studio",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SoloDev Studio — launches Django (8001) + Frontend (3000/5174) together",
+  "scripts": {
+    "dev": "concurrently --names \"backend,frontend\" --prefix-colors \"cyan,magenta\" \"python server/manage.py runserver 0.0.0.0:8001\" \"npm run dev --prefix frontend\"",
+    "dev:vite": "concurrently --names \"backend,vite\" --prefix-colors \"cyan,magenta\" \"python server/manage.py runserver 0.0.0.0:8001\" \"npm --prefix frontend exec vite -- --port 5174 --host 0.0.0.0 --strictPort\"",
+    "install:all": "pip install -r server/requirements.txt && npm install --prefix frontend",
+    "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1",
+    "start:vite": "powershell -ExecutionPolicy Bypass -File ./start.ps1 -UseVite"
+  },
+  "dependencies": {
+    "lightningcss": "^1.33.0"
+  },
+  "optionalDependencies": {
+    "lightningcss-win32-x64-msvc": "^1.33.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

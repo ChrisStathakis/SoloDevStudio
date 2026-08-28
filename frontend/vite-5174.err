@@ -1,0 +1,21 @@
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'D:\projects\frontend\node_modules\@google\genai\dist\node\index.mjs' imported from D:\projects\frontend\server.ts
+Did you mean to import "@google/genai/dist/node/index.cjs"?
+    at finalizeResolution (node:internal/modules/esm/resolve:275:11)
+    at moduleResolve (node:internal/modules/esm/resolve:865:10)
+    at defaultResolve (node:internal/modules/esm/resolve:991:11)
+    at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)
+    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at resolveBaseSync (file:///D:/projects/frontend/node_modules/tsx/dist/register-C4vWVmug.mjs:2:10932)
+    at resolveDirectorySync (file:///D:/projects/frontend/node_modules/tsx/dist/register-C4vWVmug.mjs:2:12238)
+    at resolveTsPathsSync (file:///D:/projects/frontend/node_modules/tsx/dist/register-C4vWVmug.mjs:2:13445)
+    at resolve (file:///D:/projects/frontend/node_modules/tsx/dist/register-C4vWVmug.mjs:2:15991) {
+  code: 'ERR_MODULE_NOT_FOUND',
+  url: 'file:///D:/projects/frontend/node_modules/@google/genai/dist/node/index.mjs'
+}
+
+Node.js v24.14.1
