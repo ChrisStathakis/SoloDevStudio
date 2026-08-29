@@ -77,7 +77,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
       setDocs(unwrapPaginated<any>(res.data).map(mapProjectDocFromApi));
     } catch (e) {
       console.error('Failed to load docs', e);
-      setError('Failed to load agents.');
+      setError('Failed to load skills.');
     } finally {
       setIsLoading(false);
     }
@@ -148,7 +148,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-xs text-content-faint font-medium">
-          Agents linked to this project — specs, orchestrator prompts, runbooks, notes.
+          Skills linked to this project — specs, orchestrator prompts, runbooks, notes.
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <button
@@ -157,7 +157,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-white text-xs font-black transition-all"
           >
             <Link2 className="w-3.5 h-3.5" />
-            <span>Link Existing</span>
+            <span>Link Existing Skill</span>
           </button>
           <button
             type="button"
@@ -166,7 +166,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>New Agent</span>
+            <span>New Skill</span>
           </button>
         </div>
       </div>
@@ -220,8 +220,8 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
           <FileCode2 className="w-10 h-10 text-slate-700 mb-3" />
           {docs.length === 0 ? (
             <>
-              <p className="text-sm font-black text-content-faint">No agents yet</p>
-              <p className="text-xs text-slate-600 mt-1">Create one here or link an existing agent to this project.</p>
+              <p className="text-sm font-black text-content-faint">No skills yet</p>
+              <p className="text-xs text-slate-600 mt-1">Create one here or link an existing skill to this project.</p>
               <div className="mt-4 flex items-center gap-2">
                 <button
                   type="button"
@@ -229,7 +229,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                   className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-white text-xs font-black transition-all"
                 >
                   <Link2 className="w-3.5 h-3.5" />
-                  <span>Link Existing</span>
+                  <span>Link Existing Skill</span>
                 </button>
                 <button
                   type="button"
@@ -237,14 +237,14 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                   className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>New Agent</span>
+                  <span>New Skill</span>
                 </button>
               </div>
             </>
           ) : (
             <>
-              <p className="text-sm font-black text-content-faint">No agents match this filter</p>
-              <p className="text-xs text-slate-600 mt-1">Try a different filter or categorize an agent in the editor.</p>
+              <p className="text-sm font-black text-content-faint">No skills match this filter</p>
+              <p className="text-xs text-slate-600 mt-1">Try a different filter or categorize a skill in the editor.</p>
             </>
           )}
         </div>
@@ -301,7 +301,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                     onClick={e => { e.stopPropagation(); handleToggleActive(doc); }}
                     onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleToggleActive(doc); } }}
                     className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${doc.active === false ? 'text-slate-600 hover:text-emerald-400' : 'text-emerald-400 hover:text-amber-300'}`}
-                    title={doc.active === false ? 'Activate agent for this project' : 'Deactivate agent for this project'}
+                    title={doc.active === false ? 'Activate skill for this project' : 'Deactivate skill for this project'}
                   >
                     <Power className="w-4 h-4" />
                   </span>
@@ -320,7 +320,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                       }
                     }}
                     className="p-1.5 rounded-lg text-content-faint hover:text-indigo-400 hover:bg-indigo-500/10 transition-all cursor-pointer shrink-0"
-                    title="Copy full agent content"
+                    title="Copy full skill content"
                   >
                     {copiedId === doc.id ? (
                       <Check className="w-4 h-4 text-emerald-400" />
@@ -334,12 +334,12 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                     tabIndex={0}
                     onClick={e => {
                       e.stopPropagation();
-                      if (!window.confirm(`Delete agent "${doc.title}"? It will be removed from all linked projects.`)) return;
+                      if (!window.confirm(`Delete skill "${doc.title}"? It will be removed from all linked projects.`)) return;
                       api.delete(`/docs/${doc.id}/`)
                         .then(() => handleDeleted(doc.id))
                         .catch(e2 => {
                           console.error('Failed to delete doc', e2);
-                          setError('Failed to delete agent.');
+                          setError('Failed to delete skill.');
                         });
                     }}
                     onKeyDown={e => {
@@ -348,7 +348,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                       }
                     }}
                     className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
-                    title="Delete agent from all projects"
+                    title="Delete skill from all projects"
                   >
                     <Trash2 className="w-4 h-4" />
                   </span>

@@ -70,7 +70,7 @@ export const FilterManager: React.FC = () => {
   const handleDelete = async (f: AgentFilter) => {
     const used = usageCount(f.id);
     const msg = used > 0
-      ? `Delete filter "${f.name}"? ${used} agent${used > 1 ? 's are' : ' is'} using it and will become uncategorized.`
+      ? `Delete filter "${f.name}"? ${used} skill${used > 1 ? 's are' : ' is'} using it and will become uncategorized.`
       : `Delete filter "${f.name}"?`;
     if (!window.confirm(msg)) return;
     setBusyId(f.id);
@@ -108,7 +108,7 @@ export const FilterManager: React.FC = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-content-faint font-medium">
-          Categories used to filter agents in agent lists — Backend, Frontend, Tools, Docs and any you add.
+          Categories used to filter skills in skill lists — Backend, Frontend, Tools, Docs and any you add.
         </p>
         <button
           type="button"
@@ -134,7 +134,7 @@ export const FilterManager: React.FC = () => {
         <div className="flex flex-col items-center justify-center py-16 text-center border border-dashed border-line rounded-2xl bg-surface/50">
           <ListFilter className="w-10 h-10 text-slate-700 mb-3" />
           <p className="text-sm font-black text-content-faint">No filters yet</p>
-          <p className="text-xs text-slate-600 mt-1">Create your first filter to categorize agents.</p>
+          <p className="text-xs text-slate-600 mt-1">Create your first filter to categorize skills.</p>
           <button
             type="button"
             onClick={openCreate}
@@ -190,7 +190,7 @@ export const FilterManager: React.FC = () => {
                           : 'text-content-faint bg-surface-2 border border-line'
                       }`}
                     >
-                      {used} agent{used === 1 ? '' : 's'}
+                      {used} skill{used === 1 ? '' : 's'}
                     </span>
                   </div>
                 </div>

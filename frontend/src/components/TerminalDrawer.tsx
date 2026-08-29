@@ -30,8 +30,10 @@ export interface TerminalSessionDto {
 }
 
 export interface TerminalDrawerHandle {
-  create: (mode: TerminalMode) => Promise<TerminalSessionDto>;
+  create: (mode: TerminalMode, options?: { forceNew?: boolean }) => Promise<TerminalSessionDto>;
   restartIfRunning: (mode: TerminalMode) => Promise<TerminalSessionDto | null>;
+  sendInput: (data: string, sessionId?: string) => Promise<void>;
+  minimize: () => void;
 }
 
 interface Props {
@@ -51,6 +53,18 @@ const XTERM_THEME = {
   cursorAccent: '#0b1120',
   selectionBackground: '#334155',
 };
+
+// xterm can emit device-attribute replies when it parses capability queries
+// from CMD/OpenCode. Those replies are terminal protocol traffic, not user
+// input; forwarding them to conhost makes CMD try to execute strings such as
+// "^[?1;2c" as commands (especially when a session is reused).
+const TERMINAL_QUERY_RESPONSE_RE = /\x1b\[[?>=][0-9;]*c/g;
+const ANSI_SEQUENCE_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+const CMD_PROMPT_RE = /(?:^|\r?\n)(?:\([^\r\n)]*\)\s*)?[A-Za-z]:\\[^\r\n>]*>\s*$/;
+
+function removeTerminalQueryResponses(data: string): string {
+  return data.replace(TERMINAL_QUERY_RESPONSE_RE, '');
+}
 
 function clampHeight(px: number): number {
   const max = Math.max(MIN_HEIGHT + 40, Math.floor(window.innerHeight * MAX_VIEWPORT_RATIO));
@@ -95,6 +109,7 @@ interface TerminalRuntime {
   pumpStopped: boolean;
   inputTimer: number | null;
   pendingInput: string[];
+  inputReady: boolean;
   lastCols: number;
   lastRows: number;
   resizeTimer: number | null;
@@ -115,6 +130,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const [loadingCreate, setLoadingCreate] = useState<TerminalMode | null>(null);
     const [activeSize, setActiveSize] = useState<{ cols: number; rows: number } | null>(null);
     const [connState, setConnState] = useState<'idle' | 'connecting' | 'live' | 'error'>('idle');
+    const [terminalReady, setTerminalReady] = useState(false);
+    const [terminalError, setTerminalError] = useState<string | null>(null);
     const connStateRef = useRef<'idle' | 'connecting' | 'live' | 'error'>('idle');
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
@@ -126,6 +143,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       pumpStopped: true,
       inputTimer: null,
       pendingInput: [],
+      inputReady: false,
       lastCols: 0,
       lastRows: 0,
       resizeTimer: null,
@@ -158,11 +176,16 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       }
       try {
         const res = await api.get<TerminalSessionDto[]>('/terminals/', { params: { alive: 'true', project: projectId } });
-        setSessions(res.data || []);
+        const liveSessions = res.data || [];
+        setSessions(liveSessions);
         setActiveId(prev => {
-          if (prev && res.data?.some(s => s.id === prev)) return prev;
-          return res.data?.[res.data.length - 1]?.id ?? null;
+          if (prev && liveSessions.some(s => s.id === prev)) return prev;
+          return liveSessions[liveSessions.length - 1]?.id ?? null;
         });
+        // The drawer is remounted whenever the user leaves and returns to the
+        // Projects screen. Restore any live console immediately instead of
+        // leaving its running session hidden behind a floating launcher.
+        if (liveSessions.length) setOpen(true);
       } catch {
         /* best-effort */
       }
@@ -220,13 +243,13 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       [flushInput]
     );
 
-    const notifyBackendSize = useCallback((sessionId: string, cols: number, rows: number) => {
+    const syncBackendSize = useCallback(async (sessionId: string, cols: number, rows: number, force = false) => {
       const rt = runtimeRef.current;
       if (!(cols > 2 && rows > 2)) return;
-      if (cols === rt.lastCols && rows === rt.lastRows) return;
+      if (!force && cols === rt.lastCols && rows === rt.lastRows) return;
+      await api.post(`/terminals/${sessionId}/resize/`, { cols, rows });
       rt.lastCols = cols;
       rt.lastRows = rows;
-      api.post(`/terminals/${sessionId}/resize/`, { cols, rows }).catch(() => {});
     }, []);
 
     const teardownRuntime = useCallback(() => {
@@ -240,6 +263,12 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         window.clearTimeout(rt.inputTimer);
         rt.inputTimer = null;
       }
+      // Input is batched briefly for efficiency. A queued partial command from
+      // the previous tab must never be delivered to the next console after a
+      // tab switch, drawer close, or navigation away from Projects.
+      rt.pendingInput = [];
+      rt.inputReady = false;
+      setTerminalReady(false);
       if (rt.resizeTimer !== null) {
         window.clearTimeout(rt.resizeTimer);
         rt.resizeTimer = null;
@@ -249,6 +278,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       } catch {
         /* already disposed */
       }
+      rt.dataSub?.dispose();
+      rt.dataSub = null;
       rt.term = null;
       rt.fit = null;
       rt.lastCols = 0;
@@ -261,6 +292,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         teardownRuntime();
         return undefined;
       }
+      setTerminalReady(false);
 
       const container = containerRef.current;
       const session = sessionsRef.current.find(s => s.id === activeId);
@@ -289,13 +321,26 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       rt.fit = fit;
 
       const onMouseDown = () => {
-        window.setTimeout(() => term.focus(), 0);
+        window.setTimeout(() => {
+          if (rt.inputReady) term.focus();
+        }, 0);
       };
       container.addEventListener('mousedown', onMouseDown);
 
-      if (session?.alive !== false) {
-        rt.dataSub = term.onData(data => queueInput(activeId, data));
-      }
+      const attachInput = () => {
+        if (session?.alive === false || rt.dataSub || !rt.inputReady) return;
+        rt.dataSub = term.onData(data => {
+          const userData = removeTerminalQueryResponses(data);
+          if (userData) queueInput(activeId, userData);
+        });
+      };
+
+      const disableInput = () => {
+        rt.inputReady = false;
+        setTerminalReady(false);
+        rt.dataSub?.dispose();
+        rt.dataSub = null;
+      };
 
       const onResized = () => {
         try {
@@ -304,11 +349,27 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           return;
         }
         setActiveSize({ cols: term.cols, rows: term.rows });
+        if (!rt.inputReady) return;
         if (rt.resizeTimer !== null) return;
         rt.resizeTimer = window.setTimeout(() => {
           rt.resizeTimer = null;
           const t2 = rt.term;
-          if (t2) notifyBackendSize(activeId, t2.cols, t2.rows);
+          if (!t2 || rt.pumpStopped) return;
+          disableInput();
+          void syncBackendSize(activeId, t2.cols, t2.rows, true)
+            .then(() => {
+              if (!rt.pumpStopped) {
+                rt.inputReady = true;
+                setTerminalReady(true);
+                attachInput();
+              }
+            })
+            .catch((error: any) => {
+              if (rt.pumpStopped) return;
+              const detail = error?.response?.data?.error || error?.message || 'Unable to synchronize terminal size.';
+              setTerminalError(detail);
+              setConnState('error');
+            });
         }, 120);
       };
       const ro = new ResizeObserver(onResized);
@@ -316,18 +377,75 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
 
       // Initial resize kick so a slow ConPTY/cmd start flushes its banner promptly.
       term.write('\x1b[90mConnecting to console…\x1b[0m\r\n');
-      window.setTimeout(() => notifyBackendSize(activeId, term.cols, term.rows), 200);
 
       // Stream: replay buffered output from offset 0, then follow live output.
       const ctrl = new AbortController();
       rt.abort = ctrl;
       rt.pumpStopped = false;
       const stopped = () => rt.pumpStopped || ctrl.signal.aborted;
+      const waitsForCmdPrompt = session?.mode === 'cmd' && session.reused === false;
+      let initialOutputTail = '';
+      let initialOutputSeen = false;
+      let initialQuietTimer: number | null = null;
+      let initialFallbackTimer: number | null = null;
+
+      const clearInitialTimers = () => {
+        if (initialQuietTimer !== null) {
+          window.clearTimeout(initialQuietTimer);
+          initialQuietTimer = null;
+        }
+        if (initialFallbackTimer !== null) {
+          window.clearTimeout(initialFallbackTimer);
+          initialFallbackTimer = null;
+        }
+      };
+
+      const enableInputAfterInitialRender = () => {
+        if (stopped() || session?.alive === false || rt.inputReady) return;
+        clearInitialTimers();
+        rt.inputReady = true;
+        setTerminalReady(true);
+        attachInput();
+        term.focus();
+      };
+
+      const scheduleCustomPromptFallback = () => {
+        if (!initialOutputSeen || stopped()) return;
+        if (initialQuietTimer !== null) window.clearTimeout(initialQuietTimer);
+        initialQuietTimer = window.setTimeout(() => {
+          initialQuietTimer = null;
+          enableInputAfterInitialRender();
+        }, 400);
+        if (initialFallbackTimer === null) {
+          initialFallbackTimer = window.setTimeout(() => {
+            initialFallbackTimer = null;
+            enableInputAfterInitialRender();
+          }, 1800);
+        }
+      };
+
+      const handleInitialOutputRendered = (text: string) => {
+        if (rt.inputReady || !text) return;
+        initialOutputSeen = true;
+        initialOutputTail = `${initialOutputTail}${text}`.slice(-4096);
+        const normalizedTail = initialOutputTail.replace(ANSI_SEQUENCE_RE, '');
+        if (!waitsForCmdPrompt || CMD_PROMPT_RE.test(normalizedTail)) {
+          enableInputAfterInitialRender();
+          return;
+        }
+        // Custom PROMPT values may not match the standard drive/path form.
+        // Wait for a quiet period, with a hard upper bound, before enabling.
+        scheduleCustomPromptFallback();
+      };
+      // Keep the server cursor across the stream's periodic reconnects. The
+      // terminal component can still start at zero when it is newly mounted,
+      // but a reconnect must never replay from zero or clear the live screen.
+      let streamCursor = 0;
 
       const pumpStreamOnce = async (): Promise<void> => {
         setConnState('connecting');
         const res = await authedFetch(
-          `/terminals/${activeId}/output/?after=0`,
+          `/terminals/${activeId}/output/?after=${streamCursor}`,
           { method: 'GET', headers: { Accept: 'application/x-ndjson' }, signal: ctrl.signal },
         );
         if (!res.ok || !res.body) {
@@ -356,9 +474,13 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             } catch {
               continue;
             }
+            if (typeof evt.t === 'number' && Number.isFinite(evt.t)) {
+              streamCursor = evt.t;
+            }
             if (evt.reset) term.reset();
             if (typeof evt.d === 'string' && evt.d) {
-              term.write(evt.d);
+              const output = evt.d;
+              term.write(output, () => handleInitialOutputRendered(output));
               if (connStateRef.current !== 'live') setConnState('live');
             }
             if (evt.e === true) {
@@ -407,9 +529,33 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           }
         }
       };
-      void runPump();
+      const startConsole = async () => {
+        try {
+          // CMD starts with the backend's default dimensions. Synchronize to
+          // xterm before attaching input or reading the first prompt.
+          await syncBackendSize(activeId, term.cols, term.rows, true);
+          if (stopped()) return;
+          if (!waitsForCmdPrompt) {
+            // Existing interactive sessions become usable once their retained
+            // screen has been parsed; fresh CMD sessions wait for the prompt.
+            initialFallbackTimer = window.setTimeout(() => {
+              initialFallbackTimer = null;
+              enableInputAfterInitialRender();
+            }, 1800);
+          }
+          await runPump();
+        } catch (error: any) {
+          if (stopped()) return;
+          const detail = error?.response?.data?.error || error?.message || 'Unable to synchronize terminal size.';
+          setTerminalError(detail);
+          setConnState('error');
+          term.write(`\x1b[31m\r\n[terminal setup error: ${detail}]\x1b[0m\r\n`);
+        }
+      };
+      void startConsole();
 
       return () => {
+        clearInitialTimers();
         ro.disconnect();
         container.removeEventListener('mousedown', onMouseDown);
         teardownRuntime();
@@ -427,16 +573,24 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     // ---------- imperative API ----------
 
     const create = useCallback(
-      async (mode: TerminalMode): Promise<TerminalSessionDto> => {
+      async (mode: TerminalMode, options?: { forceNew?: boolean }): Promise<TerminalSessionDto> => {
         if (!projectId) throw new Error('No project selected.');
         setLoadingCreate(mode);
+        setTerminalError(null);
         try {
-          const res = await api.post<TerminalSessionDto>(`/projects/${projectId}/terminals/`, { mode });
+          const res = await api.post<TerminalSessionDto>(`/projects/${projectId}/terminals/`, {
+            mode,
+            force_new: options?.forceNew === true,
+          });
           const dto = res.data;
           setSessions(prev => [...prev.filter(s => s.id !== dto.id), dto]);
           setActiveId(dto.id);
           setOpen(true);
           return dto;
+        } catch (error: any) {
+          const message = error?.response?.data?.error || error?.message || 'Unable to create the terminal console.';
+          setTerminalError(message);
+          throw error;
         } finally {
           setLoadingCreate(null);
         }
@@ -462,7 +616,15 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       [activeId, projectId, teardownRuntime]
     );
 
-    useImperativeHandle(ref, () => ({ create, restartIfRunning }), [create, restartIfRunning]);
+    const sendInput = useCallback(async (data: string, sessionId?: string): Promise<void> => {
+      const targetId = sessionId || activeId;
+      if (!targetId) throw new Error('No active terminal session.');
+      await api.post(`/terminals/${targetId}/input/`, { data });
+    }, [activeId]);
+
+    const minimize = useCallback(() => setOpen(false), []);
+
+    useImperativeHandle(ref, () => ({ create, restartIfRunning, sendInput, minimize }), [create, restartIfRunning, sendInput, minimize]);
 
     // ---------- resize dragging ----------
 
@@ -534,7 +696,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       [activeId]
     );
 
-    const collapse = () => setOpen(false);
+    const collapse = minimize;
 
     const anyLive = sessions.some(s => s.alive);
     const activeSession = sessions.find(s => s.id === activeId) ?? null;
@@ -606,7 +768,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                   <span className="max-w-[140px] truncate">{s.projectTitle}</span>
                   <span className="text-content-faint">·</span>
                   <span className="max-w-[100px] truncate text-content-muted">
-                    {s.mode === 'script' ? 'server' : 'cmd'}
+                    {s.mode === 'script' ? 'server' : s.title.toLowerCase()}
                   </span>
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${
@@ -658,21 +820,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                   <button
                     type="button"
                     disabled={!open}
-                    title="New server console (.bat)"
-                    onClick={() => void create('script').catch(() => {})}
-                    className="p-1.5 rounded-lg text-content-faint hover:text-emerald-300 hover:bg-surface-2 transition-colors disabled:opacity-30"
-                  >
-                    {loadingCreate === 'script' ? (
-                      <div className="w-3.5 h-3.5 border-2 border-emerald-800 border-t-emerald-300 rounded-full animate-spin" />
-                    ) : (
-                      <Zap className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!open}
-                    title="New CMD console"
-                    onClick={() => void create('cmd').catch(() => {})}
+                    title="New separate CMD console"
+                    onClick={() => void create('cmd', { forceNew: true }).catch(() => {})}
                     className="p-1.5 rounded-lg text-content-faint hover:text-sky-300 hover:bg-surface-2 transition-colors disabled:opacity-30"
                   >
                     {loadingCreate === 'cmd' ? (
@@ -706,6 +855,13 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             </div>
           </div>
 
+          {terminalError && (
+            <div className="mx-3 mt-2 flex items-start justify-between gap-3 rounded-xl border border-rose-900/60 bg-rose-950/40 px-3 py-2 text-xs text-rose-200" role="alert">
+              <span className="break-words">{terminalError}</span>
+              <button type="button" onClick={() => setTerminalError(null)} className="shrink-0 text-rose-300 hover:text-white" aria-label="Dismiss terminal error">×</button>
+            </div>
+          )}
+
           {/* Terminal surface */}
           <div className="relative flex-1 min-h-0 p-1.5">
             {activeSession && open ? (
@@ -736,7 +892,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               {activeSession && (
                 <span
                   className={
-                    connState === 'error'
+                    !terminalReady
+                      ? 'text-amber-400'
+                      : connState === 'error'
                       ? 'text-rose-400'
                       : connState === 'connecting'
                       ? 'text-amber-400'
@@ -747,7 +905,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                       : 'text-slate-500'
                   }
                 >
-                  {connState === 'error'
+                  {!terminalReady
+                    ? '◌ waiting for prompt'
+                    : connState === 'error'
                     ? '● error'
                     : connState === 'connecting'
                     ? '◌ connecting'

@@ -34,9 +34,10 @@ import {
   Boxes,
   X,
   Clipboard,
-  Check
+  Check,
+  ChevronDown
 } from 'lucide-react';
-import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Project, PriorityQuadrant, TaskCategory } from '../types';
+import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Project, PriorityQuadrant, TaskCategory, LauncherModelPreset } from '../types';
 import { api } from '../services/api';
 import { DocsTab } from './DocsTab';
 import { PathPickerModal } from './PathPickerModal';
@@ -65,7 +66,8 @@ export const ProjectsView: React.FC = () => {
     startTimer,
     openQuickAdd,
     setCurrentView,
-    searchQuery
+    searchQuery,
+    refreshData
   } = useApp();
 
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
@@ -94,6 +96,22 @@ export const ProjectsView: React.FC = () => {
   const [folderError, setFolderError] = useState<string | null>(null);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [promptCopyError, setPromptCopyError] = useState<string | null>(null);
+  const [promptDraft, setPromptDraft] = useState('');
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+  const [promptSaveError, setPromptSaveError] = useState<string | null>(null);
+  const [initializationStatus, setInitializationStatus] = useState<string | null>(null);
+  const [modelPresets, setModelPresets] = useState<LauncherModelPreset[]>([]);
+  const [isLaunchDialogOpen, setIsLaunchDialogOpen] = useState(false);
+  const [launchTool, setLaunchTool] = useState<'opencode' | 'codex'>('opencode');
+  const [launchModel, setLaunchModel] = useState('');
+  const [isSavingInitializationSettings, setIsSavingInitializationSettings] = useState(false);
+  const [toolAvailability, setToolAvailability] = useState<{ tool: 'opencode' | 'codex'; available: boolean; npm_available: boolean; install_command: string; documentation_url: string; message?: string } | null>(null);
+  const [isCheckingTool, setIsCheckingTool] = useState(false);
+  const [isInstallingTool, setIsInstallingTool] = useState(false);
+  const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'copied' | 'error' | undefined>>({});
+  const [promptSource, setPromptSource] = useState<'project' | 'task'>('project');
+  const [selectedPromptTaskId, setSelectedPromptTaskId] = useState('');
   const [milestoneEditor, setMilestoneEditor] = useState<{ milestone?: Project['milestones'][number] } | null>(null);
   const terminalDrawerRef = useRef<TerminalDrawerHandle | null>(null);
 
@@ -119,23 +137,180 @@ export const ProjectsView: React.FC = () => {
     setFolderError(null);
     setCopiedPrompt(false);
     setPromptCopyError(null);
+    setPromptDraft(activeProject?.initialPrompt || '');
+    setIsEditingPrompt(false);
+    setIsSavingPrompt(false);
+    setPromptSaveError(null);
+    setInitializationStatus(null);
+    setLaunchTool(activeProject?.initializationTool || 'opencode');
+    setLaunchModel(activeProject?.initializationModel || '');
+    setIsLaunchDialogOpen(false);
+    setToolAvailability(null);
+    setTaskPromptStatus({});
+    setPromptSource('project');
+    setSelectedPromptTaskId('');
   }, [activeProject?.id]);
 
-  const handleCopyPrompt = async () => {
-    if (!activeProject?.initialPrompt) return;
-    setPromptCopyError(null);
+  useEffect(() => {
+    if (!isEditingPrompt) setPromptDraft(activeProject?.initialPrompt || '');
+  }, [activeProject?.initialPrompt, isEditingPrompt]);
+
+  useEffect(() => {
+    if (!activeProject) return;
+    api.get('/launcher-model-presets/', { params: { page_size: 100, tool: launchTool } })
+      .then(res => {
+        const rows = Array.isArray(res.data) ? res.data : (res.data?.results || []);
+        setModelPresets(rows.map((raw: any) => ({ id: String(raw.id), tool: raw.tool === 'codex' ? 'codex' : 'opencode', modelId: raw.model_id || '', label: raw.label || '', enabled: raw.enabled !== false, createdAt: raw.created_at, updatedAt: raw.updated_at })));
+      })
+      .catch(() => setModelPresets([]));
+  }, [activeProject?.id, launchTool]);
+
+  const handleSaveInitialPrompt = async () => {
+    if (!activeProject || !promptDraft.trim() || isSavingPrompt) return;
+    setIsSavingPrompt(true);
+    setPromptSaveError(null);
     try {
-      const res = await api.get(`/projects/${activeProject.id}/copy-prompt/`);
-      const composedPrompt = res.data?.content || activeProject.initialPrompt;
-      await navigator.clipboard.writeText(composedPrompt);
-      setCopiedPrompt(true);
-      window.setTimeout(() => setCopiedPrompt(false), 1800);
+      await api.put(`/projects/${activeProject.id}/initial-prompt/`, { content: promptDraft });
+      setIsEditingPrompt(false);
+      await refreshData();
     } catch (error: any) {
-      if (error?.response) {
-        setPromptCopyError('Unable to load the project prompt. Please try again.');
-      } else {
-        setPromptCopyError('Copy was blocked. Select the prompt text and copy it manually.');
+      setPromptSaveError(error?.response?.data?.content || 'Unable to save the initial prompt.');
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
+
+  const handleClearInitialPrompt = async () => {
+    if (!activeProject || !activeProject.initialPrompt || isSavingPrompt) return;
+    if (!window.confirm('Clear this project’s saved initial prompt?')) return;
+    setIsSavingPrompt(true);
+    setPromptSaveError(null);
+    try {
+      await api.delete(`/projects/${activeProject.id}/initial-prompt/`);
+      setPromptDraft('');
+      setIsEditingPrompt(false);
+      await refreshData();
+    } catch {
+      setPromptSaveError('Unable to clear the initial prompt.');
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
+
+  const copyTaskPrompt = async (taskId: string) => {
+    try {
+      const res = await api.get(`/tasks/${taskId}/prompt/`);
+      await navigator.clipboard.writeText(res.data?.content || '');
+      setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'copied' }));
+      window.setTimeout(() => setTaskPromptStatus(prev => ({ ...prev, [taskId]: undefined })), 2200);
+    } catch (error: any) {
+      setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'error' }));
+      setPromptCopyError(error?.response?.data?.error || 'Unable to create the task prompt.');
+    }
+  };
+
+  const handleStartInitialization = async (tool: 'opencode' | 'codex', model: string) => {
+    if (!activeProject?.initialPrompt) {
+      setPromptCopyError('Save an initial prompt before starting initialization.');
+      return;
+    }
+    if (!model.trim()) {
+      setPromptCopyError('Choose a model before starting initialization.');
+      return;
+    }
+    setIsLaunchDialogOpen(false);
+    setPromptCopyError(null);
+    setInitializationStatus(null);
+    try {
+      if (promptSource === 'task' && !selectedPromptTaskId) {
+        setPromptCopyError('Choose an open task before starting initialization.');
+        return;
       }
+      const res = await api.get(promptSource === 'task' ? `/tasks/${selectedPromptTaskId}/prompt/` : `/projects/${activeProject.id}/initialize-prompt/`);
+      await navigator.clipboard.writeText(res.data?.content || activeProject.initialPrompt);
+      setCopiedPrompt(true);
+      window.setTimeout(() => setCopiedPrompt(false), 2200);
+      setIsCheckingTool(true);
+      let availability;
+      try {
+        availability = await api.get(`/projects/${activeProject.id}/tool-availability/`, { params: { tool } });
+      } finally {
+        setIsCheckingTool(false);
+      }
+      setToolAvailability(availability.data);
+      if (!availability.data?.available) {
+        setIsLaunchDialogOpen(true);
+        return;
+      }
+      try {
+        const drawer = terminalDrawerRef.current;
+        if (!drawer) {
+          throw new Error('Terminal console is still loading. Please try again in a moment.');
+        }
+        const session = await drawer.create('cmd');
+        if (session && !session.reused) {
+          const command = tool === 'codex' ? `codex --model "${model}"\r` : `opencode --model "${model}"\r`;
+          await drawer.sendInput(command, session.id);
+          setInitializationStatus(`${tool === 'codex' ? 'Codex' : 'OpenCode'} started with ${model}. Paste the copied initialization prompt when ready.`);
+        } else {
+          setInitializationStatus(`The project console is already open. Paste the copied ${tool === 'codex' ? 'Codex' : 'OpenCode'} prompt when ready.`);
+        }
+      } catch (error: any) {
+        const detail = error?.response?.data?.error || 'Set a CMD folder for this project to open its console.';
+        setPromptCopyError(`Prompt copied. ${detail}`);
+      }
+    } catch (error: any) {
+      setPromptCopyError(error?.response?.data?.error || 'Unable to prepare the initialization prompt.');
+    }
+  };
+
+  const installSelectedTool = async () => {
+    if (!activeProject || !toolAvailability || toolAvailability.available || isInstallingTool) return;
+    if (!toolAvailability.npm_available) {
+      setPromptCopyError('npm is not available in the project terminal. Install Node.js/npm first.');
+      return;
+    }
+    if (!window.confirm(`Install ${toolAvailability.tool === 'codex' ? 'Codex' : 'OpenCode'} in the project terminal?`)) return;
+    setIsInstallingTool(true);
+    try {
+      const drawer = terminalDrawerRef.current;
+      if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
+      const session = await drawer.create('cmd');
+      if (!session) throw new Error('Unable to open the project terminal.');
+      await drawer.sendInput(`${toolAvailability.install_command}\r`, session.id);
+      setIsLaunchDialogOpen(false);
+      setInitializationStatus(`Install command sent to the terminal. When it finishes, click Start initialization again${session.reused ? '' : ' after reopening the console if needed'}.`);
+    } catch (error: any) {
+      setPromptCopyError(error?.response?.data?.error || error?.message || 'Unable to start the installation command.');
+    } finally {
+      setIsInstallingTool(false);
+    }
+  };
+
+  const checkToolAvailability = async (tool: 'opencode' | 'codex') => {
+    if (!activeProject || isCheckingTool) return;
+    setIsCheckingTool(true);
+    try {
+      const res = await api.get(`/projects/${activeProject.id}/tool-availability/`, { params: { tool } });
+      setToolAvailability(res.data);
+    } catch (error: any) {
+      setPromptCopyError(error?.response?.data?.error || 'Unable to check CLI availability.');
+    } finally {
+      setIsCheckingTool(false);
+    }
+  };
+
+  const saveInitializationSettings = async () => {
+    if (!activeProject || !launchModel.trim() || isSavingInitializationSettings) return;
+    setIsSavingInitializationSettings(true);
+    try {
+      await api.patch(`/projects/${activeProject.id}/initialization-settings/`, { tool: launchTool, model_id: launchModel.trim() });
+      await refreshData();
+      setInitializationStatus('Project initialization defaults saved.');
+    } catch (error: any) {
+      setPromptCopyError(error?.response?.data?.model_id || 'Unable to save initialization defaults.');
+    } finally {
+      setIsSavingInitializationSettings(false);
     }
   };
 
@@ -222,7 +397,6 @@ export const ProjectsView: React.FC = () => {
 
   const showActionError = (msg: string) => {
     setFolderError(msg);
-    window.setTimeout(() => setFolderError(null), 4000);
   };
 
   const handleRunScript = async () => {
@@ -235,7 +409,9 @@ export const ProjectsView: React.FC = () => {
     setIsRunningScript(true);
     setFolderError(null);
     try {
-      await terminalDrawerRef.current?.create('script');
+      const drawer = terminalDrawerRef.current;
+      if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
+      await drawer.create('script');
     } catch (e: any) {
       showActionError(e?.response?.data?.error || 'Failed to run script.');
     } finally {
@@ -253,12 +429,23 @@ export const ProjectsView: React.FC = () => {
     setIsOpeningCmd(true);
     setFolderError(null);
     try {
-      await terminalDrawerRef.current?.create('cmd');
+      const drawer = terminalDrawerRef.current;
+      if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
+      await drawer.create('cmd');
     } catch (e: any) {
       showActionError(e?.response?.data?.error || 'Failed to open cmd.');
     } finally {
       setIsOpeningCmd(false);
     }
+  };
+
+  const handleMinimizeCmd = () => {
+    const drawer = terminalDrawerRef.current;
+    if (!drawer) {
+      showActionError('Terminal console is still loading. Please try again in a moment.');
+      return;
+    }
+    drawer.minimize();
   };
 
   const handleSaveScriptPath = async () => {
@@ -333,7 +520,9 @@ export const ProjectsView: React.FC = () => {
         await updateProject(activeProject.id, { cmdDirectory: cmdDirDraft.trim() });
         setFolderError(null);
         try {
-          await terminalDrawerRef.current?.restartIfRunning('cmd');
+          const drawer = terminalDrawerRef.current;
+          if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
+          await drawer.restartIfRunning('cmd');
         } catch (e: any) {
           const detail = e?.response?.data?.error || e?.message;
           showActionError(detail ? `CMD directory saved, but console restart failed: ${detail}` : 'CMD directory saved, but the console could not be restarted.');
@@ -577,6 +766,15 @@ export const ProjectsView: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  onClick={handleMinimizeCmd}
+                  title="Minimize the in-app CMD panel (keeps consoles running)"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content text-xs font-bold hover:bg-surface-3 hover:border-slate-600 transition-colors"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Minimize CMD</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     startTimer('pomodoro', activeProject.id);
                     setCurrentView('timetracker');
@@ -591,8 +789,9 @@ export const ProjectsView: React.FC = () => {
 
             {/* Project Folder Path */}
             {folderError && (
-              <div className="px-3.5 py-2 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
-                {folderError}
+              <div className="flex items-start justify-between gap-3 px-3.5 py-2 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300" role="alert">
+                <span>{folderError}</span>
+                <button type="button" onClick={() => setFolderError(null)} className="shrink-0 text-rose-300 hover:text-white" aria-label="Dismiss error">×</button>
               </div>
             )}
             {isEditingDirPath ? (
@@ -1140,7 +1339,7 @@ export const ProjectsView: React.FC = () => {
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
-                Agents
+                Skills
               </button>
 
               <button
@@ -1342,6 +1541,16 @@ export const ProjectsView: React.FC = () => {
 
                               <button
                                 type="button"
+                                onClick={() => void copyTaskPrompt(task.id)}
+                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${taskPromptStatus[task.id] === 'copied' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : taskPromptStatus[task.id] === 'error' ? 'bg-rose-500/10 border-rose-500/25 text-rose-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
+                                title="Copy a focused prompt for this task and its subtasks"
+                              >
+                                {taskPromptStatus[task.id] === 'copied' ? <Check className="w-3 h-3" /> : <Clipboard className="w-3 h-3" />}
+                                <span className="hidden sm:inline">{taskPromptStatus[task.id] === 'copied' ? 'Copied' : taskPromptStatus[task.id] === 'error' ? 'Retry' : 'Copy prompt'}</span>
+                              </button>
+
+                              <button
+                                type="button"
                                 onClick={() => deleteTask(task.id)}
                                 className="p-1.5 text-content-faint hover:text-rose-400 rounded-lg transition-colors"
                               >
@@ -1516,34 +1725,115 @@ export const ProjectsView: React.FC = () => {
                 <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-4">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div>
-                      <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Initial Launch Prompt</h3>
-                      <p className="text-xs text-content-faint mt-1">A ready-to-paste coding brief generated from the source idea.</p>
+                      <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Initial Prompt</h3>
+                      <p className="text-xs text-content-faint mt-1">Edit the saved project brief separately from initialization.</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyPrompt}
-                      disabled={!activeProject.initialPrompt}
-                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-black transition-all disabled:opacity-40 ${
-                        copiedPrompt
-                          ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                          : 'bg-indigo-500/10 border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20'
-                      }`}
-                    >
-                      {copiedPrompt ? <Check className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
-                      {copiedPrompt ? 'Copied' : 'Copy prompt'}
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      {!isEditingPrompt && (
+                        <button
+                          type="button"
+                          onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(true); setPromptSaveError(null); }}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong text-xs font-black transition-all"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Edit prompt
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => { const tool = activeProject.initializationTool || 'opencode'; setLaunchTool(tool); setLaunchModel(activeProject.initializationModel || ''); setToolAvailability(null); setPromptSource('project'); setSelectedPromptTaskId(''); setIsLaunchDialogOpen(true); setPromptCopyError(null); void checkToolAvailability(tool); }}
+                        disabled={!activeProject.initialPrompt || isEditingPrompt}
+                        title={isEditingPrompt ? 'Save the prompt before starting initialization' : 'Choose a tool and model, then open the project console'}
+                        className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-black transition-all disabled:opacity-40 ${
+                          copiedPrompt
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                            : 'bg-indigo-500/10 border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20'
+                        }`}
+                      >
+                        {copiedPrompt ? <Check className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                        {copiedPrompt ? 'Prompt copied' : 'Start initialization'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-line bg-surface-2/50 p-4 space-y-3">
+                    <div>
+                      <h4 className="text-xs font-black text-content">Initialization defaults</h4>
+                      <p className="text-[11px] text-content-faint mt-0.5">Choose the CLI and model used by default. Start initialization can override these once.</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-[9rem_1fr_auto] gap-2">
+                      <select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); }} className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content">
+                        <option value="opencode">OpenCode</option><option value="codex">Codex</option>
+                      </select>
+                      <input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-mono text-content" />
+                      <button type="button" onClick={saveInitializationSettings} disabled={!launchModel.trim() || isSavingInitializationSettings} className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-black text-content-muted hover:text-white disabled:opacity-40">{isSavingInitializationSettings ? 'Saving…' : 'Save default'}</button>
+                    </div>
+                    <datalist id="project-model-presets">{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.modelId}>{p.label}</option>)}</datalist>
+                    {modelPresets.filter(p => p.enabled).length === 0 && <p className="text-[11px] text-amber-300">No enabled presets for this tool. Type a model ID, then save it as the project default or <button type="button" onClick={() => setCurrentView('settings')} className="underline hover:text-amber-200">manage presets in Settings → Models</button>.</p>}
                   </div>
                   {promptCopyError && <p className="text-xs text-rose-300" role="alert">{promptCopyError}</p>}
-                  {activeProject.initialPrompt ? (
+                  {initializationStatus && <p className="text-xs text-emerald-300" role="status">{initializationStatus}</p>}
+                  {promptSaveError && <p className="text-xs text-rose-300" role="alert">{promptSaveError}</p>}
+                  {isEditingPrompt ? (
+                    <>
+                      <textarea
+                        value={promptDraft}
+                        onChange={e => setPromptDraft(e.target.value)}
+                        rows={18}
+                        autoFocus
+                        className="w-full resize-y min-h-[20rem] rounded-2xl bg-surface-inverse border border-line focus:border-indigo-500 p-4 text-xs leading-relaxed text-content font-mono outline-none"
+                        placeholder="Write the initial project prompt..."
+                      />
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={handleClearInitialPrompt}
+                          disabled={!activeProject.initialPrompt || isSavingPrompt}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-900/50 text-rose-300 hover:bg-rose-500/10 text-xs font-black disabled:opacity-40"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Clear prompt
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(false); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white text-xs font-black">
+                            Cancel
+                          </button>
+                          <button type="button" onClick={handleSaveInitialPrompt} disabled={!promptDraft.trim() || isSavingPrompt} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black disabled:opacity-40">
+                            <Check className="w-3.5 h-3.5" />
+                            {isSavingPrompt ? 'Saving…' : 'Save prompt'}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  ) : activeProject.initialPrompt ? (
                     <pre className="whitespace-pre-wrap select-text max-h-[32rem] overflow-auto rounded-2xl bg-surface-inverse border border-line p-4 text-xs leading-relaxed text-content font-mono">
                       {activeProject.initialPrompt}
                     </pre>
                   ) : (
                     <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint font-mono">
-                      This project has no saved launch prompt. Prompts are created when an idea is launched as a project.
+                      This project has no saved initial prompt. Use Edit prompt to create one.
                     </div>
                   )}
                 </div>
+                {isLaunchDialogOpen && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Choose initialization model">
+                    <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-5 shadow-2xl space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div><h3 className="text-base font-black text-content">Initialize with…</h3><p className="text-xs text-content-faint mt-1">The prompt will be copied, then the selected CLI will open in the project folder.</p></div>
+                        <button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="p-1.5 text-content-faint hover:text-white" aria-label="Close"><X className="w-4 h-4" /></button>
+                      </div>
+                      <label className="block text-xs font-black text-content">Prompt source<select value={promptSource} onChange={e => { const next = e.target.value as 'project' | 'task'; setPromptSource(next); if (next === 'project') setSelectedPromptTaskId(''); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="project">Full project initialization</option><option value="task">Task prompt</option></select></label>
+                      {promptSource === 'task' && (() => {
+                        const openTasks = tasks.filter(t => t.projectId === activeProject.id && !t.completed);
+                        return <label className="block text-xs font-black text-content">Open task<select value={selectedPromptTaskId} onChange={e => setSelectedPromptTaskId(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose a task…</option>{openTasks.map(task => <option key={task.id} value={task.id}>{task.title}{task.subtasks.length ? ` (${task.subtasks.length} steps)` : ''}</option>)}</select>{openTasks.length === 0 && <span className="mt-1 block text-[11px] text-amber-300">There are no open tasks in this project.</span>}</label>;
+                      })()}
+                      <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
+                      <label className="block text-xs font-black text-content">Model<input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" /></label>
+                      {isCheckingTool && <p className="text-xs text-content-faint">Checking whether {launchTool === 'codex' ? 'Codex' : 'OpenCode'} is installed…</p>}
+                      {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
+                      <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Copy & start</button></div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -16,6 +16,11 @@ class ProjectStage(models.TextChoices):
     LIVE = 'live', 'Live & Shipped'
 
 
+class InitializationTool(models.TextChoices):
+    OPENCODE = 'opencode', 'OpenCode'
+    CODEX = 'codex', 'Codex'
+
+
 class AppCategory(models.TextChoices):
     WEB_SAAS = 'Web App / SaaS', 'Web App / SaaS'
     MOBILE = 'Mobile App', 'Mobile App'
@@ -59,6 +64,7 @@ class TimeMode(models.TextChoices):
 class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True, blank=False)
+    potential_projects_root = models.CharField(max_length=500, blank=True, default='')
 
     class Meta:
         ordering = ['-date_joined']
@@ -90,6 +96,8 @@ class Project(models.Model):
     python_env = models.CharField(max_length=500, blank=True, default='', help_text='Optional virtualenv folder. Auto-activates in the in-app terminal and is used for script runs (resolves Scripts/activate.bat and Scripts/python.exe).')
     drive = models.CharField(max_length=2, blank=True, default='', choices=[('C', 'C:'), ('D', 'D:'), ('E', 'E:'), ('F', 'F:'), ('G', 'G:'), ('H', 'H:')], help_text="Drive letter for this project's paths (useful when the project lives on a USB drive that gets a different letter on another PC). Changing it remaps cmd_directory/script_path/directory_path.")
     notes = models.TextField(blank=True, default='')
+    initialization_tool = models.CharField(max_length=20, choices=InitializationTool.choices, default=InitializationTool.OPENCODE)
+    initialization_model = models.CharField(max_length=200, blank=True, default='')
     pinned = models.BooleanField(default=False)
     tech_research = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -116,6 +124,27 @@ class ProjectLaunchPrompt(models.Model):
 
     def __str__(self):
         return f"Launch prompt: {self.project.title}"
+
+
+class LauncherModelPreset(models.Model):
+    """A user-managed model ID that can be used by a local coding CLI."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='launcher_model_presets')
+    tool = models.CharField(max_length=20, choices=InitializationTool.choices)
+    model_id = models.CharField(max_length=200)
+    label = models.CharField(max_length=200, blank=True, default='')
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['tool', 'label', 'model_id']
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'tool', 'model_id'], name='unique_launcher_model_preset'),
+        ]
+
+    def __str__(self):
+        return self.label or self.model_id
 
 
 class Milestone(models.Model):

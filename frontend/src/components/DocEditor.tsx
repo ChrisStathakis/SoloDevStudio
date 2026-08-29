@@ -91,7 +91,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
       setEditorMode('preview');
     } catch (e) {
       console.error('Failed to save doc', e);
-      setError('Failed to save agent.');
+      setError('Failed to save skill.');
     } finally {
       setIsSaving(false);
     }
@@ -99,13 +99,13 @@ export const DocEditor: React.FC<DocEditorProps> = ({
 
   const handleDelete = async () => {
     if (!initialDoc) return;
-    if (!window.confirm(`Delete agent "${initialDoc.title}"? It will be removed from all linked projects.`)) return;
+    if (!window.confirm(`Delete skill "${initialDoc.title}"? It will be removed from all linked projects.`)) return;
     try {
       await api.delete(`/docs/${initialDoc.id}/`);
       onDeleted?.(initialDoc.id);
     } catch (e) {
       console.error('Failed to delete doc', e);
-      setError('Failed to delete agent.');
+      setError('Failed to delete skill.');
     }
   };
 
@@ -160,7 +160,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
                 ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
                 : 'bg-surface-2 border-line text-content-muted hover:text-white hover:border-line-strong'
             }`}
-            title="Copy full agent content"
+            title="Copy full skill content"
           >
             {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copied ? 'Copied' : 'Copy'}</span>
@@ -173,7 +173,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white text-xs font-black shadow-sm transition-all"
           >
             {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            <span>{isNew ? 'Create Agent' : 'Save'}</span>
+            <span>{isNew ? 'Create Skill' : 'Save'}</span>
           </button>
 
           {!isNew && (
@@ -181,7 +181,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
               type="button"
               onClick={handleDelete}
               className="p-2 rounded-xl bg-surface-2 border border-line text-rose-400 hover:text-rose-300 hover:border-rose-900/60 transition-all"
-              title="Delete agent from all projects"
+            title="Delete skill from all projects"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -199,7 +199,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
         type="text"
         value={draftTitle}
         onChange={e => setDraftTitle(e.target.value)}
-        placeholder="Agent name..."
+        placeholder="Skill name..."
         className="w-full px-4 py-3 bg-surface-2 border border-line focus:border-indigo-500 rounded-2xl text-sm font-black text-content placeholder:text-slate-600 outline-none transition-colors"
       />
 
@@ -212,7 +212,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
           </span>
         </div>
         <p className="text-[13px] text-slate-600 -mt-1">
-          Categorize this agent so it can be filtered in agent lists.
+          Categorize this skill so it can be filtered in skill lists.
         </p>
         <div className="flex flex-wrap gap-1.5">
           <button
@@ -255,7 +255,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
           </span>
         </div>
         <p className="text-[13px] text-slate-600 -mt-1">
-          This agent appears in the Agents tab of every selected project — no need to recreate it.
+          This skill appears in the Skills tab of every selected project — no need to recreate it.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {allProjects.length === 0 && (

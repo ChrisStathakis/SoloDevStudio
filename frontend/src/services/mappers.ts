@@ -51,12 +51,26 @@ export function mapProjectFromApi(raw: any): Project {
     port: raw.port || undefined,
     notes: raw.notes || undefined,
     initialPrompt: raw.launch_prompt?.content || undefined,
+    initializationTool: raw.initialization_tool === 'codex' ? 'codex' : 'opencode',
+    initializationModel: raw.initialization_model || undefined,
     pinned: raw.pinned,
     milestones: (raw.milestones || []).map(mapMilestoneFromApi),
     techResearch: raw.tech_research || undefined,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
   };
+}
+
+export function mapLauncherModelPresetFromApi(raw: any) {
+  return {
+    id: String(raw.id),
+    tool: raw.tool === 'codex' ? 'codex' : 'opencode',
+    modelId: raw.model_id || '',
+    label: raw.label || '',
+    enabled: raw.enabled !== false,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+  } as import('../types').LauncherModelPreset;
 }
 
 export function mapProjectToApi(p: Partial<Project> & { title: string }): any {
@@ -81,6 +95,8 @@ export function mapProjectToApi(p: Partial<Project> & { title: string }): any {
   if (p.drive !== undefined) out.drive = p.drive || '';
   if (p.port !== undefined) out.port = p.port;
   if (p.notes !== undefined) out.notes = p.notes || '';
+  if (p.initializationTool !== undefined) out.initialization_tool = p.initializationTool;
+  if (p.initializationModel !== undefined) out.initialization_model = p.initializationModel || '';
   if (p.pinned !== undefined) out.pinned = p.pinned;
   if (p.techResearch !== undefined) out.tech_research = p.techResearch;
   if (p.milestones !== undefined) out.milestones = p.milestones.map(mapMilestoneToApi);

@@ -4,9 +4,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     health_view, register_view, me_view,
     ProjectViewSet, MilestoneViewSet, TaskViewSet, IdeaViewSet, TimeEntryViewSet,
-    ProjectDocViewSet, AgentFilterViewSet,
+    ProjectDocViewSet, AgentFilterViewSet, LauncherModelPresetViewSet,
     export_data_view, import_data_view, dashboard_view, timeline_view,
-    filesystem_browse,
+    filesystem_browse, project_folder_settings_view,
 )
 from .terminal_views import (
     create_project_terminal, list_terminals, kill_terminal,
@@ -21,6 +21,7 @@ router.register(r'ideas', IdeaViewSet, basename='idea')
 router.register(r'time-entries', TimeEntryViewSet, basename='timeentry')
 router.register(r'docs', ProjectDocViewSet, basename='doc')
 router.register(r'agent-filters', AgentFilterViewSet, basename='agent-filter')
+router.register(r'launcher-model-presets', LauncherModelPresetViewSet, basename='launcher-model-preset')
 
 urlpatterns = [
     path('health/', health_view, name='health'),
@@ -33,6 +34,7 @@ urlpatterns = [
     path('dashboard/', dashboard_view, name='dashboard'),
     path('timeline/', timeline_view, name='timeline'),
     path('filesystem/', filesystem_browse, name='filesystem-browse'),
+    path('settings/project-folder/', project_folder_settings_view, name='project-folder-settings'),
     # In-app terminal sessions
     path('terminals/', list_terminals, name='terminal-list'),
     path('terminals/<str:session_id>/output/', terminal_output, name='terminal-output'),

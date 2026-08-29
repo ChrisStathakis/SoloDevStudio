@@ -62,7 +62,7 @@ export const AgentFilterModal: React.FC<AgentFilterModalProps> = ({ initial = nu
                 {isEdit ? 'Edit Filter' : 'New Filter'}
               </h3>
               <p className="text-[13px] text-content-faint mt-0.5">
-                {isEdit ? 'Rename this agent filter.' : 'Create a new agent filter category.'}
+                {isEdit ? 'Rename this skill filter.' : 'Create a new skill filter category.'}
               </p>
             </div>
           </div>
@@ -100,7 +100,7 @@ export const AgentFilterModal: React.FC<AgentFilterModalProps> = ({ initial = nu
           </label>
           <p className="text-[12px] text-slate-600">
             {isEdit && initial
-              ? `Slug stays as ./${initial.slug} — agents keep their link.`
+              ? `Slug stays as ./${initial.slug} — skills keep their link.`
               : 'A slug is generated automatically from the name.'}
           </p>
         </div>

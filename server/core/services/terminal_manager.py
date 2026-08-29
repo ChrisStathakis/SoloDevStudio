@@ -242,6 +242,14 @@ class TerminalManager:
         # /d disables registry AutoRun commands and /q keeps the prompt clean.
         # Do not leak Django's server-only process context into a developer shell.
         command = ['cmd.exe', '/d', '/q']
+        with self._lock:
+            existing_cmds = sum(
+                1 for session in self._sessions.values()
+                if str(session.owner_id) == str(owner_id)
+                and str(session.project_id) == str(project_id)
+                and session.mode == 'cmd'
+                and session.is_alive()
+            )
         title = 'CMD'
         activate_bat, _scripts_dir = resolve_venv(python_env)
         if activate_bat:
@@ -250,6 +258,8 @@ class TerminalManager:
             # (embedding quotes in the string gets re-escaped and breaks `call`).
             command = ['cmd.exe', '/d', '/q', '/k', 'call', activate_bat]
             title = 'CMD (venv)'
+        if existing_cmds:
+            title = f'{title} {existing_cmds + 1}'
         env = dict(os.environ)
         for key in ('DJANGO_SETTINGS_MODULE', 'DJANGO_ALLOW_ASYNC_UNSAFE', 'RUN_MAIN'):
             env.pop(key, None)

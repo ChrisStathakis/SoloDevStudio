@@ -1,0 +1,46 @@
+services:
+  backend:
+    image: python:3.12-slim
+    working_dir: /app/server
+    ports:
+      - "8001:8001"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-docker-dev-key-change-before-sharing}
+      DEBUG: ${DEBUG:-False}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      APP_URL: http://localhost:8001
+      SQLITE_PATH: /data/db.sqlite3
+      POTENTIAL_PROJECTS_ROOT: /data/potential_projects
+      DOCKER_RUNTIME: "1"
+    volumes:
+      - solodev_data:/data
+      - .:/app
+      - pip_cache:/root/.cache/pip
+    command: >-
+      sh -c "pip install --disable-pip-version-check -q -r requirements.txt
+      && python manage.py migrate
+      && python manage.py runserver 0.0.0.0:8001"
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8001/api}
+    volumes:
+      - .:/app
+      - npm_cache:/root/.npm
+      - frontend_node_modules:/app/frontend/node_modules
+    command: sh -c "npm install --no-audit --no-fund && npm run dev"
+    depends_on:
+      - backend
+
+volumes:
+  solodev_data:
+  pip_cache:
+  npm_cache:
+  frontend_node_modules:

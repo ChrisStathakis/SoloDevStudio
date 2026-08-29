@@ -91,9 +91,21 @@ export interface Project {
   port?: string;
   notes?: string;
   initialPrompt?: string;
+  initializationTool?: 'opencode' | 'codex';
+  initializationModel?: string;
   pinned: boolean;
   milestones: Milestone[];
   techResearch?: TechResearchResult;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LauncherModelPreset {
+  id: string;
+  tool: 'opencode' | 'codex';
+  modelId: string;
+  label: string;
+  enabled: boolean;
   createdAt: string;
   updatedAt: string;
 }

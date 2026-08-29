@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -17,16 +18,17 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage, InitializationTool
 from .serializers import (
     UserSerializer, RegisterSerializer,
     ProjectSerializer, MilestoneSerializer,
     TaskSerializer, SubtaskSerializer,
     IdeaSerializer, TimeEntrySerializer,
-    ProjectDocSerializer, AgentFilterSerializer
+    ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer
 )
 from .filters import ProjectFilter, TaskFilter, IdeaFilter, TimeEntryFilter, ProjectDocFilter
 from .permissions import IsOwner
+from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 
 User = get_user_model()
 
@@ -56,6 +58,41 @@ def register_view(request):
 @permission_classes([permissions.IsAuthenticated])
 def me_view(request):
     return Response(UserSerializer(request.user).data)
+
+
+def _project_folder_payload(user):
+    configured = str(getattr(user, 'potential_projects_root', '') or '').strip()
+    default_path = str(Path(settings.POTENTIAL_PROJECTS_ROOT).expanduser())
+    effective = configured or default_path
+    return {'path': configured, 'effective_path': effective, 'default_path': default_path, 'is_custom': bool(configured)}
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def project_folder_settings_view(request):
+    user = request.user
+    if request.method == 'GET':
+        return Response(_project_folder_payload(user))
+    if request.method == 'DELETE':
+        user.potential_projects_root = ''
+        user.save(update_fields=['potential_projects_root'])
+        return Response(_project_folder_payload(user))
+    raw = request.data.get('path')
+    if not isinstance(raw, str) or not raw.strip():
+        return Response({'path': ['Enter an absolute folder path.']}, status=status.HTTP_400_BAD_REQUEST)
+    candidate = os.path.expanduser(raw.strip().strip('"').strip("'"))
+    # Accept native absolute paths on the host plus Windows drive/UNC paths.
+    is_windows_absolute = bool(re.match(r'^[A-Za-z]:[\\/]', candidate) or candidate.startswith('\\\\'))
+    value = os.path.abspath(candidate) if os.path.isabs(candidate) else candidate
+    if any(ord(ch) < 32 for ch in value):
+        return Response({'path': ['Folder path contains invalid characters.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not os.path.isabs(value) and not is_windows_absolute:
+        return Response({'path': ['Folder path must be absolute.']}, status=status.HTTP_400_BAD_REQUEST)
+    if os.path.exists(value) and not os.path.isdir(value):
+        return Response({'path': ['Selected path is not a folder.']}, status=status.HTTP_400_BAD_REQUEST)
+    user.potential_projects_root = value
+    user.save(update_fields=['potential_projects_root'])
+    return Response(_project_folder_payload(user))
 
 
 def build_launch_prompt(idea):
@@ -100,9 +137,14 @@ def build_launch_prompt(idea):
     return '\n'.join(lines).strip()
 
 
-def create_potential_project_folder(title):
+def get_potential_projects_root(user=None):
+    configured = str(getattr(user, 'potential_projects_root', '') or '').strip()
+    return Path(configured).expanduser() if configured else Path(settings.POTENTIAL_PROJECTS_ROOT).expanduser()
+
+
+def create_potential_project_folder(title, user=None):
     """Create a unique, Windows-safe project folder and return its absolute path."""
-    root = Path(settings.POTENTIAL_PROJECTS_ROOT).expanduser()
+    root = get_potential_projects_root(user)
     root.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '-', str(title or '').strip())
     safe = re.sub(r'\s+', ' ', safe).rstrip(' .') or 'project'
@@ -119,6 +161,64 @@ def create_potential_project_folder(title):
             candidate = root / f'{safe}-{suffix}'
             suffix += 1
 
+
+def compose_project_initialization_prompt(project, user):
+    """Compose the saved project prompt with the project's currently active Skills."""
+    prompt = ProjectLaunchPrompt.objects.filter(project=project).first()
+    base = (prompt.content if prompt else '') or ''
+    links = list(ProjectAgentLink.objects.filter(
+        project=project, active=True, agent__owner=user
+    ).select_related('agent__filter'))
+    links.sort(key=lambda link: (
+        link.agent.filter.order if link.agent.filter else 10**9,
+        (link.agent.title or '').casefold(),
+        str(link.agent.id),
+    ))
+    sections = []
+    for link in links:
+        agent = link.agent
+        lines = [f'### {agent.title}']
+        if agent.filter:
+            lines.append(f'Filter: {agent.filter.name}')
+        lines.extend(['', agent.content or ''])
+        sections.append('\n'.join(lines).strip())
+    content = f'{base}\n\n## Active project skills' if base else '## Active project skills'
+    if sections:
+        content += '\n\n' + '\n\n'.join(sections)
+    return content, base, links
+
+
+def compose_task_prompt(task, user):
+    """Compose a focused implementation prompt for one open task."""
+    project = task.project
+    content, base, links = compose_project_initialization_prompt(project, user)
+    if not base:
+        return '', base, links
+    lines = [
+        content,
+        '',
+        '# Focus task',
+        f'## Task: {task.title}',
+    ]
+    if task.description:
+        lines.extend(['', '### Description', task.description.strip()])
+    lines.extend(['', f'- Stage: {task.get_stage_display()}', f'- Category: {task.get_category_display()}', f'- Priority: {task.get_quadrant_display()}'])
+    if task.estimated_minutes:
+        lines.append(f'- Estimate: {task.estimated_minutes} minutes')
+    if task.tags:
+        lines.append(f"- Tags: {', '.join(str(tag) for tag in task.tags)}")
+    subtasks = list(task.subtasks.order_by('order', 'created_at'))
+    if subtasks:
+        lines.extend(['', '### Subtasks', *[f"- [{'x' if sub.completed else ' '}] {sub.title}" for sub in subtasks]])
+    lines.extend([
+        '',
+        '## Task delivery instructions',
+        '- Implement only this task and its subtasks within the existing project scope.',
+        '- Preserve existing behavior outside this task and call out assumptions before changing shared interfaces.',
+        '- Validate the core workflow with focused tests or checks and report what was verified.',
+    ])
+    return '\n'.join(lines).strip(), base, links
+
 # ---------- Projects ----------
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -134,6 +234,92 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+    def _manage_initial_prompt(self, request, project):
+        prompt = ProjectLaunchPrompt.objects.filter(project=project).first()
+        if request.method == 'GET':
+            return Response({
+                'id': str(prompt.id) if prompt else None,
+                'content': prompt.content if prompt else '',
+            })
+        if request.method == 'DELETE':
+            if prompt:
+                prompt.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        content = request.data.get('content')
+        if not isinstance(content, str):
+            return Response({'content': 'This field must be a string.'}, status=status.HTTP_400_BAD_REQUEST)
+        content = content.strip()
+        if not content:
+            return Response({'content': 'Prompt cannot be empty. Use DELETE to clear it.'}, status=status.HTTP_400_BAD_REQUEST)
+        if prompt:
+            prompt.content = content
+            prompt.save(update_fields=['content', 'updated_at'])
+        else:
+            prompt = ProjectLaunchPrompt.objects.create(project=project, content=content)
+        return Response({
+            'id': str(prompt.id),
+            'content': prompt.content,
+            'created_at': prompt.created_at,
+            'updated_at': prompt.updated_at,
+        }, status=status.HTTP_200_OK if request.method == 'PATCH' else status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get', 'put', 'patch', 'delete'], url_path='initial-prompt')
+    def initial_prompt(self, request, pk=None):
+        return self._manage_initial_prompt(request, self.get_object())
+
+    @action(detail=True, methods=['get', 'patch'], url_path='initialization-settings')
+    def initialization_settings(self, request, pk=None):
+        project = self.get_object()
+        if request.method == 'PATCH':
+            tool = request.data.get('tool', project.initialization_tool)
+            model_id = request.data.get('model_id', project.initialization_model)
+            if tool not in InitializationTool.values:
+                return Response({'tool': 'Tool must be opencode or codex.'}, status=400)
+            if not isinstance(model_id, str):
+                return Response({'model_id': 'Model ID must be a string.'}, status=400)
+            model_id = model_id.strip()
+            if model_id and not is_safe_model_id(model_id):
+                return Response({'model_id': MODEL_ID_ERROR}, status=400)
+            project.initialization_tool = tool
+            project.initialization_model = model_id
+            project.save(update_fields=['initialization_tool', 'initialization_model', 'updated_at'])
+        return Response({'tool': project.initialization_tool, 'model_id': project.initialization_model or ''})
+
+    @action(detail=True, methods=['get'], url_path='tool-availability')
+    def tool_availability(self, request, pk=None):
+        self.get_object()
+        tool = (request.query_params.get('tool') or '').strip().lower()
+        configs = {
+            'opencode': {
+                'command': 'opencode',
+                'install_command': 'npm install -g opencode-ai',
+                'documentation_url': 'https://dev.opencode.ai/docs/',
+            },
+            'codex': {
+                'command': 'codex',
+                'install_command': 'npm install -g @openai/codex',
+                'documentation_url': 'https://learn.chatgpt.com/docs/codex/cli',
+            },
+        }
+        config = configs.get(tool)
+        if not config:
+            return Response({'error': 'tool must be opencode or codex.'}, status=400)
+        executable = shutil.which(config['command'])
+        npm_available = shutil.which('npm') is not None
+        return Response({
+            'tool': tool,
+            'available': bool(executable),
+            'executable': executable,
+            'npm_available': npm_available,
+            'install_command': config['install_command'],
+            'documentation_url': config['documentation_url'],
+            'message': None if executable else ('npm is not available on the server PATH.' if not npm_available else f'{config["command"]} is not installed.'),
+        })
+
+    @action(detail=True, methods=['get', 'put', 'patch', 'delete'], url_path='launch-prompt')
+    def launch_prompt_endpoint(self, request, pk=None):
+        return self._manage_initial_prompt(request, self.get_object())
 
     @action(detail=True, methods=['post'], url_path='advance-stage')
     def advance_stage(self, request, pk=None):
@@ -153,6 +339,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='open-folder')
     def open_folder(self, request, pk=None):
         project = self.get_object()
+        if getattr(settings, 'DOCKER_RUNTIME', False):
+            return Response({"error": "Opening host folders is unavailable in Docker mode. Use the Windows launcher for Explorer access."}, status=501)
         raw = (project.directory_path or '').strip().strip('"').strip("'")
         if not raw:
             return Response({"error": "No folder path set for this project."}, status=400)
@@ -246,27 +434,20 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='copy-prompt')
     def copy_prompt(self, request, pk=None):
         project = self.get_object()
-        base = getattr(getattr(project, 'launch_prompt', None), 'content', '') or ''
-        links = list(ProjectAgentLink.objects.filter(
-            project=project, active=True, agent__owner=request.user
-        ).select_related('agent__filter'))
-        links.sort(key=lambda link: (
-            link.agent.filter.order if link.agent.filter else 10**9,
-            (link.agent.title or '').casefold(),
-            str(link.agent.id),
-        ))
-        sections = []
-        for link in links:
-            agent = link.agent
-            lines = [f'### {agent.title}']
-            if agent.filter:
-                lines.append(f'Filter: {agent.filter.name}')
-            lines.extend(['', agent.content or ''])
-            sections.append('\n'.join(lines).strip())
-        content = f'{base}\n\n## Active project agents' if base else '## Active project agents'
-        if sections:
-            content += '\n\n' + '\n\n'.join(sections)
+        content, base, links = compose_project_initialization_prompt(project, request.user)
         return Response({'content': content, 'launch_prompt': base, 'active_agents': [
+            {'title': link.agent.title, 'filter': link.agent.filter.name if link.agent.filter else None, 'content': link.agent.content or ''}
+            for link in links
+        ], 'active_skills': [
+            {'title': link.agent.title, 'filter': link.agent.filter.name if link.agent.filter else None, 'content': link.agent.content or ''}
+            for link in links
+        ]})
+
+    @action(detail=True, methods=['get'], url_path='initialize-prompt')
+    def initialize_prompt(self, request, pk=None):
+        project = self.get_object()
+        content, base, links = compose_project_initialization_prompt(project, request.user)
+        return Response({'content': content, 'initial_prompt': base, 'active_skills': [
             {'title': link.agent.title, 'filter': link.agent.filter.name if link.agent.filter else None, 'content': link.agent.content or ''}
             for link in links
         ]})
@@ -313,6 +494,29 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Task.objects.filter(project__owner=self.request.user).prefetch_related('subtasks')
+
+    @action(detail=True, methods=['get'], url_path='prompt')
+    def prompt(self, request, pk=None):
+        task = self.get_object()
+        if not ProjectLaunchPrompt.objects.filter(project=task.project).exclude(content='').exists():
+            return Response({'error': 'Save an initial project prompt before creating a task prompt.'}, status=status.HTTP_400_BAD_REQUEST)
+        content, base, links = compose_task_prompt(task, request.user)
+        return Response({
+            'content': content,
+            'initial_prompt': base,
+            'task': {
+                'id': str(task.id),
+                'title': task.title,
+                'subtasks': [
+                    {'id': str(sub.id), 'title': sub.title, 'completed': sub.completed}
+                    for sub in task.subtasks.order_by('order', 'created_at')
+                ],
+            },
+            'active_skills': [
+                {'title': link.agent.title, 'filter': link.agent.filter.name if link.agent.filter else None, 'content': link.agent.content or ''}
+                for link in links
+            ],
+        })
 
     @action(detail=True, methods=['post'], url_path='toggle-complete')
     def toggle_complete(self, request, pk=None):
@@ -393,7 +597,7 @@ class IdeaViewSet(viewsets.ModelViewSet):
         description = "\n\n".join(description_parts).strip()
         folder_path = None
         try:
-            folder_path = create_potential_project_folder(idea.title)
+            folder_path = create_potential_project_folder(idea.title, request.user)
         except OSError as exc:
             return Response({'error': f'Unable to create project folder: {exc}'}, status=500)
         try:
@@ -448,6 +652,23 @@ class IdeaViewSet(viewsets.ModelViewSet):
             "project": ProjectSerializer(project).data,
             "idea": IdeaSerializer(idea).data,
         }, status=201)
+
+# ---------- Launcher model presets ----------
+
+class LauncherModelPresetViewSet(viewsets.ModelViewSet):
+    serializer_class = LauncherModelPresetSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    http_method_names = ['get', 'post', 'patch', 'put', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        queryset = LauncherModelPreset.objects.filter(owner=self.request.user)
+        tool = self.request.query_params.get('tool')
+        if tool:
+            queryset = queryset.filter(tool=tool)
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
 
 # ---------- Time Entries ----------
 
@@ -507,7 +728,8 @@ def export_data_view(request):
     ideas = Idea.objects.filter(owner=user)
     time_entries = TimeEntry.objects.filter(owner=user)
     docs = ProjectDoc.objects.filter(owner=user)
-    from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer
+    presets = LauncherModelPreset.objects.filter(owner=user)
+    from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer
     data = {
         "version": "1.0",
         "exportedAt": timezone.now().isoformat(),
@@ -516,6 +738,8 @@ def export_data_view(request):
         "ideas": IdeaSerializer(ideas, many=True).data,
         "timeEntries": TimeEntrySerializer(time_entries, many=True).data,
         "docs": ProjectDocSerializer(docs, many=True).data,
+        "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
+        "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
     }
     return Response(data)
 
@@ -524,10 +748,27 @@ def export_data_view(request):
 def import_data_view(request):
     data = request.data
     user = request.user
-    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0}
+    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "modelPresets": 0, "settings": 0}
     project_id_map = {}
     milestone_id_map = {}
     with transaction.atomic():
+        settings_data = data.get('settings') if isinstance(data.get('settings'), dict) else {}
+        if 'potentialProjectsRoot' in settings_data or 'potential_projects_root' in settings_data:
+            raw_root = settings_data.get('potentialProjectsRoot', settings_data.get('potential_projects_root'))
+            if isinstance(raw_root, str):
+                value = raw_root.strip()
+                if not value:
+                    user.potential_projects_root = ''
+                    user.save(update_fields=['potential_projects_root'])
+                    imported['settings'] = 1
+                else:
+                    normalized_candidate = os.path.expanduser(value.strip('"').strip("'"))
+                    normalized = os.path.abspath(normalized_candidate) if os.path.isabs(normalized_candidate) else normalized_candidate
+                    windows_abs = bool(re.match(r'^[A-Za-z]:[\\/]', normalized_candidate) or normalized_candidate.startswith('\\\\'))
+                    if (os.path.isabs(normalized) or windows_abs) and not any(ord(ch) < 32 for ch in normalized) and (not os.path.exists(normalized) or os.path.isdir(normalized)):
+                        user.potential_projects_root = normalized
+                        user.save(update_fields=['potential_projects_root'])
+                        imported['settings'] = 1
         # Projects with milestones
         if 'projects' in data and isinstance(data['projects'], list):
             # optional: clear or merge? We'll merge (create)
@@ -559,6 +800,8 @@ def import_data_view(request):
                     'pythonEnv': 'python_env', 'python_env': 'python_env',
                     'port': 'port', 'drive': 'drive',
                     'notes': 'notes', 'pinned': 'pinned',
+                    'initializationTool': 'initialization_tool', 'initialization_tool': 'initialization_tool',
+                    'initializationModel': 'initialization_model', 'initialization_model': 'initialization_model',
                     'techResearch': 'tech_research', 'tech_research': 'tech_research',
                     'title': 'title',
                 }
@@ -753,6 +996,20 @@ def import_data_view(request):
                         for idx, project_obj in enumerate(proj_objs)
                     ], ignore_conflicts=True)
                 imported["docs"] += 1
+        # User-owned model presets
+        if 'modelPresets' in data and isinstance(data['modelPresets'], list):
+            for preset in data['modelPresets']:
+                tool = preset.get('tool')
+                model_id = preset.get('modelId') or preset.get('model_id')
+                if tool not in [InitializationTool.OPENCODE, InitializationTool.CODEX] or not isinstance(model_id, str):
+                    continue
+                if not is_safe_model_id(model_id):
+                    continue
+                obj, _created = LauncherModelPreset.objects.update_or_create(
+                    owner=user, tool=tool, model_id=model_id.strip(),
+                    defaults={'label': preset.get('label', ''), 'enabled': preset.get('enabled', True)},
+                )
+                imported["modelPresets"] += 1
     return Response({"success": True, "imported": imported})
 
 @api_view(['GET'])
@@ -902,6 +1159,9 @@ def filesystem_browse(request):
     Returns: { path, parent, entries:[{name, path, is_dir}] }
     Read-only; no writes. Safe for a local single-user dev tool.
     """
+    if getattr(settings, 'DOCKER_RUNTIME', False):
+        return Response({"error": "Host filesystem browsing is unavailable in Docker mode. Use the Windows launcher to choose local folders."}, status=501)
+
     raw_path = (request.query_params.get('path') or '').strip()
     if raw_path == '':
         # Show drive roots (computer view)

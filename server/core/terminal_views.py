@@ -3,6 +3,7 @@ import json
 import time
 
 from django.http import StreamingHttpResponse
+from django.conf import settings
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.renderers import BaseRenderer
@@ -36,6 +37,11 @@ def _serialize(sessions):
 @permission_classes([permissions.IsAuthenticated])
 def create_project_terminal(request, pk=None):
     """Create a terminal session for a project (mode: 'cmd' | 'script')."""
+    if getattr(settings, 'DOCKER_RUNTIME', False):
+        return Response(
+            {'error': 'In-app Windows terminals are unavailable in Docker mode. Use the Windows launcher for CMD and script consoles.'},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
     project = _get_owned_project(request, pk)
     if project is None:
         return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -58,19 +64,24 @@ def create_project_terminal(request, pk=None):
 
     cols_i = _int_or_none(cols) if cols is not None else None
     rows_i = _int_or_none(rows) if rows is not None else None
+    force_new = request.data.get('force_new') is True
 
     try:
         if mode == 'cmd':
-            session, reused = terminal_manager.get_or_create_cmd(
-                owner_id=request.user.id,
-                project_id=project.id,
-                project_title=project.title,
-                directory=normalize_path(project.cmd_directory),
-                fallback_directory=normalize_path(project.directory_path),
-                python_env=normalize_path(project.python_env),
-                cols=cols_i or 110,
-                rows=rows_i or 28,
-            )
+            cmd_kwargs = {
+                'owner_id': request.user.id,
+                'project_id': project.id,
+                'project_title': project.title,
+                'directory': normalize_path(project.cmd_directory),
+                'fallback_directory': normalize_path(project.directory_path),
+                'python_env': normalize_path(project.python_env),
+                'cols': cols_i or 110,
+                'rows': rows_i or 28,
+            }
+            if force_new:
+                session, reused = terminal_manager.create_cmd(**cmd_kwargs), False
+            else:
+                session, reused = terminal_manager.get_or_create_cmd(**cmd_kwargs)
         else:
             run_args = []
             raw_port = (project.port or '').strip()
@@ -183,7 +194,10 @@ def _stream_events(session, start_offset):
 
         truncated, text, total, _extra = session.read_since(cursor)
         if truncated:
-            yield _ndjson({'reset': True, 't': total})
+            # The requested cursor fell outside the retained replay window.
+            # Reset the client display and send the retained tail in the same
+            # event so a long-running console never becomes blank.
+            yield _ndjson({'reset': True, 'd': text, 't': total})
             cursor = total
             last_emitted = time.monotonic()
             continue

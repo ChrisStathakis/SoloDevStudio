@@ -1,7 +1,7 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, unwrapPaginated } from '../services/api';
-import { mapProjectDocFromApi } from '../services/mappers';
-import type { ProjectDoc } from '../types';
+import { mapLauncherModelPresetFromApi, mapProjectDocFromApi } from '../services/mappers';
+import type { LauncherModelPreset, ProjectDoc } from '../types';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { useAgentFilters } from '../hooks/useAgentFilters';
@@ -21,13 +21,17 @@ import {
   FileCog,
   ListFilter,
   DatabaseBackup,
-  UserRound
+  UserRound,
+  Cpu,
+  Check,
+  FolderOpen
 } from 'lucide-react';
 import { PageHeader } from './ui';
 import { DocEditor } from './DocEditor';
 import { FilterManager } from './FilterManager';
+import { PathPickerModal } from './PathPickerModal';
 
-type SettingsSection = 'documents' | 'filters' | 'data' | 'account';
+type SettingsSection = 'documents' | 'filters' | 'models' | 'project-folder' | 'data' | 'account';
 
 const formatDate = (iso: string) => {
   try {
@@ -51,6 +55,21 @@ export const SettingsView: React.FC = () => {
   const [query, setQuery] = useState<string>('');
   const [selectedFilterId, setSelectedFilterId] = useState<string>('all');
   const { filters: agentFilters } = useAgentFilters();
+  const [modelPresets, setModelPresets] = useState<LauncherModelPreset[]>([]);
+  const [modelPresetError, setModelPresetError] = useState<string | null>(null);
+  const [newModelTool, setNewModelTool] = useState<'opencode' | 'codex'>('opencode');
+  const [newModelId, setNewModelId] = useState('');
+  const [newModelLabel, setNewModelLabel] = useState('');
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editingModelId, setEditingModelId] = useState('');
+  const [editingModelLabel, setEditingModelLabel] = useState('');
+  const [projectFolderDraft, setProjectFolderDraft] = useState('');
+  const [projectFolderEffective, setProjectFolderEffective] = useState('');
+  const [projectFolderDefault, setProjectFolderDefault] = useState('');
+  const [projectFolderIsCustom, setProjectFolderIsCustom] = useState(false);
+  const [projectFolderError, setProjectFolderError] = useState<string | null>(null);
+  const [projectFolderBusy, setProjectFolderBusy] = useState(false);
+  const [showProjectFolderPicker, setShowProjectFolderPicker] = useState(false);
 
   // Data & backup state
   const [backupStatus, setBackupStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -64,7 +83,7 @@ export const SettingsView: React.FC = () => {
       setDocs(unwrapPaginated<any>(res.data).map(mapProjectDocFromApi));
     } catch (e) {
       console.error('Failed to load docs', e);
-      setDocsError('Failed to load agents.');
+      setDocsError('Failed to load skills.');
     } finally {
       setIsLoadingDocs(false);
     }
@@ -73,6 +92,93 @@ export const SettingsView: React.FC = () => {
   useEffect(() => {
     if (section === 'documents') loadDocs();
   }, [section, loadDocs]);
+
+  const loadModelPresets = useCallback(async () => {
+    try {
+      const res = await api.get('/launcher-model-presets/', { params: { page_size: 100 } });
+      const rows = Array.isArray(res.data) ? res.data : (res.data?.results || []);
+      setModelPresets(rows.map(mapLauncherModelPresetFromApi));
+      setModelPresetError(null);
+    } catch {
+      setModelPresetError('Unable to load model presets.');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === 'models') loadModelPresets();
+  }, [section, loadModelPresets]);
+
+  const loadProjectFolder = useCallback(async () => {
+    try {
+      const res = await api.get('/settings/project-folder/');
+      setProjectFolderDraft(res.data?.path || '');
+      setProjectFolderEffective(res.data?.effective_path || '');
+      setProjectFolderDefault(res.data?.default_path || '');
+      setProjectFolderIsCustom(Boolean(res.data?.is_custom));
+      setProjectFolderError(null);
+    } catch {
+      setProjectFolderError('Unable to load project folder setting.');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === 'project-folder') loadProjectFolder();
+  }, [section, loadProjectFolder]);
+
+  const saveProjectFolder = async () => {
+    if (!projectFolderDraft.trim()) return;
+    setProjectFolderBusy(true);
+    try {
+      const res = await api.patch('/settings/project-folder/', { path: projectFolderDraft.trim() });
+      setProjectFolderDraft(res.data?.path || '');
+      setProjectFolderEffective(res.data?.effective_path || '');
+      setProjectFolderDefault(res.data?.default_path || '');
+      setProjectFolderIsCustom(Boolean(res.data?.is_custom));
+      setProjectFolderError(null);
+    } catch (error: any) {
+      setProjectFolderError(error?.response?.data?.path?.[0] || 'Unable to save project folder.');
+    } finally { setProjectFolderBusy(false); }
+  };
+
+  const resetProjectFolder = async () => {
+    if (!window.confirm('Reset project folder to the app default?')) return;
+    setProjectFolderBusy(true);
+    try {
+      const res = await api.delete('/settings/project-folder/');
+      setProjectFolderDraft('');
+      setProjectFolderEffective(res.data?.effective_path || '');
+      setProjectFolderDefault(res.data?.default_path || '');
+      setProjectFolderIsCustom(false);
+      setProjectFolderError(null);
+    } catch { setProjectFolderError('Unable to reset project folder.'); }
+    finally { setProjectFolderBusy(false); }
+  };
+
+  const addModelPreset = async () => {
+    if (!newModelId.trim()) return;
+    try {
+      await api.post('/launcher-model-presets/', { tool: newModelTool, model_id: newModelId.trim(), label: newModelLabel.trim(), enabled: true });
+      setNewModelId('');
+      setNewModelLabel('');
+      await loadModelPresets();
+    } catch (error: any) {
+      setModelPresetError(error?.response?.data?.model_id?.[0] || 'Unable to save model preset.');
+    }
+  };
+
+  const updateModelPreset = async (preset: LauncherModelPreset, updates: Partial<LauncherModelPreset>) => {
+    try {
+      await api.patch(`/launcher-model-presets/${preset.id}/`, {
+        tool: updates.tool ?? preset.tool,
+        model_id: updates.modelId ?? preset.modelId,
+        label: updates.label ?? preset.label,
+        enabled: updates.enabled ?? preset.enabled,
+      });
+      await loadModelPresets();
+    } catch {
+      setModelPresetError('Unable to update model preset.');
+    }
+  };
 
   const projectMap = useMemo(() => {
     const m = new Map<string, { title: string; color: string }>();
@@ -127,10 +233,10 @@ export const SettingsView: React.FC = () => {
       <div className="space-y-6 pb-12 animate-in fade-in">
         <div>
           <span className="text-[12px] font-black uppercase tracking-[0.2em] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">
-            SETTINGS · AGENTS
+            SETTINGS · SKILLS
           </span>
           <h1 className="text-3xl font-black text-content tracking-tight mt-1">
-            {openDocId === 'new' ? 'New Agent' : 'Edit Agent'}
+            {openDocId === 'new' ? 'New Skill' : 'Edit Skill'}
           </h1>
         </div>
         <DocEditor
@@ -146,15 +252,17 @@ export const SettingsView: React.FC = () => {
   }
 
   const sections: { id: SettingsSection; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { id: 'documents', label: 'Agents', icon: FileCog },
+    { id: 'documents', label: 'Skills', icon: FileCog },
     { id: 'filters', label: 'Filters', icon: ListFilter },
+    { id: 'models', label: 'Models', icon: Cpu },
+    { id: 'project-folder', label: 'Project folder', icon: FolderOpen },
     { id: 'data', label: 'Data & Backup', icon: DatabaseBackup },
     { id: 'account', label: 'Account', icon: UserRound }
   ];
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in">
-      <PageHeader eyebrow="Workspace" title="Settings" description="Manage your agents, backups, and account." />
+      <PageHeader eyebrow="Workspace" title="Settings" description="Manage your skills, backups, and account." />
 
       {/* Section tabs */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
@@ -185,7 +293,7 @@ export const SettingsView: React.FC = () => {
                 type="text"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                placeholder="Search agents by name or content..."
+                placeholder="Search skills by name or content..."
                 className="w-full pl-9 pr-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-bold text-content placeholder:text-slate-600 outline-none transition-colors"
               />
             </div>
@@ -195,7 +303,7 @@ export const SettingsView: React.FC = () => {
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-lg shadow-indigo-600/20 transition-all shrink-0"
             >
               <Plus className="w-4 h-4" />
-              <span>New Agent</span>
+              <span>New Skill</span>
             </button>
           </div>
 
@@ -248,10 +356,10 @@ export const SettingsView: React.FC = () => {
             <div className="flex flex-col items-center justify-center py-16 text-center border border-dashed border-line rounded-2xl bg-surface/50">
               <FileCode2 className="w-10 h-10 text-slate-700 mb-3" />
               <p className="text-sm font-black text-content-faint">
-                {query ? 'No matching agents' : (docs.length > 0 ? 'No agents match this filter' : 'No agents yet')}
+                {query ? 'No matching skills' : (docs.length > 0 ? 'No skills match this filter' : 'No skills yet')}
               </p>
               <p className="text-xs text-slate-600 mt-1">
-                {query ? 'Try a different search.' : (docs.length > 0 ? 'Try a different filter.' : 'Create your first agent — link it to any number of projects.')}
+                {query ? 'Try a different search.' : (docs.length > 0 ? 'Try a different filter.' : 'Create your first skill — link it to any number of projects.')}
               </p>
               {!query && (
                 <button
@@ -260,7 +368,7 @@ export const SettingsView: React.FC = () => {
                   className="mt-4 flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>New Agent</span>
+                  <span>New Skill</span>
                 </button>
               )}
             </div>
@@ -296,7 +404,7 @@ export const SettingsView: React.FC = () => {
                             {isOrphan && (
                               <span
                                 className="text-[12px] font-mono font-bold text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md"
-                                title="Not linked to any project — visible only here. Edit the agent and pick projects to link it."
+                                title="Not linked to any project — visible only here. Edit the skill and pick projects to link it."
                               >
                                 unlinked
                               </span>
@@ -342,19 +450,19 @@ export const SettingsView: React.FC = () => {
                         aria-label={`Delete ${doc.title}`}
                         onClick={e => {
                           e.stopPropagation();
-                          if (!window.confirm(`Delete agent "${doc.title}"? It will be removed from all linked projects.`)) return;
+                          if (!window.confirm(`Delete skill "${doc.title}"? It will be removed from all linked projects.`)) return;
                           api.delete(`/docs/${doc.id}/`)
                             .then(() => handleDeleted(doc.id))
                             .catch(e2 => {
                               console.error('Failed to delete doc', e2);
-                              setDocsError('Failed to delete agent.');
+                              setDocsError('Failed to delete skill.');
                             });
                         }}
                         onKeyDown={e => {
                           if (e.key === 'Enter' || e.key === ' ') e.preventDefault();
                         }}
                         className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
-                        title="Delete agent from all projects"
+                        title="Delete skill from all projects"
                       >
                         <Trash2 className="w-4 h-4" />
                       </span>
@@ -369,6 +477,63 @@ export const SettingsView: React.FC = () => {
 
       {/* SECTION: FILTERS */}
       {section === 'filters' && <FilterManager />}
+
+      {section === 'models' && (
+        <div className="max-w-3xl space-y-4">
+          <div className="p-5 rounded-2xl bg-surface border border-line space-y-3">
+            <div>
+              <h3 className="text-sm font-black text-content">Model presets</h3>
+              <p className="text-xs text-content-faint mt-1">Save the model IDs or names available to your local OpenCode and Codex installations.</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-[9rem_1fr_1fr_auto] gap-2">
+              <select value={newModelTool} onChange={e => setNewModelTool(e.target.value as 'opencode' | 'codex')} className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
+                <option value="opencode">OpenCode</option><option value="codex">Codex</option>
+              </select>
+              <input value={newModelId} onChange={e => setNewModelId(e.target.value)} placeholder={newModelTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
+              <input value={newModelLabel} onChange={e => setNewModelLabel(e.target.value)} placeholder="Friendly label (optional)" className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs text-content" />
+              <button type="button" onClick={addModelPreset} disabled={!newModelId.trim()} className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white disabled:opacity-40"><Plus className="w-3.5 h-3.5" />Add</button>
+            </div>
+            {modelPresetError && <p className="text-xs text-rose-300" role="alert">{modelPresetError}</p>}
+          </div>
+          <div className="space-y-2">
+            {modelPresets.length === 0 ? <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint">No model presets yet.</div> : modelPresets.map(preset => (
+              <div key={preset.id} className="flex items-center gap-3 rounded-2xl bg-surface border border-line px-4 py-3">
+                <span className="w-20 text-[11px] font-black uppercase tracking-wider text-indigo-300">{preset.tool}</span>
+                {editingPresetId === preset.id ? <div className="flex-1 min-w-0 flex gap-2"><input value={editingModelId} onChange={e => setEditingModelId(e.target.value)} className="min-w-0 flex-1 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-mono text-content" /><input value={editingModelLabel} onChange={e => setEditingModelLabel(e.target.value)} placeholder="Label" className="min-w-0 w-28 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs text-content" /></div> : <span className="flex-1 min-w-0"><span className="block truncate text-xs font-mono text-content">{preset.modelId}</span>{preset.label && <span className="block truncate text-[11px] text-content-faint">{preset.label}</span>}</span>}
+                <button type="button" onClick={() => updateModelPreset(preset, { enabled: !preset.enabled })} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-black ${preset.enabled ? 'border-emerald-500/30 text-emerald-300' : 'border-line text-content-faint'}`}>{preset.enabled ? 'Enabled' : 'Disabled'}</button>
+                {editingPresetId === preset.id ? <button type="button" onClick={async () => { await updateModelPreset(preset, { modelId: editingModelId.trim(), label: editingModelLabel.trim() }); setEditingPresetId(null); }} disabled={!editingModelId.trim()} className="p-1.5 text-emerald-300 disabled:opacity-40" title="Save model preset"><Check className="w-4 h-4" /></button> : <button type="button" onClick={() => { setEditingPresetId(preset.id); setEditingModelId(preset.modelId); setEditingModelLabel(preset.label); }} className="p-1.5 text-content-faint hover:text-white" title="Edit model preset"><FileCog className="w-4 h-4" /></button>}
+                <button type="button" onClick={async () => { if (window.confirm(`Delete model preset "${preset.modelId}"?`)) { await api.delete(`/launcher-model-presets/${preset.id}/`); await loadModelPresets(); } }} className="p-1.5 text-content-faint hover:text-rose-400" title="Delete model preset"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {section === 'project-folder' && (
+        <div className="max-w-3xl space-y-4">
+          <div className="p-5 rounded-2xl bg-surface border border-line space-y-4">
+            <div>
+              <h3 className="text-sm font-black text-content">Project Folder</h3>
+              <p className="text-xs text-content-faint mt-1">Choose where new projects created from Sparks will be stored. This affects future conversions only.</p>
+            </div>
+            <div className="rounded-xl bg-surface-2 border border-line px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider font-black text-content-faint">Current folder</div>
+              <div className="mt-1 text-xs font-mono text-content break-all">{projectFolderEffective || 'Loading…'}</div>
+              {!projectFolderIsCustom && projectFolderDefault && <div className="mt-1 text-[11px] text-content-faint">Using app default</div>}
+            </div>
+            <div className="flex gap-2">
+              <input value={projectFolderDraft} onChange={e => setProjectFolderDraft(e.target.value)} placeholder={projectFolderDefault || 'D:\\projects\\potential_projects'} className="min-w-0 flex-1 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
+              <button type="button" onClick={() => setShowProjectFolderPicker(true)} className="flex items-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs font-black text-content hover:border-indigo-500"><FolderOpen className="w-4 h-4" />Choose</button>
+            </div>
+            {projectFolderError && <p className="text-xs text-rose-300" role="alert">{projectFolderError}</p>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={saveProjectFolder} disabled={projectFolderBusy || !projectFolderDraft.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Save folder</button>
+              <button type="button" onClick={resetProjectFolder} disabled={projectFolderBusy || !projectFolderIsCustom} className="rounded-xl border border-line px-4 py-2 text-xs font-black text-content-faint hover:text-content disabled:opacity-40">Reset to app default</button>
+            </div>
+          </div>
+          {showProjectFolderPicker && <PathPickerModal mode="folder" initialPath={projectFolderDraft || projectFolderEffective} title="Choose project folder" onClose={() => setShowProjectFolderPicker(false)} onSelect={path => { setProjectFolderDraft(path); setShowProjectFolderPicker(false); }} />}
+        </div>
+      )}
 
       {/* SECTION: DATA & BACKUP */}
       {section === 'data' && (
@@ -389,7 +554,7 @@ export const SettingsView: React.FC = () => {
             <div>
               <h3 className="text-sm font-black text-content">Workspace Backup</h3>
               <p className="text-xs text-content-faint mt-0.5">
-                Export or restore all your data — projects, tasks, ideas, time entries and agents.
+                Export or restore all your data — projects, tasks, ideas, time entries and skills.
               </p>
             </div>
 
@@ -438,7 +603,7 @@ export const SettingsView: React.FC = () => {
               type="button"
               disabled={isBusy}
               onClick={async () => {
-                if (!window.confirm('Reset workspace? This deletes all your projects/tasks/ideas/time entries/agents on the server.')) return;
+                if (!window.confirm('Reset workspace? This deletes all your projects/tasks/ideas/time entries/skills on the server.')) return;
                 setIsBusy(true);
                 try {
                   await resetDefaults();

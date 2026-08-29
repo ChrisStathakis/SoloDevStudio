@@ -36,7 +36,7 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
         if (!cancelled) setAllDocs(unwrapPaginated<any>(res.data).map(mapProjectDocFromApi));
       } catch (e) {
         console.error('Failed to load docs', e);
-        if (!cancelled) setError('Failed to load agents.');
+        if (!cancelled) setError('Failed to load skills.');
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -69,7 +69,7 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
       setLinkedNow(prev => [...prev, doc.id]);
     } catch (e) {
         console.error('Failed to link doc', e);
-        setError('Failed to link agent.');
+      setError('Failed to link skill.');
     } finally {
       setLinkingId(null);
     }
@@ -87,8 +87,8 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
         {/* Header */}
         <div className="flex items-center justify-between p-5 pb-4 border-b border-line">
           <div>
-            <h3 className="text-sm font-black text-content tracking-tight">Link Existing Agent</h3>
-            <p className="text-[13px] text-content-faint mt-0.5">Attach any of your agents to this project.</p>
+            <h3 className="text-sm font-black text-content tracking-tight">Link Existing Skill</h3>
+            <p className="text-[13px] text-content-faint mt-0.5">Attach any of your skills to this project.</p>
           </div>
           <button
             type="button"
@@ -107,7 +107,7 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
               type="text"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Search agents by name or content..."
+              placeholder="Search skills by name or content..."
               autoFocus
               className="w-full pl-9 pr-3 py-2.5 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-bold text-content placeholder:text-slate-600 outline-none transition-colors"
             />
@@ -131,10 +131,10 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
               <FileText className="w-8 h-8 text-slate-700 mb-2" />
               <p className="text-xs font-bold text-content-faint">
                 {allDocs.length === 0
-                  ? 'No agents yet — create one first.'
+                  ? 'No skills yet — create one first.'
                   : linkedNow.length > 0
-                    ? 'Done! All matching agents are now linked.'
-                    : 'Every agent is already linked to this project.'}
+                    ? 'Done! All matching skills are now linked.'
+                    : 'Every skill is already linked to this project.'}
               </p>
             </div>
           ) : (

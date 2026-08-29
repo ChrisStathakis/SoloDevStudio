@@ -56,7 +56,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': env_config('SQLITE_PATH', default=str(BASE_DIR / 'db.sqlite3')),
     }
 }
 
@@ -122,3 +122,4 @@ SIMPLE_JWT = {
 
 APP_URL = env_config('APP_URL', default='http://localhost:8000')
 POTENTIAL_PROJECTS_ROOT = env_config('POTENTIAL_PROJECTS_ROOT', default=r'D:\projects\potential_projects')
+DOCKER_RUNTIME = env_config('DOCKER_RUNTIME', default=False, cast=bool)

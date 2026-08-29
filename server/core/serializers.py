@@ -1,4 +1,5 @@
 import uuid
+import re
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
@@ -6,9 +7,10 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
-    Project, ProjectLaunchPrompt, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter,
-    ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode
+    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter,
+    ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool
 )
+from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 
 User = get_user_model()
 
@@ -17,7 +19,7 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'date_joined']
+        fields = ['id', 'username', 'email', 'date_joined', 'potential_projects_root']
         read_only_fields = ['id', 'date_joined']
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -94,13 +96,19 @@ class ProjectSerializer(serializers.ModelSerializer):
             'target_deadline', 'start_date', 'actual_launch_date', 'color',
             'tech_stack', 'repo_url', 'live_url', 'figma_url', 'directory_path',
             'script_path', 'cmd_directory', 'port', 'python_env', 'drive', 'notes',
-            'pinned', 'tech_research', 'created_at', 'updated_at', 'milestones', 'launch_prompt'
+            'initialization_tool', 'initialization_model', 'pinned', 'tech_research', 'created_at', 'updated_at', 'milestones', 'launch_prompt'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def validate_tech_stack(self, value):
         if not isinstance(value, list):
             raise serializers.ValidationError("tech_stack must be a list.")
+        return value
+
+    def validate_initialization_model(self, value):
+        value = (value or '').strip()
+        if value and not is_safe_model_id(value):
+            raise serializers.ValidationError(MODEL_ID_ERROR)
         return value
 
     def create(self, validated_data):
@@ -162,6 +170,26 @@ class ProjectSerializer(serializers.ModelSerializer):
                 if eid not in keep_ids:
                     obj.delete()
         return instance
+
+
+class LauncherModelPresetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LauncherModelPreset
+        fields = ['id', 'tool', 'model_id', 'label', 'enabled', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_model_id(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('Model ID is required.')
+        if not is_safe_model_id(value):
+            raise serializers.ValidationError(MODEL_ID_ERROR)
+        return value
+
+    def validate_tool(self, value):
+        if value not in InitializationTool.values:
+            raise serializers.ValidationError('Tool must be opencode or codex.')
+        return value
 
 # ---------- Task ----------
 
