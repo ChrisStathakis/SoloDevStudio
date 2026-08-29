@@ -29,11 +29,14 @@ The application is designed primarily for local Windows development. A React fro
 
 ## Quick start
 
-From the repository root, install the dependencies:
+From the repository root, install the backend and frontend dependencies:
 
 ```powershell
-npm run install:all
+python -m pip install -r server\requirements.txt
+npm install --prefix frontend
 ```
+
+If your Windows setup uses the Python Launcher instead, replace `python` with `py`. The same two installs can also be run with `npm run install:all`.
 
 Create local environment files from the provided examples:
 
@@ -76,18 +79,6 @@ For a standalone Vite frontend on port 5174:
 
 The equivalent npm commands are `npm run dev` and `npm run dev:vite`.
 
-## Docker option
-
-Docker Desktop with Linux containers can run the frontend and API together using only the Compose file and official Python/Node images. No custom Docker image build is required:
-
-```powershell
-docker compose up
-```
-
-On the first start, Compose installs the Python and frontend dependencies into reusable Docker volumes, then runs the Django migrations automatically. The Docker frontend is available at <http://localhost:3000/> and the API at <http://localhost:8001/api/>. SQLite and Docker-created project folders are stored in the named `solodev_data` volume. `docker compose down` preserves that data; use `docker compose down -v` only when you intentionally want to remove it.
-
-Docker mode keeps the workspace, projects, tasks, prompts, Skills, and authentication available, but Windows-only integrations are disabled. In-app CMD and script consoles, Explorer folder opening, and host filesystem browsing require the Windows `start.bat` or `start.ps1` launcher.
-
 ## First login
 
 Open the frontend, register a local user, and sign in. Application data is scoped to the authenticated user. The frontend refreshes expired API access tokens automatically while the refresh token remains valid.
@@ -98,7 +89,7 @@ Projects can save an Initial Prompt and active Skills, then compose a full proje
 
 ## Windows terminal notes
 
-In-app CMD and script consoles are Windows-only and require a supported Python installation with `pywinpty`. The terminal uses the project CMD directory or project folder when available. Paths are validated when a console or script is opened, and paths containing spaces are supported.
+In-app CMD and script consoles are Windows-only and require a supported Python installation with `pywinpty`. Use `start.bat` or `start.ps1` to launch the Windows backend and frontend. The terminal uses the project CMD directory or project folder when available. Paths are validated when a console or script is opened, and paths containing spaces are supported.
 
 ## Documentation
 

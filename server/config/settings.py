@@ -122,4 +122,3 @@ SIMPLE_JWT = {
 
 APP_URL = env_config('APP_URL', default='http://localhost:8000')
 POTENTIAL_PROJECTS_ROOT = env_config('POTENTIAL_PROJECTS_ROOT', default=r'D:\projects\potential_projects')
-DOCKER_RUNTIME = env_config('DOCKER_RUNTIME', default=False, cast=bool)

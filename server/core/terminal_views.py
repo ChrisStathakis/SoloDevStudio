@@ -37,11 +37,6 @@ def _serialize(sessions):
 @permission_classes([permissions.IsAuthenticated])
 def create_project_terminal(request, pk=None):
     """Create a terminal session for a project (mode: 'cmd' | 'script')."""
-    if getattr(settings, 'DOCKER_RUNTIME', False):
-        return Response(
-            {'error': 'In-app Windows terminals are unavailable in Docker mode. Use the Windows launcher for CMD and script consoles.'},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
-        )
     project = _get_owned_project(request, pk)
     if project is None:
         return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -249,14 +244,14 @@ def _stream_events(session, start_offset):
 @renderer_classes([NDJSONPassthroughRenderer])
 def terminal_output(request, session_id=None):
     """Long-poll NDJSON stream of terminal output starting at ?after=N."""
-    session = terminal_manager.get_for_user(session_id, request.user.id)
-    if session is None:
-        return Response({'error': 'Terminal session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
     try:
         after = int(request.query_params.get('after', 0))
     except (TypeError, ValueError):
         after = 0
+
+    session = terminal_manager.get_for_user(session_id, request.user.id)
+    if session is None:
+        return Response({'error': 'Terminal session not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     resp = StreamingHttpResponse(
         _stream_events(session, after),

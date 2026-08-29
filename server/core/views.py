@@ -339,8 +339,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='open-folder')
     def open_folder(self, request, pk=None):
         project = self.get_object()
-        if getattr(settings, 'DOCKER_RUNTIME', False):
-            return Response({"error": "Opening host folders is unavailable in Docker mode. Use the Windows launcher for Explorer access."}, status=501)
         raw = (project.directory_path or '').strip().strip('"').strip("'")
         if not raw:
             return Response({"error": "No folder path set for this project."}, status=400)
@@ -1159,9 +1157,6 @@ def filesystem_browse(request):
     Returns: { path, parent, entries:[{name, path, is_dir}] }
     Read-only; no writes. Safe for a local single-user dev tool.
     """
-    if getattr(settings, 'DOCKER_RUNTIME', False):
-        return Response({"error": "Host filesystem browsing is unavailable in Docker mode. Use the Windows launcher to choose local folders."}, status=501)
-
     raw_path = (request.query_params.get('path') or '').strip()
     if raw_path == '':
         # Show drive roots (computer view)
