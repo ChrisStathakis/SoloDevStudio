@@ -94,6 +94,10 @@
               <ul class="nav flex-column">
               </ul>
             </li>
+            <li class="nav-item" data-bs-level="2"><a href="#windows-desktop-distribution" class="nav-link">Windows desktop distribution</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
             <li class="nav-item" data-bs-level="2"><a href="#backend-modules" class="nav-link">Backend modules</a>
               <ul class="nav flex-column">
               </ul>
@@ -131,6 +135,9 @@
                  └─ SQLite database (server/db.sqlite3)
 </code></pre>
 <p>The frontend keeps the active view in React context rather than URL routing. <code>AppContext</code> owns projects, tasks, milestones, ideas, time entries, import/export, and timer state. <code>AuthContext</code> owns JWT tokens and session restoration. Component-level views implement Dashboard, Projects, Ideas, Matrix, Focus, Timeline, Settings, sketches, docs, path picking, and terminals.</p>
+<h2 id="windows-desktop-distribution">Windows desktop distribution</h2>
+<p>The Windows desktop build wraps the production React assets in Electron using a secure <code>app://solodev</code> protocol. Electron starts a PyInstaller-bundled Django WSGI process bound to <code>127.0.0.1</code>; the renderer receives the selected API base URL through the preload bridge. The backend database lives in Electron's per-user app-data directory, and migrations run before the window opens. Development continues to use the existing browser launchers and their separate frontend/backend ports.</p>
+<p>The renderer remains sandboxed with context isolation and no Node integration. The preload bridge exposes only desktop state needed by the UI: the resolved local API base URL and the backend-port setting. The Projects view uses that API to request and display the generated initialization-prompt preview; it does not need a new Electron IPC capability.</p>
 <h2 id="backend-modules">Backend modules</h2>
 <ul>
 <li><code>server/config/</code> contains Django settings, URL inclusion, WSGI, and ASGI configuration.</li>

@@ -106,6 +106,10 @@
               <ul class="nav flex-column">
               </ul>
             </li>
+            <li class="nav-item" data-bs-level="2"><a href="#build-the-windows-desktop-installer" class="nav-link">Build the Windows desktop installer</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
             <li class="nav-item" data-bs-level="2"><a href="#first-login" class="nav-link">First login</a>
               <ul class="nav flex-column">
               </ul>
@@ -158,6 +162,16 @@ Copy-Item frontend\.env.example frontend\.env
 <pre><code class="language-powershell">npm run dev
 npm run dev:vite
 </code></pre>
+<h2 id="build-the-windows-desktop-installer">Build the Windows desktop installer</h2>
+<p>For a self-contained native Windows app, install the desktop packaging dependency and JavaScript packages:</p>
+<pre><code class="language-powershell">py -m pip install -r server\requirements-desktop.txt
+npm install
+npm install --prefix frontend
+</code></pre>
+<p>Then build the unsigned x64 NSIS installer:</p>
+<pre><code class="language-powershell">npm run desktop:build
+</code></pre>
+<p>The installer bundles the React interface and Python API, so end users do not need Node.js or Python. The desktop app stores its SQLite database under the Windows per-user app-data directory, runs migrations during startup, and keeps data across upgrades. It chooses an available loopback API port automatically. Settings → Desktop app lets a user save an optional API-port override; changes apply after restart. A native desktop window does not require a frontend port.</p>
 <h2 id="first-login">First login</h2>
 <p>Open the frontend, register a user, and sign in. The API issues a short-lived access token and a refresh token; the frontend refreshes access automatically when an authenticated request expires. All application data is scoped to the signed-in owner.</p>
 <h2 id="verify-the-services">Verify the services</h2>

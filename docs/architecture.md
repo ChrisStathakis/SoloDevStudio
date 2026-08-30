@@ -18,6 +18,8 @@ The frontend keeps the active view in React context rather than URL routing. `Ap
 
 The Windows desktop build wraps the production React assets in Electron using a secure `app://solodev` protocol. Electron starts a PyInstaller-bundled Django WSGI process bound to `127.0.0.1`; the renderer receives the selected API base URL through the preload bridge. The backend database lives in Electron's per-user app-data directory, and migrations run before the window opens. Development continues to use the existing browser launchers and their separate frontend/backend ports.
 
+The renderer remains sandboxed with context isolation and no Node integration. The preload bridge exposes only desktop state needed by the UI: the resolved local API base URL and the backend-port setting. The Projects view uses that API to request and display the generated initialization-prompt preview; it does not need a new Electron IPC capability.
+
 ## Backend modules
 
 - `server/config/` contains Django settings, URL inclusion, WSGI, and ASGI configuration.

@@ -36,6 +36,7 @@ List responses use standard DRF pagination (`count`, `next`, `previous`, `result
 | POST | `/api/projects/{id}/open-folder/` | Opens the validated configured directory on Windows. |
 | POST | `/api/projects/{id}/run-script/` | Runs the configured `.bat`/`.cmd` script with optional arguments and virtual environment. |
 | POST | `/api/projects/{id}/open-cmd/` | Opens a validated Windows CMD directory. |
+| GET | `/api/projects/{id}/initialize-prompt/` | Returns the generated full-project initialization prompt. The response contains `content`, the saved `initial_prompt`, and the active linked skills. |
 | PUT/PATCH | `/api/milestones/{id}/tasks/` | `{ "task_ids": ["task-uuid", ...] }`; atomically replaces links. |
 | POST | `/api/tasks/{id}/toggle-complete/` | Toggles completion and timestamp. |
 | POST | `/api/tasks/{id}/move-quadrant/` | `{ "quadrant": "q1_do" }`. |

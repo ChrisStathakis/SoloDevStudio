@@ -236,6 +236,11 @@
 <td>Opens a validated Windows CMD directory.</td>
 </tr>
 <tr>
+<td>GET</td>
+<td><code>/api/projects/{id}/initialize-prompt/</code></td>
+<td>Returns the generated full-project initialization prompt. The response contains <code>content</code>, the saved <code>initial_prompt</code>, and the active linked skills.</td>
+</tr>
+<tr>
 <td>PUT/PATCH</td>
 <td><code>/api/milestones/{id}/tasks/</code></td>
 <td><code>{ "task_ids": ["task-uuid", ...] }</code>; atomically replaces links.</td>

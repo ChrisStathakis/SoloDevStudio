@@ -8,6 +8,12 @@ After authentication, the shell provides Dashboard, Projects, Ideas, Priority Ma
 
 Create a project with a title, dates, category, stage, description, tech stack, links, notes, and optional local development settings. Project details are organized into summary, lifecycle, configuration, tasks, milestones, time sessions, documentation, and Initial Prompt tabs.
 
+### Initial prompt preview and launch
+
+The **Initial Prompt** tab stores the project's base prompt. Select **Preview prompt** to generate and inspect the complete initialization prompt before launching an agent. The preview includes the saved base prompt and the currently active project skills. It opens in a read-only dialog where the full text can be selected or copied; an error is shown if the preview cannot be generated.
+
+Use **Initialize** to choose a supported CLI, model, reasoning effort, and (for Codex) Build or Plan mode. The desktop app copies the selected project or task prompt before opening the CLI in the configured project folder.
+
 ### Local paths and consoles
 
 Project configuration accepts a folder path, `.bat`/`.cmd` script path, CMD directory, Python environment, drive letter, and optional port or script arguments.
