@@ -9,6 +9,7 @@ import {
   ProjectStage,
   PriorityQuadrant,
   Milestone,
+  Subtask,
 } from '../types';
 import { useAuth } from './AuthContext';
 import { api, unwrapPaginated } from '../services/api';
@@ -57,6 +58,8 @@ interface AppContextType {
   moveTaskQuadrant: (id: string, quadrant: PriorityQuadrant) => Promise<void>;
   toggleSubtask: (taskId: string, subtaskId: string) => Promise<void>;
   addSubtask: (taskId: string, title: string) => Promise<void>;
+  updateSubtask: (taskId: string, subtaskId: string, updates: Partial<Subtask>) => Promise<void>;
+  deleteSubtask: (taskId: string, subtaskId: string) => Promise<void>;
   addIdea: (idea: Omit<Idea, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Idea>;
   updateIdea: (id: string, updates: Partial<Idea>) => Promise<void>;
   deleteIdea: (id: string) => Promise<void>;
@@ -72,7 +75,9 @@ interface AppContextType {
   isQuickAddOpen: boolean;
   setIsQuickAddOpen: (open: boolean) => void;
   quickAddInitialTab: 'task' | 'project' | 'idea' | 'timer';
-  openQuickAdd: (tab?: 'task' | 'project' | 'idea' | 'timer') => void;
+  quickAddProjectId: string | null;
+  quickAddTaskId: string | null;
+  openQuickAdd: (tab?: 'task' | 'project' | 'idea' | 'timer', options?: { projectId?: string; taskId?: string }) => void;
   exportData: () => Promise<void>;
   importData: (json: string) => Promise<{ success: boolean; message: string }>;
   resetDefaults: () => Promise<void>;
@@ -115,6 +120,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [isQuickAddOpen, setIsQuickAddOpen] = useState<boolean>(false);
   const [quickAddInitialTab, setQuickAddInitialTab] = useState<'task' | 'project' | 'idea' | 'timer'>('task');
+  const [quickAddProjectId, setQuickAddProjectId] = useState<string | null>(null);
+  const [quickAddTaskId, setQuickAddTaskId] = useState<string | null>(null);
 
   const [timeTracker, setTimeTracker] = useState<ActiveTimerState>({
     isRunning: false,
@@ -358,6 +365,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTasks(prev => prev.map(t => (t.id === taskId ? updatedTask : t)));
   };
 
+  const updateSubtask = async (taskId: string, subtaskId: string, updates: Partial<Subtask>) => {
+    await api.patch(`/tasks/${taskId}/subtasks/${subtaskId}/`, updates);
+    const taskRes = await api.get(`/tasks/${taskId}/`);
+    const updatedTask = mapTaskFromApi(taskRes.data);
+    setTasks(prev => prev.map(t => (t.id === taskId ? updatedTask : t)));
+  };
+
+  const deleteSubtask = async (taskId: string, subtaskId: string) => {
+    await api.delete(`/tasks/${taskId}/subtasks/${subtaskId}/`);
+    const taskRes = await api.get(`/tasks/${taskId}/`);
+    const updatedTask = mapTaskFromApi(taskRes.data);
+    setTasks(prev => prev.map(t => (t.id === taskId ? updatedTask : t)));
+  };
+
   // Idea handlers
   const addIdea = async (ideaData: Omit<Idea, 'id' | 'createdAt' | 'updatedAt'>): Promise<Idea> => {
     const payload = mapIdeaToApi(ideaData as any);
@@ -483,8 +504,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const openQuickAdd = (tab: 'task' | 'project' | 'idea' | 'timer' = 'task') => {
+  const openQuickAdd = (tab: 'task' | 'project' | 'idea' | 'timer' = 'task', options?: { projectId?: string; taskId?: string }) => {
     setQuickAddInitialTab(tab);
+    setQuickAddProjectId(options?.projectId || null);
+    setQuickAddTaskId(options?.taskId || null);
     setIsQuickAddOpen(true);
   };
 
@@ -570,6 +593,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         moveTaskQuadrant,
         toggleSubtask,
         addSubtask,
+        updateSubtask,
+        deleteSubtask,
         addIdea,
         updateIdea,
         deleteIdea,
@@ -585,6 +610,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isQuickAddOpen,
         setIsQuickAddOpen,
         quickAddInitialTab,
+        quickAddProjectId,
+        quickAddTaskId,
         openQuickAdd,
         exportData,
         importData,

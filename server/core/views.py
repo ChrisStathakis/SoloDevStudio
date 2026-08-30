@@ -560,6 +560,21 @@ class TaskViewSet(viewsets.ModelViewSet):
         sub = Subtask.objects.create(task=task, title=title, order=order)
         return Response(SubtaskSerializer(sub).data, status=201)
 
+    @action(detail=True, methods=['patch', 'delete'], url_path='subtasks/(?P<sub_id>[^/.]+)')
+    def subtask_detail(self, request, pk=None, sub_id=None):
+        task = self.get_object()
+        try:
+            sub = task.subtasks.get(id=sub_id)
+        except Subtask.DoesNotExist:
+            return Response({'error': 'Subtask not found'}, status=status.HTTP_404_NOT_FOUND)
+        if request.method == 'DELETE':
+            sub.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = SubtaskSerializer(sub, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
     @action(detail=True, methods=['post', 'patch'], url_path='subtasks/(?P<sub_id>[^/.]+)/toggle')
     def toggle_subtask(self, request, pk=None, sub_id=None):
         task = self.get_object()

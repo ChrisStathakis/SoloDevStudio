@@ -77,6 +77,12 @@ class SubtaskSerializer(serializers.ModelSerializer):
         model = Subtask
         fields = ['id', 'title', 'completed', 'order']
 
+    def validate_title(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('title is required.')
+        return value
+
 # ---------- Project ----------
 
 class ProjectLaunchPromptSerializer(serializers.ModelSerializer):

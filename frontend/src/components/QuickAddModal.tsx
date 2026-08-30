@@ -22,12 +22,16 @@ export const QuickAddModal: React.FC = () => {
     setIsQuickAddOpen,
     quickAddInitialTab,
     projects,
+    tasks,
     addTask,
     addProject,
     addIdea,
     startTimer,
     setCurrentView,
-    setSelectedProjectId
+    setSelectedProjectId,
+    quickAddProjectId,
+    quickAddTaskId,
+    updateTask,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'task' | 'project' | 'idea' | 'timer'>('task');
@@ -73,12 +77,27 @@ export const QuickAddModal: React.FC = () => {
   useEffect(() => {
     if (isQuickAddOpen) {
       setActiveTab(quickAddInitialTab);
-      if (projects.length > 0) {
-        if (!taskProjectId) setTaskProjectId(projects[0].id);
+      if (quickAddTaskId) {
+        const task = tasks.find(item => item.id === quickAddTaskId);
+        if (task) {
+          setTaskTitle(task.title);
+          setTaskDesc(task.description || '');
+          setTaskProjectId(task.projectId);
+          setTaskStage(task.stage);
+          setTaskQuadrant(task.quadrant);
+          setTaskCategory(task.category || 'feature');
+          setTaskDueDate(task.dueDate || '');
+          setTaskEstimateMins(String(task.estimatedMinutes || 60));
+          setTaskTags(task.tags.join(', '));
+          setTaskMilestoneIds(task.milestoneIds || []);
+        }
+      }
+      if (projects.length > 0 && !quickAddTaskId) {
+        setTaskProjectId(quickAddProjectId || taskProjectId || projects[0].id);
         if (!timerProjectId) setTimerProjectId(projects[0].id);
       }
     }
-  }, [isQuickAddOpen, quickAddInitialTab, projects, taskProjectId, timerProjectId]);
+  }, [isQuickAddOpen, quickAddInitialTab, projects, tasks, quickAddProjectId, quickAddTaskId, taskProjectId, timerProjectId]);
 
   useEffect(() => {
     const project = projects.find(p => p.id === taskProjectId);
@@ -91,7 +110,7 @@ export const QuickAddModal: React.FC = () => {
     e.preventDefault();
     if (!taskTitle.trim()) return;
     try {
-      await addTask({
+      const taskData = {
         projectId: taskProjectId || (projects[0]?.id ?? 'default'),
         title: taskTitle.trim(),
         description: taskDesc.trim() || undefined,
@@ -101,10 +120,15 @@ export const QuickAddModal: React.FC = () => {
         completed: false,
         dueDate: taskDueDate || undefined,
         estimatedMinutes: parseInt(taskEstimateMins) || 60,
-        subtasks: [],
+        ...(quickAddTaskId ? {} : { subtasks: [] }),
         tags: taskTags.split(',').map(t => t.trim()).filter(Boolean),
         milestoneIds: taskMilestoneIds,
-      } as any);
+      } as any;
+      if (quickAddTaskId) {
+        await updateTask(quickAddTaskId, taskData);
+      } else {
+        await addTask(taskData);
+      }
       setTaskTitle('');
       setTaskDesc('');
       setIsQuickAddOpen(false);
@@ -421,7 +445,7 @@ export const QuickAddModal: React.FC = () => {
                   type="submit"
                   className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black tracking-wide shadow-md transition-all"
                 >
-                  Create Task
+                  {quickAddTaskId ? 'Save Changes' : 'Create Task'}
                 </button>
               </div>
             </form>

@@ -63,6 +63,8 @@ export const ProjectsView: React.FC = () => {
     updateTask,
     toggleSubtask,
     addSubtask,
+    updateSubtask,
+    deleteSubtask,
     deleteTask,
     startTimer,
     openQuickAdd,
@@ -77,6 +79,7 @@ export const ProjectsView: React.FC = () => {
   const [taskFilterStage, setTaskFilterStage] = useState<string>('all');
   const [taskFilterCategory, setTaskFilterCategory] = useState<string>('all');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState<{ [taskId: string]: string }>({});
+  const [editingSubtask, setEditingSubtask] = useState<{ taskId: string; subtaskId: string; title: string } | null>(null);
   const [isEditingProject, setIsEditingProject] = useState<boolean>(false);
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
@@ -1546,7 +1549,7 @@ export const ProjectsView: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => openQuickAdd('task')}
+                    onClick={() => openQuickAdd('task', { projectId: activeProject.id })}
                     className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm"
                   >
                     <Plus className="w-3.5 h-3.5" />
@@ -1632,17 +1635,19 @@ export const ProjectsView: React.FC = () => {
                                     {task.subtasks.map(st => (
                                       <div
                                         key={st.id}
-                                        onClick={() => toggleSubtask(task.id, st.id)}
-                                        className="flex items-center gap-2 text-xs text-content-muted cursor-pointer group"
+                                        className="flex items-center gap-2 text-xs text-content-muted group"
                                       >
-                                        <div className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[12px] ${
+                                        <button type="button" onClick={() => toggleSubtask(task.id, st.id)} aria-label={st.completed ? 'Mark subtask incomplete' : 'Mark subtask complete'} className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[12px] ${
                                           st.completed ? 'bg-emerald-500 text-white' : 'border border-line-strong group-hover:border-indigo-500'
                                         }`}>
                                           {st.completed && '✓'}
-                                        </div>
-                                        <span className={st.completed ? 'line-through text-content-faint' : ''}>
-                                          {st.title}
-                                        </span>
+                                        </button>
+                                        {editingSubtask?.taskId === task.id && editingSubtask.subtaskId === st.id ? (
+                                          <input autoFocus value={editingSubtask.title} onChange={e => setEditingSubtask({ ...editingSubtask, title: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } if (e.key === 'Escape') setEditingSubtask(null); }} onBlur={async () => { const title = editingSubtask.title.trim(); if (title && title !== st.title) await updateSubtask(task.id, st.id, { title }); setEditingSubtask(null); }} className="min-w-0 flex-1 px-2 py-0.5 rounded border border-indigo-500 bg-surface-2 text-content outline-none" />
+                                        ) : (
+                                          <button type="button" onClick={() => setEditingSubtask({ taskId: task.id, subtaskId: st.id, title: st.title })} className={`text-left flex-1 ${st.completed ? 'line-through text-content-faint' : ''}`}>{st.title}</button>
+                                        )}
+                                        <button type="button" onClick={() => { if (confirm(`Delete subtask "${st.title}"?`)) void deleteSubtask(task.id, st.id); }} className="p-1 text-content-faint hover:text-rose-400 opacity-0 group-hover:opacity-100" aria-label="Delete subtask"><Trash2 className="w-3 h-3" /></button>
                                       </div>
                                     ))}
                                   </div>
@@ -1671,6 +1676,9 @@ export const ProjectsView: React.FC = () => {
 
                             {/* Task Action Bar */}
                             <div className="flex items-center gap-2 shrink-0">
+                              <button type="button" onClick={() => openQuickAdd('task', { taskId: task.id })} className="p-1.5 text-content-faint hover:text-indigo-300 rounded-lg transition-colors" title="Edit task" aria-label="Edit task">
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
                               <select
                                 value={(task as any).category || 'feature'}
                                 onChange={e => updateTask(task.id, { category: e.target.value as TaskCategory } as any)}
@@ -1708,8 +1716,9 @@ export const ProjectsView: React.FC = () => {
 
                               <button
                                 type="button"
-                                onClick={() => deleteTask(task.id)}
+                                onClick={() => { if (confirm(`Delete task "${task.title}" and its subtasks?`)) void deleteTask(task.id); }}
                                 className="p-1.5 text-content-faint hover:text-rose-400 rounded-lg transition-colors"
+                                aria-label="Delete task"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
