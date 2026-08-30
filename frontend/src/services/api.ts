@@ -1,6 +1,10 @@
 import axios from 'axios';
 
-const API_BASE = (import.meta as any).env?.VITE_API_URL || '/api';
+// Electron supplies the loopback API URL at runtime after it has selected a
+// free port. Browser/development builds continue to use VITE_API_URL.
+const API_BASE = (globalThis as any).solodevDesktop?.apiBase
+  || (import.meta as any).env?.VITE_API_URL
+  || '/api';
 const ACCESS_KEY = 'solodev_access_token';
 const REFRESH_KEY = 'solodev_refresh_token';
 

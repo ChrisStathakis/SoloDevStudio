@@ -79,6 +79,24 @@ For a standalone Vite frontend on port 5174:
 
 The equivalent npm commands are `npm run dev` and `npm run dev:vite`.
 
+## Build the Windows desktop installer
+
+The desktop build bundles the React interface, a Python-backed Django API, and their runtimes into a native Windows installer. Install the desktop build dependency once:
+
+```powershell
+py -m pip install -r server\requirements-desktop.txt
+npm install
+npm install --prefix frontend
+```
+
+Build the unsigned x64 installer with:
+
+```powershell
+npm run desktop:build
+```
+
+The installer is written to `release\SoloDev-Studio-Setup-1.0.0.exe` (the version follows `package.json`). The installed app stores its SQLite database and desktop preferences in the Windows per-user app-data directory. It selects a free local API port automatically; Settings → Desktop app contains an optional API-port override. The bundled desktop window has no frontend port.
+
 ## First login
 
 Open the frontend, register a local user, and sign in. Application data is scoped to the authenticated user. The frontend refreshes expired API access tokens automatically while the refresh token remains valid.

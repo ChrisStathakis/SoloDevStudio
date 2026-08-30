@@ -24,6 +24,7 @@ interface DocEditorProps {
   allProjects: Project[];
   initialDoc?: ProjectDoc | null;
   preselectedProjectIds?: string[];
+  contextProjectId?: string;
   onSaved: (doc: ProjectDoc) => void;
   onDeleted?: (id: string) => void;
   onBack: () => void;
@@ -33,6 +34,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
   allProjects,
   initialDoc = null,
   preselectedProjectIds = [],
+  contextProjectId,
   onSaved,
   onDeleted,
   onBack
@@ -99,13 +101,21 @@ export const DocEditor: React.FC<DocEditorProps> = ({
 
   const handleDelete = async () => {
     if (!initialDoc) return;
-    if (!window.confirm(`Delete skill "${initialDoc.title}"? It will be removed from all linked projects.`)) return;
+    const removingFromProject = Boolean(contextProjectId);
+    const message = removingFromProject
+      ? `Remove skill "${initialDoc.title}" from this project? It will remain available in other linked projects.`
+      : `Delete skill "${initialDoc.title}"? It will be removed from all linked projects.`;
+    if (!window.confirm(message)) return;
     try {
-      await api.delete(`/docs/${initialDoc.id}/`);
+      if (contextProjectId) {
+        await api.delete(`/projects/${contextProjectId}/agents/${initialDoc.id}/`);
+      } else {
+        await api.delete(`/docs/${initialDoc.id}/`);
+      }
       onDeleted?.(initialDoc.id);
     } catch (e) {
       console.error('Failed to delete doc', e);
-      setError('Failed to delete skill.');
+      setError(removingFromProject ? 'Failed to remove skill from this project.' : 'Failed to delete skill.');
     }
   };
 
@@ -181,7 +191,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
               type="button"
               onClick={handleDelete}
               className="p-2 rounded-xl bg-surface-2 border border-line text-rose-400 hover:text-rose-300 hover:border-rose-900/60 transition-all"
-            title="Delete skill from all projects"
+            title={contextProjectId ? 'Remove skill from this project' : 'Delete skill from all projects'}
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>

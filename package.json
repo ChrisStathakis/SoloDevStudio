@@ -2,13 +2,19 @@
   "name": "solodev-studio",
   "private": true,
   "version": "1.0.0",
-  "description": "SoloDev Studio — launches Django (8001) + Frontend (3000/5174) together",
+  "description": "SoloDev Studio — deliberate workspace for solo developers",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "concurrently --names \"backend,frontend\" --prefix-colors \"cyan,magenta\" \"python server/manage.py runserver 0.0.0.0:8001\" \"npm run dev --prefix frontend\"",
     "dev:vite": "concurrently --names \"backend,vite\" --prefix-colors \"cyan,magenta\" \"python server/manage.py runserver 0.0.0.0:8001\" \"npm --prefix frontend exec vite -- --port 5174 --host 0.0.0.0 --strictPort\"",
     "install:all": "pip install -r server/requirements.txt && npm install --prefix frontend",
     "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1",
-    "start:vite": "powershell -ExecutionPolicy Bypass -File ./start.ps1 -UseVite"
+    "start:vite": "powershell -ExecutionPolicy Bypass -File ./start.ps1 -UseVite",
+    "desktop:dev": "npm run desktop:build:frontend && npm run desktop:build:backend && electron .",
+    "desktop:build:frontend": "npm --prefix frontend run build:desktop",
+    "desktop:build:backend": "py -m PyInstaller --noconfirm --clean desktop/backend.spec --distpath backend-dist --workpath .desktop-build",
+    "desktop:build": "npm run desktop:build:frontend && npm run desktop:build:backend && electron-builder --win",
+    "desktop:dist": "npm run desktop:build"
   },
   "dependencies": {
     "lightningcss": "^1.33.0"
@@ -17,6 +23,46 @@
     "lightningcss-win32-x64-msvc": "^1.33.0"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.solodev.studio",
+    "productName": "SoloDev Studio",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "frontend/dist",
+        "to": "frontend-dist"
+      },
+      {
+        "from": "backend-dist",
+        "to": "backend"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "SoloDev-Studio-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

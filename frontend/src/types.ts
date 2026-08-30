@@ -73,6 +73,12 @@ export interface Project {
   title: string;
   tagline: string;
   description: string;
+  problem?: string;
+  solution?: string;
+  targetAudience?: string;
+  monetization?: string;
+  mvpFeatures?: string[];
+  tags?: string[];
   category: AppCategory;
   currentStage: ProjectStage;
   targetDeadline: string; // ISO format YYYY-MM-DD
@@ -93,6 +99,8 @@ export interface Project {
   initialPrompt?: string;
   initializationTool?: 'opencode' | 'codex';
   initializationModel?: string;
+  initializationReasoningEffort?: 'low' | 'medium' | 'high';
+  initializationMode?: 'build' | 'plan';
   pinned: boolean;
   milestones: Milestone[];
   techResearch?: TechResearchResult;
@@ -104,6 +112,8 @@ export interface LauncherModelPreset {
   id: string;
   tool: 'opencode' | 'codex';
   modelId: string;
+  reasoningEffort: 'low' | 'medium' | 'high';
+  mode: 'build' | 'plan';
   label: string;
   enabled: boolean;
   createdAt: string;

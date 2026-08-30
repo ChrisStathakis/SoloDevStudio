@@ -135,6 +135,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
           allProjects={projects}
           initialDoc={openDocId === 'new' ? null : openEditingDoc}
           preselectedProjectIds={openDocId === 'new' ? [projectId] : []}
+          contextProjectId={projectId}
           onSaved={handleSaved}
           onDeleted={handleDeleted}
           onBack={() => setOpenDocId(null)}
@@ -334,12 +335,12 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                     tabIndex={0}
                     onClick={e => {
                       e.stopPropagation();
-                      if (!window.confirm(`Delete skill "${doc.title}"? It will be removed from all linked projects.`)) return;
-                      api.delete(`/docs/${doc.id}/`)
+                      if (!window.confirm(`Remove skill "${doc.title}" from this project? It will remain available in other linked projects.`)) return;
+                      api.delete(`/projects/${projectId}/agents/${doc.id}/`)
                         .then(() => handleDeleted(doc.id))
                         .catch(e2 => {
-                          console.error('Failed to delete doc', e2);
-                          setError('Failed to delete skill.');
+                          console.error('Failed to unlink doc', e2);
+                          setError('Failed to remove skill from this project.');
                         });
                     }}
                     onKeyDown={e => {
@@ -348,7 +349,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                       }
                     }}
                     className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
-                    title="Delete skill from all projects"
+                    title="Remove skill from this project"
                   >
                     <Trash2 className="w-4 h-4" />
                   </span>

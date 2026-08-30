@@ -1,0 +1,5 @@
+# Local desktop packaging outputs
+node_modules/
+backend-dist/
+.desktop-build/
+release/

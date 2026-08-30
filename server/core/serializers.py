@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
     Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter,
-    ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool
+    ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode
 )
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 
@@ -92,11 +92,12 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = [
-            'id', 'title', 'tagline', 'description', 'category', 'current_stage',
+            'id', 'title', 'tagline', 'description', 'problem', 'solution',
+            'target_audience', 'monetization', 'mvp_features', 'tags', 'category', 'current_stage',
             'target_deadline', 'start_date', 'actual_launch_date', 'color',
             'tech_stack', 'repo_url', 'live_url', 'figma_url', 'directory_path',
             'script_path', 'cmd_directory', 'port', 'python_env', 'drive', 'notes',
-            'initialization_tool', 'initialization_model', 'pinned', 'tech_research', 'created_at', 'updated_at', 'milestones', 'launch_prompt'
+            'initialization_tool', 'initialization_model', 'initialization_reasoning_effort', 'initialization_mode', 'pinned', 'tech_research', 'created_at', 'updated_at', 'milestones', 'launch_prompt'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -105,11 +106,39 @@ class ProjectSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("tech_stack must be a list.")
         return value
 
+    def validate_mvp_features(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("mvp_features must be a list.")
+        return value
+
+    def validate_tags(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("tags must be a list.")
+        return value
+
     def validate_initialization_model(self, value):
         value = (value or '').strip()
         if value and not is_safe_model_id(value):
             raise serializers.ValidationError(MODEL_ID_ERROR)
         return value
+
+    def validate_initialization_reasoning_effort(self, value):
+        if value not in ReasoningEffort.values:
+            raise serializers.ValidationError('Reasoning effort must be low, medium, or high.')
+        return value
+
+    def validate_initialization_mode(self, value):
+        if value not in InitializationMode.values:
+            raise serializers.ValidationError('Initialization mode must be build or plan.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        tool = attrs.get('initialization_tool', getattr(self.instance, 'initialization_tool', InitializationTool.OPENCODE))
+        mode = attrs.get('initialization_mode', getattr(self.instance, 'initialization_mode', InitializationMode.BUILD))
+        if mode == InitializationMode.PLAN and tool != InitializationTool.CODEX:
+            raise serializers.ValidationError({'initialization_mode': 'Plan mode is only available for Codex.'})
+        return attrs
 
     def create(self, validated_data):
         milestones_data = validated_data.pop('milestones', [])
@@ -175,7 +204,7 @@ class ProjectSerializer(serializers.ModelSerializer):
 class LauncherModelPresetSerializer(serializers.ModelSerializer):
     class Meta:
         model = LauncherModelPreset
-        fields = ['id', 'tool', 'model_id', 'label', 'enabled', 'created_at', 'updated_at']
+        fields = ['id', 'tool', 'model_id', 'reasoning_effort', 'mode', 'label', 'enabled', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def validate_model_id(self, value):
@@ -189,6 +218,40 @@ class LauncherModelPresetSerializer(serializers.ModelSerializer):
     def validate_tool(self, value):
         if value not in InitializationTool.values:
             raise serializers.ValidationError('Tool must be opencode or codex.')
+        return value
+
+    def validate_reasoning_effort(self, value):
+        if value not in ReasoningEffort.values:
+            raise serializers.ValidationError('Reasoning effort must be low, medium, or high.')
+        return value
+
+    def validate_label(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('Preset name is required.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        tool = attrs.get('tool', self.instance.tool if self.instance else None)
+        mode = attrs.get('mode', self.instance.mode if self.instance else InitializationMode.BUILD)
+        if mode == InitializationMode.PLAN and tool != InitializationTool.CODEX:
+            raise serializers.ValidationError({'mode': 'Plan mode is only available for Codex.'})
+        request = self.context.get('request')
+        owner = getattr(request, 'user', None)
+        if owner and getattr(owner, 'is_authenticated', False):
+            tool = attrs.get('tool', self.instance.tool if self.instance else None)
+            label = attrs.get('label', self.instance.label if self.instance else '')
+            query = LauncherModelPreset.objects.filter(owner=owner, tool=tool, label__iexact=label)
+            if self.instance:
+                query = query.exclude(pk=self.instance.pk)
+            if query.exists():
+                raise serializers.ValidationError({'label': 'A preset with this name already exists for this tool.'})
+        return attrs
+
+    def validate_mode(self, value):
+        if value not in InitializationMode.values:
+            raise serializers.ValidationError('Mode must be build or plan.')
         return value
 
 # ---------- Task ----------

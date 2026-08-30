@@ -61,6 +61,24 @@ npm run dev
 npm run dev:vite
 ```
 
+## Build the Windows desktop installer
+
+For a self-contained native Windows app, install the desktop packaging dependency and JavaScript packages:
+
+```powershell
+py -m pip install -r server\requirements-desktop.txt
+npm install
+npm install --prefix frontend
+```
+
+Then build the unsigned x64 NSIS installer:
+
+```powershell
+npm run desktop:build
+```
+
+The installer bundles the React interface and Python API, so end users do not need Node.js or Python. The desktop app stores its SQLite database under the Windows per-user app-data directory, runs migrations during startup, and keeps data across upgrades. It chooses an available loopback API port automatically. Settings → Desktop app lets a user save an optional API-port override; changes apply after restart. A native desktop window does not require a frontend port.
+
 ## First login
 
 Open the frontend, register a user, and sign in. The API issues a short-lived access token and a refresh token; the frontend refreshes access automatically when an authenticated request expires. All application data is scoped to the signed-in owner.

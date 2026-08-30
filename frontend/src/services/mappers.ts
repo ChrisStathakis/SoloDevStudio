@@ -33,6 +33,12 @@ export function mapProjectFromApi(raw: any): Project {
     title: raw.title,
     tagline: raw.tagline || '',
     description: raw.description || '',
+    problem: raw.problem || '',
+    solution: raw.solution || '',
+    targetAudience: raw.target_audience || undefined,
+    monetization: raw.monetization || undefined,
+    mvpFeatures: raw.mvp_features || [],
+    tags: raw.tags || [],
     category: raw.category,
     currentStage: raw.current_stage,
     targetDeadline: raw.target_deadline,
@@ -53,6 +59,8 @@ export function mapProjectFromApi(raw: any): Project {
     initialPrompt: raw.launch_prompt?.content || undefined,
     initializationTool: raw.initialization_tool === 'codex' ? 'codex' : 'opencode',
     initializationModel: raw.initialization_model || undefined,
+    initializationReasoningEffort: ['low', 'high'].includes(raw.initialization_reasoning_effort) ? raw.initialization_reasoning_effort : 'medium',
+    initializationMode: raw.initialization_mode === 'plan' ? 'plan' : 'build',
     pinned: raw.pinned,
     milestones: (raw.milestones || []).map(mapMilestoneFromApi),
     techResearch: raw.tech_research || undefined,
@@ -66,6 +74,8 @@ export function mapLauncherModelPresetFromApi(raw: any) {
     id: String(raw.id),
     tool: raw.tool === 'codex' ? 'codex' : 'opencode',
     modelId: raw.model_id || '',
+    reasoningEffort: ['low', 'high'].includes(raw.reasoning_effort) ? raw.reasoning_effort : 'medium',
+    mode: raw.mode === 'plan' ? 'plan' : 'build',
     label: raw.label || '',
     enabled: raw.enabled !== false,
     createdAt: raw.created_at,
@@ -78,6 +88,12 @@ export function mapProjectToApi(p: Partial<Project> & { title: string }): any {
   if (p.title !== undefined) out.title = p.title;
   if (p.tagline !== undefined) out.tagline = p.tagline;
   if (p.description !== undefined) out.description = p.description;
+  if (p.problem !== undefined) out.problem = p.problem || '';
+  if (p.solution !== undefined) out.solution = p.solution || '';
+  if (p.targetAudience !== undefined) out.target_audience = p.targetAudience || '';
+  if (p.monetization !== undefined) out.monetization = p.monetization || '';
+  if (p.mvpFeatures !== undefined) out.mvp_features = p.mvpFeatures;
+  if (p.tags !== undefined) out.tags = p.tags;
   if (p.category !== undefined) out.category = p.category;
   if (p.currentStage !== undefined) out.current_stage = p.currentStage;
   if (p.targetDeadline !== undefined) out.target_deadline = p.targetDeadline;
@@ -97,6 +113,8 @@ export function mapProjectToApi(p: Partial<Project> & { title: string }): any {
   if (p.notes !== undefined) out.notes = p.notes || '';
   if (p.initializationTool !== undefined) out.initialization_tool = p.initializationTool;
   if (p.initializationModel !== undefined) out.initialization_model = p.initializationModel || '';
+  if (p.initializationReasoningEffort !== undefined) out.initialization_reasoning_effort = p.initializationReasoningEffort;
+  if (p.initializationMode !== undefined) out.initialization_mode = p.initializationMode;
   if (p.pinned !== undefined) out.pinned = p.pinned;
   if (p.techResearch !== undefined) out.tech_research = p.techResearch;
   if (p.milestones !== undefined) out.milestones = p.milestones.map(mapMilestoneToApi);

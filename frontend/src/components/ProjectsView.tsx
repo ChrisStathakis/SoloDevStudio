@@ -44,6 +44,7 @@ import { PathPickerModal } from './PathPickerModal';
 import { TerminalDrawer, TerminalDrawerHandle } from './TerminalDrawer';
 import { PageHeader, Button } from './ui';
 import { MilestoneEditor } from './MilestoneEditor';
+import { ProjectEditor, ProjectDraft } from './ProjectEditor';
 
 export const ProjectsView: React.FC = () => {
   const { 
@@ -77,6 +78,8 @@ export const ProjectsView: React.FC = () => {
   const [taskFilterCategory, setTaskFilterCategory] = useState<string>('all');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState<{ [taskId: string]: string }>({});
   const [isEditingProject, setIsEditingProject] = useState<boolean>(false);
+  const [isSavingProject, setIsSavingProject] = useState(false);
+  const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
   const [isEditingDirPath, setIsEditingDirPath] = useState<boolean>(false);
   const [dirPathDraft, setDirPathDraft] = useState<string>('');
   const [isSavingDirPath, setIsSavingDirPath] = useState<boolean>(false);
@@ -105,11 +108,13 @@ export const ProjectsView: React.FC = () => {
   const [isLaunchDialogOpen, setIsLaunchDialogOpen] = useState(false);
   const [launchTool, setLaunchTool] = useState<'opencode' | 'codex'>('opencode');
   const [launchModel, setLaunchModel] = useState('');
+  const [launchReasoningEffort, setLaunchReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
+  const [launchMode, setLaunchMode] = useState<'build' | 'plan'>('build');
   const [isSavingInitializationSettings, setIsSavingInitializationSettings] = useState(false);
   const [toolAvailability, setToolAvailability] = useState<{ tool: 'opencode' | 'codex'; available: boolean; npm_available: boolean; install_command: string; documentation_url: string; message?: string } | null>(null);
   const [isCheckingTool, setIsCheckingTool] = useState(false);
   const [isInstallingTool, setIsInstallingTool] = useState(false);
-  const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'copied' | 'error' | undefined>>({});
+  const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'added' | 'error' | undefined>>({});
   const [promptSource, setPromptSource] = useState<'project' | 'task'>('project');
   const [selectedPromptTaskId, setSelectedPromptTaskId] = useState('');
   const [milestoneEditor, setMilestoneEditor] = useState<{ milestone?: Project['milestones'][number] } | null>(null);
@@ -117,6 +122,21 @@ export const ProjectsView: React.FC = () => {
 
   // Selected project object
   const activeProject = projects.find(p => p.id === selectedProjectId) || null;
+
+  const handleSaveProject = async (draft: ProjectDraft) => {
+    if (!activeProject || isSavingProject) return;
+    setIsSavingProject(true);
+    setProjectSaveError(null);
+    try {
+      await updateProject(activeProject.id, draft);
+      setIsEditingProject(false);
+    } catch (error: any) {
+      const detail = error?.response?.data;
+      setProjectSaveError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : error?.message || 'Unable to save project.');
+    } finally {
+      setIsSavingProject(false);
+    }
+  };
 
   // Reset all path editors / drafts / picker when switching projects so a stale
   // draft from one project can't be saved onto another (Bug 1: "paths not saved").
@@ -144,9 +164,13 @@ export const ProjectsView: React.FC = () => {
     setInitializationStatus(null);
     setLaunchTool(activeProject?.initializationTool || 'opencode');
     setLaunchModel(activeProject?.initializationModel || '');
+    setLaunchReasoningEffort(activeProject?.initializationReasoningEffort || 'medium');
+    setLaunchMode(activeProject?.initializationMode || 'build');
     setIsLaunchDialogOpen(false);
     setToolAvailability(null);
     setTaskPromptStatus({});
+    setIsEditingProject(false);
+    setProjectSaveError(null);
     setPromptSource('project');
     setSelectedPromptTaskId('');
   }, [activeProject?.id]);
@@ -160,7 +184,7 @@ export const ProjectsView: React.FC = () => {
     api.get('/launcher-model-presets/', { params: { page_size: 100, tool: launchTool } })
       .then(res => {
         const rows = Array.isArray(res.data) ? res.data : (res.data?.results || []);
-        setModelPresets(rows.map((raw: any) => ({ id: String(raw.id), tool: raw.tool === 'codex' ? 'codex' : 'opencode', modelId: raw.model_id || '', label: raw.label || '', enabled: raw.enabled !== false, createdAt: raw.created_at, updatedAt: raw.updated_at })));
+        setModelPresets(rows.map((raw: any) => ({ id: String(raw.id), tool: raw.tool === 'codex' ? 'codex' : 'opencode', modelId: raw.model_id || '', reasoningEffort: ['low', 'high'].includes(raw.reasoning_effort) ? raw.reasoning_effort : 'medium', mode: raw.mode === 'plan' ? 'plan' : 'build', label: raw.label || '', enabled: raw.enabled !== false, createdAt: raw.created_at, updatedAt: raw.updated_at })));
       })
       .catch(() => setModelPresets([]));
   }, [activeProject?.id, launchTool]);
@@ -174,48 +198,48 @@ export const ProjectsView: React.FC = () => {
       setIsEditingPrompt(false);
       await refreshData();
     } catch (error: any) {
-      setPromptSaveError(error?.response?.data?.content || 'Unable to save the initial prompt.');
+      setPromptSaveError(error?.response?.data?.content || 'Unable to save the prompt.');
     } finally {
       setIsSavingPrompt(false);
     }
   };
 
-  const handleClearInitialPrompt = async () => {
-    if (!activeProject || !activeProject.initialPrompt || isSavingPrompt) return;
-    if (!window.confirm('Clear this project’s saved initial prompt?')) return;
-    setIsSavingPrompt(true);
+  const handleClearInitialPrompt = () => {
+    if (isSavingPrompt) return;
+    setPromptDraft('');
     setPromptSaveError(null);
-    try {
-      await api.delete(`/projects/${activeProject.id}/initial-prompt/`);
-      setPromptDraft('');
-      setIsEditingPrompt(false);
-      await refreshData();
-    } catch {
-      setPromptSaveError('Unable to clear the initial prompt.');
-    } finally {
-      setIsSavingPrompt(false);
-    }
   };
 
-  const copyTaskPrompt = async (taskId: string) => {
+  const addTaskPromptToInitialPrompt = async (taskId: string) => {
     try {
       const res = await api.get(`/tasks/${taskId}/prompt/`);
-      await navigator.clipboard.writeText(res.data?.content || '');
-      setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'copied' }));
+      const content = String(res.data?.content || '').trim();
+      if (!content) throw new Error('The task prompt is empty.');
+      setPromptDraft(content);
+      setIsEditingPrompt(true);
+      setActiveDetailTab('prompt');
+      setPromptCopyError(null);
+      setInitializationStatus('Task prompt added to Prompt. Review it, then save the prompt.');
+      setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'added' }));
       window.setTimeout(() => setTaskPromptStatus(prev => ({ ...prev, [taskId]: undefined })), 2200);
     } catch (error: any) {
       setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'error' }));
-      setPromptCopyError(error?.response?.data?.error || 'Unable to create the task prompt.');
+      setPromptCopyError(error?.response?.data?.error || error?.message || 'Unable to create the task prompt.');
     }
   };
 
-  const handleStartInitialization = async (tool: 'opencode' | 'codex', model: string) => {
+  const handleStartInitialization = async (tool: 'opencode' | 'codex', model: string, reasoningEffort: 'low' | 'medium' | 'high', mode: 'build' | 'plan') => {
     if (!activeProject?.initialPrompt) {
-      setPromptCopyError('Save an initial prompt before starting initialization.');
+      setPromptCopyError('Save a prompt before starting initialization.');
       return;
     }
-    if (!model.trim()) {
+    const normalizedModel = model.trim();
+    if (!normalizedModel) {
       setPromptCopyError('Choose a model before starting initialization.');
+      return;
+    }
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9 ._:/-]*[A-Za-z0-9])?$/.test(normalizedModel)) {
+      setPromptCopyError('Model IDs or names may contain only letters, numbers, spaces, ., _, :, /, and -.');
       return;
     }
     setIsLaunchDialogOpen(false);
@@ -227,7 +251,11 @@ export const ProjectsView: React.FC = () => {
         return;
       }
       const res = await api.get(promptSource === 'task' ? `/tasks/${selectedPromptTaskId}/prompt/` : `/projects/${activeProject.id}/initialize-prompt/`);
-      await navigator.clipboard.writeText(res.data?.content || activeProject.initialPrompt);
+      const prompt = String(res.data?.content || activeProject.initialPrompt);
+      const promptWithMode = mode === 'plan' && tool === 'codex'
+        ? `${prompt}\n\n## Operating mode: Plan\nInspect the project and produce a decision-complete implementation plan. Do not modify, create, or delete files.`
+        : prompt;
+      await navigator.clipboard.writeText(promptWithMode);
       setCopiedPrompt(true);
       window.setTimeout(() => setCopiedPrompt(false), 2200);
       setIsCheckingTool(true);
@@ -247,14 +275,12 @@ export const ProjectsView: React.FC = () => {
         if (!drawer) {
           throw new Error('Terminal console is still loading. Please try again in a moment.');
         }
-        const session = await drawer.create('cmd');
-        if (session && !session.reused) {
-          const command = tool === 'codex' ? `codex --model "${model}"\r` : `opencode --model "${model}"\r`;
-          await drawer.sendInput(command, session.id);
-          setInitializationStatus(`${tool === 'codex' ? 'Codex' : 'OpenCode'} started with ${model}. Paste the copied initialization prompt when ready.`);
-        } else {
-          setInitializationStatus(`The project console is already open. Paste the copied ${tool === 'codex' ? 'Codex' : 'OpenCode'} prompt when ready.`);
-        }
+        const session = await drawer.create('cmd', { forceNew: true });
+        const command = tool === 'codex'
+          ? `codex --model "${normalizedModel}" --sandbox ${mode === 'plan' ? 'read-only' : 'workspace-write'} -c model_reasoning_effort="${reasoningEffort}"\r`
+          : `opencode --model "${normalizedModel}"\r`;
+        await drawer.sendInput(command, session.id);
+        setInitializationStatus(`${tool === 'codex' ? 'Codex' : 'OpenCode'} started with ${normalizedModel}${tool === 'codex' ? ` (${reasoningEffort}, ${mode})` : ''}. Paste the copied initialization prompt when ready.`);
       } catch (error: any) {
         const detail = error?.response?.data?.error || 'Set a CMD folder for this project to open its console.';
         setPromptCopyError(`Prompt copied. ${detail}`);
@@ -304,7 +330,7 @@ export const ProjectsView: React.FC = () => {
     if (!activeProject || !launchModel.trim() || isSavingInitializationSettings) return;
     setIsSavingInitializationSettings(true);
     try {
-      await api.patch(`/projects/${activeProject.id}/initialization-settings/`, { tool: launchTool, model_id: launchModel.trim() });
+      await api.patch(`/projects/${activeProject.id}/initialization-settings/`, { tool: launchTool, model_id: launchModel.trim(), reasoning_effort: launchReasoningEffort, mode: launchMode });
       await refreshData();
       setInitializationStatus('Project initialization defaults saved.');
     } catch (error: any) {
@@ -312,6 +338,14 @@ export const ProjectsView: React.FC = () => {
     } finally {
       setIsSavingInitializationSettings(false);
     }
+  };
+
+  const applyLauncherPreset = (presetId: string) => {
+    const preset = modelPresets.find(item => item.id === presetId);
+    if (!preset) return;
+    setLaunchModel(preset.modelId);
+    setLaunchReasoningEffort(preset.reasoningEffort);
+    setLaunchMode(preset.mode);
   };
 
   // Filtered projects list
@@ -637,6 +671,14 @@ export const ProjectsView: React.FC = () => {
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={() => { setProjectSaveError(null); setIsEditingProject(true); }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-indigo-500/60 text-xs font-black transition-colors"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Edit Project
+              </button>
+              <button
+                type="button"
                 onClick={() => updateProject(activeProject.id, { pinned: !activeProject.pinned })}
                 className="p-2 text-content-faint hover:text-white rounded-xl bg-surface-2 border border-line hover:border-line-strong transition-colors"
                 title={activeProject.pinned ? 'Unpin' : 'Pin to top'}
@@ -659,6 +701,15 @@ export const ProjectsView: React.FC = () => {
             </div>
           </div>
 
+          {isEditingProject ? (
+            <ProjectEditor
+              project={activeProject}
+              saving={isSavingProject}
+              error={projectSaveError}
+              onSave={handleSaveProject}
+              onCancel={() => { setProjectSaveError(null); setIsEditingProject(false); }}
+            />
+          ) : <>
           {/* Project Header Banner */}
           <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-6">
             <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
@@ -1286,6 +1337,72 @@ export const ProjectsView: React.FC = () => {
             </div>
           </div>
 
+          {(activeProject.problem || activeProject.solution || activeProject.targetAudience || activeProject.monetization || activeProject.mvpFeatures?.length || activeProject.tags?.length) && (
+            <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-5">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Spark Details</h3>
+              </div>
+
+              {(activeProject.problem || activeProject.solution) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {activeProject.problem && (
+                    <div className="p-4 rounded-2xl bg-surface-2 border border-line">
+                      <div className="text-[11px] font-black uppercase tracking-wider text-rose-400 mb-2">The Problem</div>
+                      <p className="text-sm text-content-muted whitespace-pre-line leading-relaxed">{activeProject.problem}</p>
+                    </div>
+                  )}
+                  {activeProject.solution && (
+                    <div className="p-4 rounded-2xl bg-surface-2 border border-line">
+                      <div className="text-[11px] font-black uppercase tracking-wider text-amber-400 mb-2">The Solution</div>
+                      <p className="text-sm text-content-muted whitespace-pre-line leading-relaxed">{activeProject.solution}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(activeProject.targetAudience || activeProject.monetization) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {activeProject.targetAudience && (
+                    <div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-indigo-400 mb-1.5">Target Audience</div>
+                      <p className="text-sm text-content-muted">{activeProject.targetAudience}</p>
+                    </div>
+                  )}
+                  {activeProject.monetization && (
+                    <div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-emerald-400 mb-1.5">Monetization</div>
+                      <p className="text-sm text-content-muted">{activeProject.monetization}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeProject.mvpFeatures && activeProject.mvpFeatures.length > 0 && (
+                <div>
+                  <div className="text-[11px] font-black uppercase tracking-wider text-blue-400 mb-2">MVP Features</div>
+                  <div className="flex flex-wrap gap-2">
+                    {activeProject.mvpFeatures.map((feature, index) => (
+                      <span key={`${feature}-${index}`} className="px-2.5 py-1.5 rounded-lg bg-surface-2 border border-line text-xs text-content-muted">{feature}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeProject.tags && activeProject.tags.length > 0 && (
+                <div>
+                  <div className="text-[11px] font-black uppercase tracking-wider text-purple-400 mb-2">Tags</div>
+                  <div className="flex flex-wrap gap-2">
+                    {activeProject.tags.map(tag => (
+                      <span key={tag} className="px-2.5 py-1 rounded-lg bg-surface-2 border border-line text-xs text-content-muted">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          </>}
+
           {/* Project Sub-Tabs: Tasks, Milestones, Time Logs */}
           <div className="space-y-4">
             <div className="flex items-center gap-2 border-b border-line">
@@ -1353,7 +1470,7 @@ export const ProjectsView: React.FC = () => {
                 }`}
               >
                 <Clipboard className="w-3.5 h-3.5" />
-                Initial Prompt
+                Prompt
               </button>
             </div>
 
@@ -1541,12 +1658,12 @@ export const ProjectsView: React.FC = () => {
 
                               <button
                                 type="button"
-                                onClick={() => void copyTaskPrompt(task.id)}
-                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${taskPromptStatus[task.id] === 'copied' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : taskPromptStatus[task.id] === 'error' ? 'bg-rose-500/10 border-rose-500/25 text-rose-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
-                                title="Copy a focused prompt for this task and its subtasks"
+                                onClick={() => void addTaskPromptToInitialPrompt(task.id)}
+                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${taskPromptStatus[task.id] === 'added' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : taskPromptStatus[task.id] === 'error' ? 'bg-rose-500/10 border-rose-500/25 text-rose-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
+                                title="Add a focused prompt for this task and its subtasks to Prompt"
                               >
-                                {taskPromptStatus[task.id] === 'copied' ? <Check className="w-3 h-3" /> : <Clipboard className="w-3 h-3" />}
-                                <span className="hidden sm:inline">{taskPromptStatus[task.id] === 'copied' ? 'Copied' : taskPromptStatus[task.id] === 'error' ? 'Retry' : 'Copy prompt'}</span>
+                                {taskPromptStatus[task.id] === 'added' ? <Check className="w-3 h-3" /> : <Clipboard className="w-3 h-3" />}
+                                <span className="hidden sm:inline">{taskPromptStatus[task.id] === 'added' ? 'Added' : taskPromptStatus[task.id] === 'error' ? 'Retry' : 'Add to Prompt'}</span>
                               </button>
 
                               <button
@@ -1719,13 +1836,13 @@ export const ProjectsView: React.FC = () => {
               <DocsTab projectId={activeProject.id} />
             )}
 
-            {/* TAB: INITIAL PROMPT */}
+            {/* TAB: PROMPT */}
             {activeDetailTab === 'prompt' && (
               <div className="space-y-4">
                 <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-4">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div>
-                      <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Initial Prompt</h3>
+                      <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Prompt</h3>
                       <p className="text-xs text-content-faint mt-1">Edit the saved project brief separately from initialization.</p>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -1741,7 +1858,7 @@ export const ProjectsView: React.FC = () => {
                       )}
                       <button
                         type="button"
-                        onClick={() => { const tool = activeProject.initializationTool || 'opencode'; setLaunchTool(tool); setLaunchModel(activeProject.initializationModel || ''); setToolAvailability(null); setPromptSource('project'); setSelectedPromptTaskId(''); setIsLaunchDialogOpen(true); setPromptCopyError(null); void checkToolAvailability(tool); }}
+                        onClick={() => { const tool = activeProject.initializationTool || 'opencode'; setLaunchTool(tool); setLaunchModel(activeProject.initializationModel || ''); setLaunchReasoningEffort(activeProject.initializationReasoningEffort || 'medium'); setLaunchMode(activeProject.initializationMode || 'build'); setToolAvailability(null); setPromptSource('project'); setSelectedPromptTaskId(''); setIsLaunchDialogOpen(true); setPromptCopyError(null); void checkToolAvailability(tool); }}
                         disabled={!activeProject.initialPrompt || isEditingPrompt}
                         title={isEditingPrompt ? 'Save the prompt before starting initialization' : 'Choose a tool and model, then open the project console'}
                         className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-black transition-all disabled:opacity-40 ${
@@ -1760,15 +1877,23 @@ export const ProjectsView: React.FC = () => {
                       <h4 className="text-xs font-black text-content">Initialization defaults</h4>
                       <p className="text-[11px] text-content-faint mt-0.5">Choose the CLI and model used by default. Start initialization can override these once.</p>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-[9rem_1fr_auto] gap-2">
-                      <select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); }} className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content">
+                    <div className="flex flex-wrap items-stretch gap-2">
+                      <select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); if (next === 'opencode') setLaunchMode('build'); }} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content">
                         <option value="opencode">OpenCode</option><option value="codex">Codex</option>
                       </select>
-                      <input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-mono text-content" />
-                      <button type="button" onClick={saveInitializationSettings} disabled={!launchModel.trim() || isSavingInitializationSettings} className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-black text-content-muted hover:text-white disabled:opacity-40">{isSavingInitializationSettings ? 'Saving…' : 'Save default'}</button>
+                      <input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface border border-line px-3 py-2 text-xs font-mono text-content" />
+                      <select value="" onChange={e => applyLauncherPreset(e.target.value)} className="w-full sm:w-40 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Saved model preset">
+                        <option value="">Use preset…</option>
+                        {modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}
+                      </select>
+                      <select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort">
+                        <option value="low">Low effort</option><option value="medium">Medium effort</option><option value="high">High effort</option>
+                      </select>
+                      {launchTool === 'codex' && <select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="w-full sm:w-28 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Initialization mode"><option value="build">Build</option><option value="plan">Plan</option></select>}
+                      <button type="button" onClick={saveInitializationSettings} disabled={!launchModel.trim() || isSavingInitializationSettings} className="w-full sm:w-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-black text-content-muted hover:text-white disabled:opacity-40">{isSavingInitializationSettings ? 'Saving…' : 'Save default'}</button>
                     </div>
                     <datalist id="project-model-presets">{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.modelId}>{p.label}</option>)}</datalist>
-                    {modelPresets.filter(p => p.enabled).length === 0 && <p className="text-[11px] text-amber-300">No enabled presets for this tool. Type a model ID, then save it as the project default or <button type="button" onClick={() => setCurrentView('settings')} className="underline hover:text-amber-200">manage presets in Settings → Models</button>.</p>}
+                    {modelPresets.filter(p => p.enabled).length === 0 && <p className="text-[11px] text-amber-300">No enabled presets for this tool. Type a model ID, then save it as the project default or <button type="button" onClick={() => setCurrentView('settings')} className="underline hover:text-amber-200">manage presets in Settings → Launch Presets</button>.</p>}
                   </div>
                   {promptCopyError && <p className="text-xs text-rose-300" role="alert">{promptCopyError}</p>}
                   {initializationStatus && <p className="text-xs text-emerald-300" role="status">{initializationStatus}</p>}
@@ -1787,11 +1912,11 @@ export const ProjectsView: React.FC = () => {
                         <button
                           type="button"
                           onClick={handleClearInitialPrompt}
-                          disabled={!activeProject.initialPrompt || isSavingPrompt}
+                          disabled={!promptDraft || isSavingPrompt}
                           className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-900/50 text-rose-300 hover:bg-rose-500/10 text-xs font-black disabled:opacity-40"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Clear prompt
+                          <X className="w-3.5 h-3.5" />
+                          Clear text
                         </button>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(false); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white text-xs font-black">
@@ -1810,7 +1935,7 @@ export const ProjectsView: React.FC = () => {
                     </pre>
                   ) : (
                     <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint font-mono">
-                      This project has no saved initial prompt. Use Edit prompt to create one.
+                      This project has no saved prompt. Use Edit prompt to create one.
                     </div>
                   )}
                 </div>
@@ -1826,11 +1951,15 @@ export const ProjectsView: React.FC = () => {
                         const openTasks = tasks.filter(t => t.projectId === activeProject.id && !t.completed);
                         return <label className="block text-xs font-black text-content">Open task<select value={selectedPromptTaskId} onChange={e => setSelectedPromptTaskId(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose a task…</option>{openTasks.map(task => <option key={task.id} value={task.id}>{task.title}{task.subtasks.length ? ` (${task.subtasks.length} steps)` : ''}</option>)}</select>{openTasks.length === 0 && <span className="mt-1 block text-[11px] text-amber-300">There are no open tasks in this project.</span>}</label>;
                       })()}
-                      <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
+                      <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); setLaunchReasoningEffort('medium'); if (next === 'opencode') setLaunchMode('build'); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
                       <label className="block text-xs font-black text-content">Model<input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" /></label>
+                      <label className="block text-xs font-black text-content">Saved preset<select value="" onChange={e => applyLauncherPreset(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose…</option>{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}</select></label>
+                      <label className="block text-xs font-black text-content">Reasoning effort<select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+                      {launchTool === 'codex' && <label className="block text-xs font-black text-content">Mode<select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select></label>}
+                      {launchTool === 'opencode' && <p className="text-[11px] text-content-faint">OpenCode supports Build only here; strict read-only Plan mode is available with Codex.</p>}
                       {isCheckingTool && <p className="text-xs text-content-faint">Checking whether {launchTool === 'codex' ? 'Codex' : 'OpenCode'} is installed…</p>}
                       {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
-                      <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Copy & start</button></div>
+                      <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel, launchReasoningEffort, launchMode)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Copy & start</button></div>
                     </div>
                   </div>
                 )}

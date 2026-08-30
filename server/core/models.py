@@ -21,6 +21,17 @@ class InitializationTool(models.TextChoices):
     CODEX = 'codex', 'Codex'
 
 
+class ReasoningEffort(models.TextChoices):
+    LOW = 'low', 'Low'
+    MEDIUM = 'medium', 'Medium'
+    HIGH = 'high', 'High'
+
+
+class InitializationMode(models.TextChoices):
+    BUILD = 'build', 'Build'
+    PLAN = 'plan', 'Plan'
+
+
 class AppCategory(models.TextChoices):
     WEB_SAAS = 'Web App / SaaS', 'Web App / SaaS'
     MOBILE = 'Mobile App', 'Mobile App'
@@ -79,6 +90,15 @@ class Project(models.Model):
     title = models.CharField(max_length=300)
     tagline = models.CharField(max_length=500, blank=True, default='')
     description = models.TextField(blank=True, default='')
+    # Structured product brief fields carried over from a Spark when it is
+    # converted into a project.  Keep these separate from description so the
+    # original problem/solution and planning inputs remain addressable.
+    problem = models.TextField(blank=True, default='')
+    solution = models.TextField(blank=True, default='')
+    target_audience = models.TextField(blank=True, default='')
+    monetization = models.TextField(blank=True, default='')
+    mvp_features = models.JSONField(default=list, blank=True)
+    tags = models.JSONField(default=list, blank=True)
     category = models.CharField(max_length=50, choices=AppCategory.choices, default=AppCategory.WEB_SAAS)
     current_stage = models.CharField(max_length=20, choices=ProjectStage.choices, default=ProjectStage.IDEATION)
     target_deadline = models.DateField()
@@ -98,6 +118,8 @@ class Project(models.Model):
     notes = models.TextField(blank=True, default='')
     initialization_tool = models.CharField(max_length=20, choices=InitializationTool.choices, default=InitializationTool.OPENCODE)
     initialization_model = models.CharField(max_length=200, blank=True, default='')
+    initialization_reasoning_effort = models.CharField(max_length=10, choices=ReasoningEffort.choices, default=ReasoningEffort.MEDIUM)
+    initialization_mode = models.CharField(max_length=10, choices=InitializationMode.choices, default=InitializationMode.BUILD)
     pinned = models.BooleanField(default=False)
     tech_research = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -127,12 +149,14 @@ class ProjectLaunchPrompt(models.Model):
 
 
 class LauncherModelPreset(models.Model):
-    """A user-managed model ID that can be used by a local coding CLI."""
+    """A user-managed launch configuration for a local coding CLI."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='launcher_model_presets')
     tool = models.CharField(max_length=20, choices=InitializationTool.choices)
     model_id = models.CharField(max_length=200)
-    label = models.CharField(max_length=200, blank=True, default='')
+    reasoning_effort = models.CharField(max_length=10, choices=ReasoningEffort.choices, default=ReasoningEffort.MEDIUM)
+    mode = models.CharField(max_length=10, choices=InitializationMode.choices, default=InitializationMode.BUILD)
+    label = models.CharField(max_length=200)
     enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -140,7 +164,7 @@ class LauncherModelPreset(models.Model):
     class Meta:
         ordering = ['tool', 'label', 'model_id']
         constraints = [
-            models.UniqueConstraint(fields=['owner', 'tool', 'model_id'], name='unique_launcher_model_preset'),
+            models.UniqueConstraint(fields=['owner', 'tool', 'label'], name='unique_launcher_model_preset_name'),
         ]
 
     def __str__(self):

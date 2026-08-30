@@ -18,7 +18,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage, InitializationTool
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
 from .serializers import (
     UserSerializer, RegisterSerializer,
     ProjectSerializer, MilestoneSerializer,
@@ -226,7 +226,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsOwner]
     filterset_class = ProjectFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['title', 'tagline', 'description', 'notes']
+    search_fields = ['title', 'tagline', 'description', 'problem', 'solution', 'target_audience', 'monetization', 'notes']
     ordering_fields = ['created_at', 'target_deadline', 'start_date', 'updated_at']
 
     def get_queryset(self):
@@ -274,17 +274,27 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if request.method == 'PATCH':
             tool = request.data.get('tool', project.initialization_tool)
             model_id = request.data.get('model_id', project.initialization_model)
+            reasoning_effort = request.data.get('reasoning_effort', project.initialization_reasoning_effort)
+            mode = request.data.get('mode', project.initialization_mode)
             if tool not in InitializationTool.values:
                 return Response({'tool': 'Tool must be opencode or codex.'}, status=400)
+            if mode not in InitializationMode.values:
+                return Response({'mode': 'Mode must be build or plan.'}, status=400)
+            if mode == InitializationMode.PLAN and tool != InitializationTool.CODEX:
+                return Response({'mode': 'Plan mode is only available for Codex.'}, status=400)
             if not isinstance(model_id, str):
                 return Response({'model_id': 'Model ID must be a string.'}, status=400)
+            if reasoning_effort not in ReasoningEffort.values:
+                return Response({'reasoning_effort': 'Reasoning effort must be low, medium, or high.'}, status=400)
             model_id = model_id.strip()
             if model_id and not is_safe_model_id(model_id):
                 return Response({'model_id': MODEL_ID_ERROR}, status=400)
             project.initialization_tool = tool
             project.initialization_model = model_id
-            project.save(update_fields=['initialization_tool', 'initialization_model', 'updated_at'])
-        return Response({'tool': project.initialization_tool, 'model_id': project.initialization_model or ''})
+            project.initialization_reasoning_effort = reasoning_effort
+            project.initialization_mode = mode
+            project.save(update_fields=['initialization_tool', 'initialization_model', 'initialization_reasoning_effort', 'initialization_mode', 'updated_at'])
+        return Response({'tool': project.initialization_tool, 'model_id': project.initialization_model or '', 'reasoning_effort': project.initialization_reasoning_effort, 'mode': project.initialization_mode})
 
     @action(detail=True, methods=['get'], url_path='tool-availability')
     def tool_availability(self, request, pk=None):
@@ -411,7 +421,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Failed to open cmd: {e}"}, status=500)
         return Response({"ok": True, "path": raw, "venv": activate_bat or None})
 
-    @action(detail=True, methods=['patch'], url_path=r'agents/(?P<agent_id>[^/.]+)')
+    @action(detail=True, methods=['patch', 'delete'], url_path=r'agents/(?P<agent_id>[^/.]+)')
     def update_agent_link(self, request, pk=None, agent_id=None):
         project = self.get_object()
         try:
@@ -420,6 +430,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
             )
         except ProjectAgentLink.DoesNotExist:
             return Response({'error': 'Agent is not linked to this project.'}, status=404)
+        if request.method == 'DELETE':
+            link.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
         if 'active' not in request.data:
             return Response({'active': 'This field is required.'}, status=400)
         raw_active = request.data['active']
@@ -582,9 +595,7 @@ class IdeaViewSet(viewsets.ModelViewSet):
         today = timezone.now().date()
         deadline = today + timedelta(days=30)
         tech_stack = idea.tags if idea.tags else ['TypeScript', 'Tailwind CSS']
-        notes = ''
-        if idea.monetization:
-            notes = f"Monetization: {idea.monetization}\nTarget Audience: {idea.target_audience or ''}".strip()
+        notes = idea.notes or ''
         description_parts = []
         if idea.problem:
             description_parts.append(f"Problem: {idea.problem}")
@@ -605,6 +616,12 @@ class IdeaViewSet(viewsets.ModelViewSet):
                     title=idea.title,
                     tagline=idea.tagline or idea.problem or 'Built from idea brainstorm',
                     description=description,
+                    problem=idea.problem,
+                    solution=idea.solution,
+                    target_audience=idea.target_audience,
+                    monetization=idea.monetization,
+                    mvp_features=idea.mvp_features or [],
+                    tags=idea.tags or [],
                     category=idea.category,
                     current_stage=ProjectStage.PLANNING,
                     start_date=today,
@@ -749,6 +766,19 @@ def import_data_view(request):
     imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "modelPresets": 0, "settings": 0}
     project_id_map = {}
     milestone_id_map = {}
+
+    # Reject impossible mode/tool combinations before mutating any imported data.
+    for project_data in data.get('projects', []) if isinstance(data.get('projects'), list) else []:
+        imported_tool = project_data.get('initializationTool', project_data.get('initialization_tool', InitializationTool.OPENCODE))
+        imported_mode = project_data.get('initializationMode', project_data.get('initialization_mode', InitializationMode.BUILD))
+        if imported_mode == InitializationMode.PLAN and imported_tool != InitializationTool.CODEX:
+            return Response({'initialization_mode': 'Plan mode is only available for Codex.'}, status=400)
+    for preset_data in data.get('modelPresets', []) if isinstance(data.get('modelPresets'), list) else []:
+        imported_tool = preset_data.get('tool')
+        imported_mode = preset_data.get('mode', InitializationMode.BUILD)
+        if imported_mode == InitializationMode.PLAN and imported_tool != InitializationTool.CODEX:
+            return Response({'mode': 'Plan mode is only available for Codex.'}, status=400)
+
     with transaction.atomic():
         settings_data = data.get('settings') if isinstance(data.get('settings'), dict) else {}
         if 'potentialProjectsRoot' in settings_data or 'potential_projects_root' in settings_data:
@@ -784,6 +814,10 @@ def import_data_view(request):
                 mapped = {}
                 key_map = {
                     'tagline': 'tagline', 'description': 'description', 'category': 'category',
+                    'problem': 'problem', 'solution': 'solution',
+                    'targetAudience': 'target_audience', 'target_audience': 'target_audience',
+                    'monetization': 'monetization', 'mvpFeatures': 'mvp_features', 'mvp_features': 'mvp_features',
+                    'tags': 'tags',
                     'currentStage': 'current_stage', 'current_stage': 'current_stage',
                     'targetDeadline': 'target_deadline', 'target_deadline': 'target_deadline',
                     'startDate': 'start_date', 'start_date': 'start_date',
@@ -800,6 +834,8 @@ def import_data_view(request):
                     'notes': 'notes', 'pinned': 'pinned',
                     'initializationTool': 'initialization_tool', 'initialization_tool': 'initialization_tool',
                     'initializationModel': 'initialization_model', 'initialization_model': 'initialization_model',
+                    'initializationReasoningEffort': 'initialization_reasoning_effort', 'initialization_reasoning_effort': 'initialization_reasoning_effort',
+                    'initializationMode': 'initialization_mode', 'initialization_mode': 'initialization_mode',
                     'techResearch': 'tech_research', 'tech_research': 'tech_research',
                     'title': 'title',
                 }
@@ -999,13 +1035,36 @@ def import_data_view(request):
             for preset in data['modelPresets']:
                 tool = preset.get('tool')
                 model_id = preset.get('modelId') or preset.get('model_id')
+                reasoning_effort = preset.get('reasoningEffort') or preset.get('reasoning_effort') or ReasoningEffort.MEDIUM
+                mode = preset.get('mode') or InitializationMode.BUILD
+                label = preset.get('label') or preset.get('name')
+                if not label and isinstance(model_id, str):
+                    label = f'{model_id.strip()} ({reasoning_effort})'
                 if tool not in [InitializationTool.OPENCODE, InitializationTool.CODEX] or not isinstance(model_id, str):
                     continue
                 if not is_safe_model_id(model_id):
                     continue
+                if reasoning_effort not in ReasoningEffort.values:
+                    continue
+                if mode not in InitializationMode.values or (mode == InitializationMode.PLAN and tool != InitializationTool.CODEX):
+                    continue
+                label = str(label).strip()
+                if not label:
+                    continue
+                base_label = label
+                suffix = 2
+                while True:
+                    existing = LauncherModelPreset.objects.filter(owner=user, tool=tool, label__iexact=label).first()
+                    if not existing:
+                        break
+                    if existing.model_id == model_id.strip() and existing.reasoning_effort == reasoning_effort:
+                        label = existing.label
+                        break
+                    label = f'{base_label} {suffix}'
+                    suffix += 1
                 obj, _created = LauncherModelPreset.objects.update_or_create(
-                    owner=user, tool=tool, model_id=model_id.strip(),
-                    defaults={'label': preset.get('label', ''), 'enabled': preset.get('enabled', True)},
+                    owner=user, tool=tool, label=label,
+                    defaults={'model_id': model_id.strip(), 'reasoning_effort': reasoning_effort, 'mode': mode, 'enabled': preset.get('enabled', True)},
                 )
                 imported["modelPresets"] += 1
     return Response({"success": True, "imported": imported})
