@@ -106,6 +106,11 @@ export const ProjectsView: React.FC = () => {
   const [initializationStatus, setInitializationStatus] = useState<string | null>(null);
   const [modelPresets, setModelPresets] = useState<LauncherModelPreset[]>([]);
   const [isLaunchDialogOpen, setIsLaunchDialogOpen] = useState(false);
+  const [isPromptPreviewOpen, setIsPromptPreviewOpen] = useState(false);
+  const [isLoadingPromptPreview, setIsLoadingPromptPreview] = useState(false);
+  const [previewedPrompt, setPreviewedPrompt] = useState('');
+  const [promptPreviewError, setPromptPreviewError] = useState<string | null>(null);
+  const [copiedPreviewPrompt, setCopiedPreviewPrompt] = useState(false);
   const [launchTool, setLaunchTool] = useState<'opencode' | 'codex'>('opencode');
   const [launchModel, setLaunchModel] = useState('');
   const [launchReasoningEffort, setLaunchReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
@@ -162,6 +167,11 @@ export const ProjectsView: React.FC = () => {
     setIsSavingPrompt(false);
     setPromptSaveError(null);
     setInitializationStatus(null);
+    setIsPromptPreviewOpen(false);
+    setIsLoadingPromptPreview(false);
+    setPreviewedPrompt('');
+    setPromptPreviewError(null);
+    setCopiedPreviewPrompt(false);
     setLaunchTool(activeProject?.initializationTool || 'opencode');
     setLaunchModel(activeProject?.initializationModel || '');
     setLaunchReasoningEffort(activeProject?.initializationReasoningEffort || 'medium');
@@ -208,6 +218,36 @@ export const ProjectsView: React.FC = () => {
     if (isSavingPrompt) return;
     setPromptDraft('');
     setPromptSaveError(null);
+  };
+
+  const openPromptPreview = async () => {
+    if (!activeProject || isLoadingPromptPreview) return;
+    setIsPromptPreviewOpen(true);
+    setIsLoadingPromptPreview(true);
+    setPreviewedPrompt('');
+    setPromptPreviewError(null);
+    setCopiedPreviewPrompt(false);
+    try {
+      const response = await api.get(`/projects/${activeProject.id}/initialize-prompt/`);
+      const content = String(response.data?.content || '').trim();
+      if (!content) throw new Error('The generated initialization prompt is empty.');
+      setPreviewedPrompt(content);
+    } catch (error: any) {
+      setPromptPreviewError(error?.response?.data?.error || error?.message || 'Unable to load the initialization prompt.');
+    } finally {
+      setIsLoadingPromptPreview(false);
+    }
+  };
+
+  const copyPreviewedPrompt = async () => {
+    if (!previewedPrompt) return;
+    try {
+      await navigator.clipboard.writeText(previewedPrompt);
+      setCopiedPreviewPrompt(true);
+      window.setTimeout(() => setCopiedPreviewPrompt(false), 2200);
+    } catch {
+      setPromptPreviewError('Unable to copy the initialization prompt.');
+    }
   };
 
   const addTaskPromptToInitialPrompt = async (taskId: string) => {
@@ -1858,6 +1898,16 @@ export const ProjectsView: React.FC = () => {
                       )}
                       <button
                         type="button"
+                        onClick={() => void openPromptPreview()}
+                        disabled={!activeProject.initialPrompt || isEditingPrompt || isLoadingPromptPreview}
+                        title={isEditingPrompt ? 'Save the prompt before previewing initialization' : 'Preview the full initialization prompt'}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong text-xs font-black transition-all disabled:opacity-40"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        {isLoadingPromptPreview ? 'Loading preview…' : 'Preview prompt'}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => { const tool = activeProject.initializationTool || 'opencode'; setLaunchTool(tool); setLaunchModel(activeProject.initializationModel || ''); setLaunchReasoningEffort(activeProject.initializationReasoningEffort || 'medium'); setLaunchMode(activeProject.initializationMode || 'build'); setToolAvailability(null); setPromptSource('project'); setSelectedPromptTaskId(''); setIsLaunchDialogOpen(true); setPromptCopyError(null); void checkToolAvailability(tool); }}
                         disabled={!activeProject.initialPrompt || isEditingPrompt}
                         title={isEditingPrompt ? 'Save the prompt before starting initialization' : 'Choose a tool and model, then open the project console'}
@@ -1960,6 +2010,35 @@ export const ProjectsView: React.FC = () => {
                       {isCheckingTool && <p className="text-xs text-content-faint">Checking whether {launchTool === 'codex' ? 'Codex' : 'OpenCode'} is installed…</p>}
                       {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
                       <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel, launchReasoningEffort, launchMode)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Copy & start</button></div>
+                    </div>
+                  </div>
+                )}
+                {isPromptPreviewOpen && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Initialization prompt preview">
+                    <div className="flex w-full max-w-4xl max-h-[calc(100vh-2rem)] flex-col rounded-3xl border border-line bg-surface p-5 shadow-2xl">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-black text-content">Initialization prompt preview</h3>
+                          <p className="text-xs text-content-faint mt-1">This is the generated full-project prompt used by the default initialization flow.</p>
+                        </div>
+                        <button type="button" onClick={() => setIsPromptPreviewOpen(false)} className="p-1.5 text-content-faint hover:text-white" aria-label="Close preview"><X className="w-4 h-4" /></button>
+                      </div>
+                      <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl border border-line bg-surface-inverse p-4">
+                        {isLoadingPromptPreview ? (
+                          <p className="text-xs text-content-faint">Generating preview…</p>
+                        ) : promptPreviewError ? (
+                          <p className="text-xs text-rose-300" role="alert">{promptPreviewError}</p>
+                        ) : (
+                          <pre className="whitespace-pre-wrap select-text text-xs leading-relaxed text-content font-mono">{previewedPrompt}</pre>
+                        )}
+                      </div>
+                      <div className="mt-4 flex items-center justify-end gap-2">
+                        <button type="button" onClick={() => setIsPromptPreviewOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Close</button>
+                        <button type="button" onClick={() => void copyPreviewedPrompt()} disabled={!previewedPrompt} className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">
+                          {copiedPreviewPrompt ? <Check className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
+                          {copiedPreviewPrompt ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
