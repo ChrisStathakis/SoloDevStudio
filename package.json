@@ -1,7 +1,7 @@
 {
   "name": "solodev-studio",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "SoloDev Studio — deliberate workspace for solo developers",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -12,7 +12,7 @@
     "start:vite": "powershell -ExecutionPolicy Bypass -File ./start.ps1 -UseVite",
     "desktop:dev": "npm run desktop:build:frontend && npm run desktop:build:backend && electron .",
     "desktop:build:frontend": "npm --prefix frontend run build:desktop",
-    "desktop:build:backend": "py -m PyInstaller --noconfirm --clean desktop/backend.spec --distpath backend-dist --workpath .desktop-build",
+    "desktop:build:backend": "py -3.11 -m PyInstaller --noconfirm --clean desktop/backend.spec --distpath backend-dist --workpath .desktop-build",
     "desktop:build": "npm run desktop:build:frontend && npm run desktop:build:backend && electron-builder --win",
     "desktop:dist": "npm run desktop:build"
   },

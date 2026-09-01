@@ -33,6 +33,7 @@ export interface TerminalDrawerHandle {
   create: (mode: TerminalMode, options?: { forceNew?: boolean }) => Promise<TerminalSessionDto>;
   restartIfRunning: (mode: TerminalMode) => Promise<TerminalSessionDto | null>;
   sendInput: (data: string, sessionId?: string) => Promise<void>;
+  waitForOutputIdle: (sessionId: string, options?: { afterRevision?: number; quietMs?: number; timeoutMs?: number }) => Promise<number>;
   minimize: () => void;
 }
 
@@ -45,6 +46,7 @@ const MIN_HEIGHT = 160;
 const MAX_VIEWPORT_RATIO = 0.85;
 const FULLSCREEN_RATIO = 0.94;
 const HEIGHT_STORAGE_KEY = 'solodev_terminal_height_px';
+const MINIMIZED_STORAGE_PREFIX = 'solodev_terminal_minimized:';
 
 const XTERM_THEME = {
   background: '#0b1120',
@@ -90,6 +92,15 @@ function persistHeightToStorage(px: number) {
   }
 }
 
+function persistMinimizedForProject(projectId: string | null, minimized: boolean) {
+  if (!projectId) return;
+  try {
+    window.localStorage.setItem(`${MINIMIZED_STORAGE_PREFIX}${projectId}`, String(minimized));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     const t = window.setTimeout(done, ms);
@@ -113,6 +124,8 @@ interface TerminalRuntime {
   lastCols: number;
   lastRows: number;
   resizeTimer: number | null;
+  outputRevision: number;
+  lastOutputAt: number;
 }
 
 /**
@@ -135,6 +148,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const connStateRef = useRef<'idle' | 'connecting' | 'live' | 'error'>('idle');
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
+    const activeIdRef = useRef<string | null>(null);
     const runtimeRef = useRef<TerminalRuntime>({
       term: null,
       fit: null,
@@ -147,6 +161,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       lastCols: 0,
       lastRows: 0,
       resizeTimer: null,
+      outputRevision: 0,
+      lastOutputAt: 0,
     });
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -157,11 +173,20 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       sessionsRef.current = sessions;
     }, [sessions]);
     useEffect(() => {
+      activeIdRef.current = activeId;
+    }, [activeId]);
+    useEffect(() => {
       latestHeightRef.current = heightPx;
     }, [heightPx]);
     useEffect(() => {
       if (!open || !activeId) setConnState('idle');
     }, [open, activeId]);
+    useEffect(() => {
+      // Visiting a project should not expose a console automatically. Opening
+      // CMD, running a script, or using the floating terminal control is the
+      // explicit user action that expands this drawer.
+      setOpen(false);
+    }, [projectId]);
     useEffect(() => {
       connStateRef.current = connState;
     }, [connState]);
@@ -182,10 +207,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           if (prev && liveSessions.some(s => s.id === prev)) return prev;
           return liveSessions[liveSessions.length - 1]?.id ?? null;
         });
-        // The drawer is remounted whenever the user leaves and returns to the
-        // Projects screen. Restore any live console immediately instead of
-        // leaving its running session hidden behind a floating launcher.
-        if (liveSessions.length) setOpen(true);
+        // Live sessions remain available from the floating launcher, but do
+        // not reopen the drawer simply because this project was visited.
       } catch {
         /* best-effort */
       }
@@ -284,6 +307,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       rt.fit = null;
       rt.lastCols = 0;
       rt.lastRows = 0;
+      rt.outputRevision = 0;
+      rt.lastOutputAt = 0;
       setActiveSize(null);
     }, []);
 
@@ -326,6 +351,17 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         }, 0);
       };
       container.addEventListener('mousedown', onMouseDown);
+
+      // xterm/browser paste handling can attempt to read image clipboard
+      // entries and surface an "image not supported" message. Terminals only
+      // need plain text, so consume the paste event before xterm sees it.
+      const onPaste = (event: ClipboardEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const text = event.clipboardData?.getData('text/plain') || '';
+        if (text) queueInput(activeId, text);
+      };
+      container.addEventListener('paste', onPaste, true);
 
       const attachInput = () => {
         if (session?.alive === false || rt.dataSub || !rt.inputReady) return;
@@ -480,6 +516,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             if (evt.reset) term.reset();
             if (typeof evt.d === 'string' && evt.d) {
               const output = evt.d;
+              rt.outputRevision += 1;
+              rt.lastOutputAt = Date.now();
               term.write(output, () => handleInitialOutputRendered(output));
               if (connStateRef.current !== 'live') setConnState('live');
             }
@@ -558,6 +596,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         clearInitialTimers();
         ro.disconnect();
         container.removeEventListener('mousedown', onMouseDown);
+        container.removeEventListener('paste', onPaste, true);
         teardownRuntime();
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -584,7 +623,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           });
           const dto = res.data;
           setSessions(prev => [...prev.filter(s => s.id !== dto.id), dto]);
+          activeIdRef.current = dto.id;
           setActiveId(dto.id);
+          persistMinimizedForProject(projectId, false);
           setOpen(true);
           return dto;
         } catch (error: any) {
@@ -610,6 +651,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         const dto = res.data;
         setSessions(prev => [...prev.filter(s => s.id !== dto.id), dto]);
         setActiveId(dto.id);
+        persistMinimizedForProject(projectId, false);
         setOpen(true);
         return dto;
       },
@@ -622,9 +664,40 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       await api.post(`/terminals/${targetId}/input/`, { data });
     }, [activeId]);
 
-    const minimize = useCallback(() => setOpen(false), []);
+    const waitForOutputIdle = useCallback(
+      (sessionId: string, options?: { afterRevision?: number; quietMs?: number; timeoutMs?: number }): Promise<number> => {
+        const quietMs = Math.max(100, options?.quietMs ?? 450);
+        const timeoutMs = Math.max(1000, options?.timeoutMs ?? 12000);
+        const baseline = options?.afterRevision;
+        const startedAt = Date.now();
 
-    useImperativeHandle(ref, () => ({ create, restartIfRunning, sendInput, minimize }), [create, restartIfRunning, sendInput, minimize]);
+        return new Promise((resolve, reject) => {
+          const timer = window.setInterval(() => {
+            const runtime = runtimeRef.current;
+            const session = sessionsRef.current.find(item => item.id === sessionId);
+            const activitySeen = baseline === undefined || runtime.outputRevision > baseline;
+            const quiet = runtime.lastOutputAt === 0 || Date.now() - runtime.lastOutputAt >= quietMs;
+            if (activeIdRef.current === sessionId && session && session.alive !== false && runtime.inputReady && activitySeen && quiet) {
+              window.clearInterval(timer);
+              resolve(runtime.outputRevision);
+              return;
+            }
+            if (Date.now() - startedAt >= timeoutMs || session?.alive === false) {
+              window.clearInterval(timer);
+              reject(new Error('Timed out waiting for the terminal application to become ready.'));
+            }
+          }, 50);
+        });
+      },
+      []
+    );
+
+    const minimize = useCallback(() => {
+      persistMinimizedForProject(projectId, true);
+      setOpen(false);
+    }, [projectId]);
+
+    useImperativeHandle(ref, () => ({ create, restartIfRunning, sendInput, waitForOutputIdle, minimize }), [create, restartIfRunning, sendInput, waitForOutputIdle, minimize]);
 
     // ---------- resize dragging ----------
 
@@ -707,7 +780,10 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         {!open && anyLive && (
           <button
             type="button"
-            onClick={() => setOpen(true)}
+            onClick={() => {
+              persistMinimizedForProject(projectId, false);
+              setOpen(true);
+            }}
             className="fixed bottom-4 right-4 z-30 flex items-center gap-2 pl-3 pr-4 py-2.5 rounded-2xl bg-slate-900 border border-line-strong shadow-2xl text-xs font-black font-mono text-indigo-300 hover:border-indigo-500 transition-colors animate-in fade-in"
           >
             <TerminalIcon className="w-4 h-4" />

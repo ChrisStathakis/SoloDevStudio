@@ -50,6 +50,8 @@ List responses use standard DRF pagination (`count`, `next`, `previous`, `result
 - `GET /api/timeline/` returns launch, milestone, and task deadline items. Query with `search`, `type`, and `projectId` (or `project`).
 - `GET /api/export/` returns a versioned JSON snapshot.
 - `POST /api/import/` imports a snapshot and remaps IDs and relationships.
+- `POST /api/workspace/reset/` atomically removes the signed-in owner’s workspace records and saved project root. The response is `{ "success": true, "deleted": { "projects": n, "tasks": n, "ideas": n, "timeEntries": n, "docs": n, "modelPresets": n } }`.
+- `/api/idea-categories/` supports authenticated list, create, rename, and delete operations for the shared Idea Canvas catalog. Its `name` is the value used by `/api/ideas/`; deletion returns `409` while any idea still uses the category.
 - `GET /api/filesystem/?path=<directory>` lists local drives or directory entries for the path picker. It is read-only.
 
 ## Terminal endpoints

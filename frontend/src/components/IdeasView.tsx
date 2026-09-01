@@ -157,7 +157,7 @@ export const IdeasView: React.FC = () => {
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
                 isSelected
                   ? 'bg-amber-500 text-black shadow-md'
-                  : 'bg-surface-2 border border-line text-content-faint hover:text-white hover:bg-surface-3'
+                  : 'bg-surface-2 border border-line text-content-faint hover:text-content hover:bg-surface-3'
               }`}
             >
               <span className="capitalize">{statusKey === 'all' ? 'All Ideas' : statusKey}</span>
@@ -227,7 +227,7 @@ export const IdeasView: React.FC = () => {
                     {idea.problem && (
                       <div className="p-3.5 rounded-2xl bg-surface-3 border border-line text-xs">
                         <div className="font-bold text-content mb-1 flex items-center gap-1.5">
-                          <Target className="w-3.5 h-3.5 text-rose-400" />
+                          <Target className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
                           <span>The Problem</span>
                         </div>
                         <p className="text-content-faint leading-relaxed">
@@ -239,7 +239,7 @@ export const IdeasView: React.FC = () => {
                     {idea.solution && (
                       <div className="p-3.5 rounded-2xl bg-surface-3 border border-line text-xs">
                         <div className="font-bold text-content mb-1 flex items-center gap-1.5">
-                          <Zap className="w-3.5 h-3.5 text-amber-400" />
+                          <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                           <span>The Solution</span>
                         </div>
                         <p className="text-content-faint leading-relaxed">
@@ -282,7 +282,7 @@ export const IdeasView: React.FC = () => {
                       onClick={() => setSketchModalIdeaId(idea.id)}
                       className="w-full py-2.5 px-4 rounded-2xl border border-dashed border-line hover:border-amber-500/60 bg-surface-3/50 hover:bg-amber-500/5 text-content-faint hover:text-amber-300 text-xs font-bold flex items-center justify-center gap-2 transition-all"
                     >
-                      <Pencil className="w-4 h-4 text-amber-400" />
+                      <Pencil className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                       <span>Draw Wireframe Sketch</span>
                     </button>
                   )}
@@ -292,7 +292,7 @@ export const IdeasView: React.FC = () => {
                 {/* MVP Scoped Features */}
                 <div className="space-y-2 pt-2" onClick={e => e.stopPropagation()}>
                   <div className="text-xs font-black text-content-muted flex items-center gap-1.5">
-                    <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
+                    <CheckSquare className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
                     <span>MVP Feature Scope ({idea.mvpFeatures?.length || 0})</span>
                   </div>
 
@@ -347,7 +347,7 @@ export const IdeasView: React.FC = () => {
                       </span>
                     )}
                     {idea.monetization && (
-                      <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 font-bold border border-emerald-500/20 font-mono">
+                      <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-500/20 font-mono">
                         {idea.monetization}
                       </span>
                     )}
@@ -376,7 +376,7 @@ export const IdeasView: React.FC = () => {
                       setSelectedProjectId(idea.convertedProjectId);
                       setCurrentView('projects');
                     }}
-                    className="flex items-center gap-1.5 text-xs font-bold text-indigo-400 hover:text-indigo-300"
+                    className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-300"
                   >
                     <span>View Project →</span>
                   </button>
@@ -392,7 +392,7 @@ export const IdeasView: React.FC = () => {
                   </button>
                 )}
                 {conversionError && conversionErrorIdeaId === idea.id && convertingIdeaId === null && (
-                  <p className="w-full text-right text-xs text-rose-300" role="alert">{conversionError}</p>
+                  <p className="w-full text-right text-xs text-rose-700 dark:text-rose-300" role="alert">{conversionError}</p>
                 )}
               </div>
             </div>

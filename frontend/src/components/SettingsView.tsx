@@ -25,14 +25,17 @@ import {
   Cpu,
   Check,
   Monitor,
-  FolderOpen
+  FolderOpen,
+  Tags
 } from 'lucide-react';
 import { PageHeader } from './ui';
 import { DocEditor } from './DocEditor';
 import { FilterManager } from './FilterManager';
 import { PathPickerModal } from './PathPickerModal';
+import { IdeaCategoryManager } from './IdeaCategoryManager';
 
-type SettingsSection = 'documents' | 'filters' | 'models' | 'project-folder' | 'desktop' | 'data' | 'account';
+type SettingsSection = 'documents' | 'filters' | 'idea-categories' | 'models' | 'project-folder' | 'desktop' | 'data' | 'account';
+const UNCATEGORIZED_FILTER_ID = 'uncategorized';
 
 const formatDate = (iso: string) => {
   try {
@@ -246,7 +249,12 @@ export const SettingsView: React.FC = () => {
   const filteredDocs = useMemo(() => {
     const q = query.trim().toLowerCase();
     return docs.filter(d => {
-      if (selectedFilterId !== 'all' && d.filterId !== selectedFilterId) return false;
+      if (selectedFilterId !== 'all') {
+        const matchesCategory = selectedFilterId === UNCATEGORIZED_FILTER_ID
+          ? !d.filterId
+          : d.filterId === selectedFilterId;
+        if (!matchesCategory) return false;
+      }
       if (!q) return true;
       return (
         d.title.toLowerCase().includes(q) ||
@@ -256,7 +264,9 @@ export const SettingsView: React.FC = () => {
   }, [docs, query, selectedFilterId]);
 
   const handleSaved = (doc: ProjectDoc) => {
-    setDocs(prev => prev.map(d => (d.id === doc.id ? doc : d)));
+    setDocs(prev => prev.some(d => d.id === doc.id)
+      ? prev.map(d => (d.id === doc.id ? doc : d))
+      : [doc, ...prev]);
     void loadDocs();
     if (openDocId === 'new') setOpenDocId(null);
   };
@@ -289,7 +299,7 @@ export const SettingsView: React.FC = () => {
     return (
       <div className="space-y-6 pb-12 animate-in fade-in">
         <div>
-          <span className="text-[12px] font-black uppercase tracking-[0.2em] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">
+          <span className="text-[12px] font-black uppercase tracking-[0.2em] text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">
             SETTINGS · SKILLS
           </span>
           <h1 className="text-3xl font-black text-content tracking-tight mt-1">
@@ -311,6 +321,7 @@ export const SettingsView: React.FC = () => {
   const sections: { id: SettingsSection; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'documents', label: 'Skills', icon: FileCog },
     { id: 'filters', label: 'Filters', icon: ListFilter },
+    { id: 'idea-categories', label: 'Idea categories', icon: Tags },
     { id: 'models', label: 'Launch Presets', icon: Cpu },
     { id: 'project-folder', label: 'Project folder', icon: FolderOpen },
     ...(isDesktop ? [{ id: 'desktop' as SettingsSection, label: 'Desktop app', icon: Monitor }] : []),
@@ -332,10 +343,10 @@ export const SettingsView: React.FC = () => {
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
               section === id
                 ? 'bg-slate-900 dark:bg-white/10 text-white shadow-sm border border-slate-900 dark:border-white/15'
-                : 'text-content-faint hover:text-white hover:bg-surface-3 border border-transparent'
+                : 'text-content-faint hover:text-content hover:bg-surface-3 border border-transparent'
             }`}
           >
-            <Icon className={`w-4 h-4 ${section === id ? 'text-indigo-400' : 'text-content-faint'}`} />
+            <Icon className={`w-4 h-4 ${section === id ? 'text-indigo-600 dark:text-indigo-400' : 'text-content-faint'}`} />
             <span>{label}</span>
           </button>
         ))}
@@ -366,7 +377,7 @@ export const SettingsView: React.FC = () => {
           </div>
 
           {docsError && (
-            <div className="px-4 py-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+            <div className="px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
               {docsError}
             </div>
           )}
@@ -377,10 +388,18 @@ export const SettingsView: React.FC = () => {
                 <Filter className="w-3.5 h-3.5" />
                 Filters
               </span>
-              {['all', ...agentFilters.map(f => f.id)].map(fid => {
+              {['all', ...agentFilters.map(f => f.id), UNCATEGORIZED_FILTER_ID].map(fid => {
                 const isSelected = selectedFilterId === fid;
-                const label = fid === 'all' ? 'All' : agentFilters.find(f => f.id === fid)?.name || fid;
-                const count = fid === 'all' ? docs.length : docs.filter(d => d.filterId === fid).length;
+                const label = fid === 'all'
+                  ? 'All'
+                  : fid === UNCATEGORIZED_FILTER_ID
+                    ? 'Uncategorized'
+                    : agentFilters.find(f => f.id === fid)?.name || fid;
+                const count = fid === 'all'
+                  ? docs.length
+                  : fid === UNCATEGORIZED_FILTER_ID
+                    ? docs.filter(d => !d.filterId).length
+                    : docs.filter(d => d.filterId === fid).length;
                 return (
                   <button
                     key={fid}
@@ -389,7 +408,7 @@ export const SettingsView: React.FC = () => {
                     className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black transition-all ${
                       isSelected
                         ? 'bg-indigo-600 text-white shadow-sm'
-                        : 'bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong'
+                        : 'bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong'
                     }`}
                   >
                     {label}
@@ -412,11 +431,11 @@ export const SettingsView: React.FC = () => {
             </div>
           ) : filteredDocs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center border border-dashed border-line rounded-2xl bg-surface/50">
-              <FileCode2 className="w-10 h-10 text-slate-700 mb-3" />
+              <FileCode2 className="w-10 h-10 text-content-faint mb-3" />
               <p className="text-sm font-black text-content-faint">
                 {query ? 'No matching skills' : (docs.length > 0 ? 'No skills match this filter' : 'No skills yet')}
               </p>
-              <p className="text-xs text-slate-600 mt-1">
+              <p className="text-xs text-content-faint mt-1">
                 {query ? 'Try a different search.' : (docs.length > 0 ? 'Try a different filter.' : 'Create your first skill — link it to any number of projects.')}
               </p>
               {!query && (
@@ -444,7 +463,7 @@ export const SettingsView: React.FC = () => {
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-3 flex-1 min-w-0">
                         <div className="mt-0.5 p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 shrink-0">
-                          <FileText className="w-4 h-4 text-indigo-400" />
+                          <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
@@ -454,14 +473,18 @@ export const SettingsView: React.FC = () => {
                             <span className="text-[12px] font-mono font-bold text-content-faint">
                               .md · {formatDate(doc.updatedAt)}
                             </span>
-                            {doc.filterName && (
-                              <span className="text-[12px] font-black text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
+                            {doc.filterName ? (
+                              <span className="text-[12px] font-black text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
                                 {doc.filterName}
+                              </span>
+                            ) : (
+                              <span className="text-[12px] font-black text-content-faint bg-surface-2 border border-line px-2 py-0.5 rounded-md">
+                                Uncategorized
                               </span>
                             )}
                             {isOrphan && (
                               <span
-                                className="text-[12px] font-mono font-bold text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md"
+                                className="text-[12px] font-mono font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md"
                                 title="Not linked to any project — visible only here. Edit the skill and pick projects to link it."
                               >
                                 unlinked
@@ -472,7 +495,7 @@ export const SettingsView: React.FC = () => {
                           {/* Linked project chips */}
                           <div className="flex flex-wrap items-center gap-1 mt-2">
                             {doc.projectIds.length === 0 ? (
-                              <span className="text-[12px] text-slate-600 font-mono">no linked projects</span>
+                              <span className="text-[12px] text-content-faint font-mono">no linked projects</span>
                             ) : (
                               <>
                                 {doc.projectIds.slice(0, 3).map(pid => {
@@ -488,7 +511,7 @@ export const SettingsView: React.FC = () => {
                                   );
                                 })}
                                 {doc.projectIds.length > 3 && (
-                                  <span className="text-[12px] font-mono font-bold text-indigo-300">+{doc.projectIds.length - 3}</span>
+                                  <span className="text-[12px] font-mono font-bold text-indigo-700 dark:text-indigo-300">+{doc.projectIds.length - 3}</span>
                                 )}
                               </>
                             )}
@@ -533,6 +556,8 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
+      {section === 'idea-categories' && <IdeaCategoryManager />}
+
       {/* SECTION: FILTERS */}
       {section === 'filters' && <FilterManager />}
 
@@ -553,7 +578,7 @@ export const SettingsView: React.FC = () => {
               <input value={newModelLabel} onChange={e => setNewModelLabel(e.target.value)} placeholder="Preset name" aria-label="Preset name" className="min-w-0 w-full sm:flex-1 sm:min-w-[10rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs text-content" />
               <button type="button" onClick={addModelPreset} disabled={!newModelId.trim() || !newModelLabel.trim()} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white disabled:opacity-40"><Plus className="w-3.5 h-3.5" />Add</button>
             </div>
-            {modelPresetError && <p className="text-xs text-rose-300" role="alert">{modelPresetError}</p>}
+            {modelPresetError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{modelPresetError}</p>}
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-content-faint" /><input value={presetSearch} onChange={e => setPresetSearch(e.target.value)} placeholder="Search presets…" aria-label="Search launch presets" className="w-full rounded-xl bg-surface border border-line py-2 pl-9 pr-3 text-xs text-content" /></div>
@@ -562,10 +587,10 @@ export const SettingsView: React.FC = () => {
           <div className="space-y-2">
             {filteredModelPresets.length === 0 ? <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint">{modelPresets.length === 0 ? 'No launch presets yet.' : 'No presets match your filters.'}</div> : filteredModelPresets.map(preset => (
               <div key={preset.id} className="flex items-center gap-3 rounded-2xl bg-surface border border-line px-4 py-3">
-                <span className="w-20 text-[11px] font-black uppercase tracking-wider text-indigo-300">{preset.tool}</span>
+                <span className="w-20 text-[11px] font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300">{preset.tool}</span>
                 {editingPresetId === preset.id ? <div className="flex-1 min-w-0 flex flex-wrap gap-2"><input value={editingModelLabel} onChange={e => setEditingModelLabel(e.target.value)} placeholder="Name" aria-label="Preset name" className="min-w-0 w-full sm:w-32 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs text-content" /><input value={editingModelId} onChange={e => setEditingModelId(e.target.value)} className="min-w-0 flex-1 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-mono text-content" /><select value={editingModelReasoningEffort} onChange={e => setEditingModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-24 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>{preset.tool === 'codex' && <select value={editingModelMode} onChange={e => setEditingModelMode(e.target.value as 'build' | 'plan')} className="w-24 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select>}</div> : <span className="flex-1 min-w-0"><span className="block truncate text-sm font-black text-content">{preset.label}</span><span className="block truncate text-[11px] text-content-faint">{preset.tool} · {preset.modelId} · {preset.reasoningEffort}{preset.tool === 'codex' ? ` · ${preset.mode}` : ''}</span></span>}
-                <button type="button" onClick={() => updateModelPreset(preset, { enabled: !preset.enabled })} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-black ${preset.enabled ? 'border-emerald-500/30 text-emerald-300' : 'border-line text-content-faint'}`}>{preset.enabled ? 'Enabled' : 'Disabled'}</button>
-                {editingPresetId === preset.id ? <><button type="button" onClick={async () => { await updateModelPreset(preset, { modelId: editingModelId.trim(), reasoningEffort: editingModelReasoningEffort, mode: editingModelMode, label: editingModelLabel.trim() }); setEditingPresetId(null); }} disabled={!editingModelId.trim() || !editingModelLabel.trim()} className="p-1.5 text-emerald-300 disabled:opacity-40" title="Save launch preset"><Check className="w-4 h-4" /></button><button type="button" onClick={() => setEditingPresetId(null)} className="p-1.5 text-content-faint hover:text-white" title="Cancel editing">Cancel</button></> : <button type="button" onClick={() => { setEditingPresetId(preset.id); setEditingModelId(preset.modelId); setEditingModelReasoningEffort(preset.reasoningEffort); setEditingModelMode(preset.mode); setEditingModelLabel(preset.label); setModelPresetError(null); }} className="p-1.5 text-content-faint hover:text-white" title="Edit launch preset"><FileCog className="w-4 h-4" /></button>}
+                <button type="button" onClick={() => updateModelPreset(preset, { enabled: !preset.enabled })} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-black ${preset.enabled ? 'border-emerald-500/30 text-emerald-700 dark:text-emerald-300' : 'border-line text-content-faint'}`}>{preset.enabled ? 'Enabled' : 'Disabled'}</button>
+                {editingPresetId === preset.id ? <><button type="button" onClick={async () => { await updateModelPreset(preset, { modelId: editingModelId.trim(), reasoningEffort: editingModelReasoningEffort, mode: editingModelMode, label: editingModelLabel.trim() }); setEditingPresetId(null); }} disabled={!editingModelId.trim() || !editingModelLabel.trim()} className="p-1.5 text-emerald-700 dark:text-emerald-300 disabled:opacity-40" title="Save launch preset"><Check className="w-4 h-4" /></button><button type="button" onClick={() => setEditingPresetId(null)} className="p-1.5 text-content-faint hover:text-content" title="Cancel editing">Cancel</button></> : <button type="button" onClick={() => { setEditingPresetId(preset.id); setEditingModelId(preset.modelId); setEditingModelReasoningEffort(preset.reasoningEffort); setEditingModelMode(preset.mode); setEditingModelLabel(preset.label); setModelPresetError(null); }} className="p-1.5 text-content-faint hover:text-content" title="Edit launch preset"><FileCog className="w-4 h-4" /></button>}
                 <button type="button" onClick={async () => { if (window.confirm(`Delete launch preset "${preset.label}"?`)) { await api.delete(`/launcher-model-presets/${preset.id}/`); await loadModelPresets(); } }} className="p-1.5 text-content-faint hover:text-rose-400" title={`Delete launch preset ${preset.label}`}><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
@@ -589,7 +614,7 @@ export const SettingsView: React.FC = () => {
               <input value={projectFolderDraft} onChange={e => setProjectFolderDraft(e.target.value)} placeholder={projectFolderDefault || 'D:\\projects\\potential_projects'} className="min-w-0 flex-1 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
               <button type="button" onClick={() => setShowProjectFolderPicker(true)} className="flex items-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs font-black text-content hover:border-indigo-500"><FolderOpen className="w-4 h-4" />Choose</button>
             </div>
-            {projectFolderError && <p className="text-xs text-rose-300" role="alert">{projectFolderError}</p>}
+            {projectFolderError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{projectFolderError}</p>}
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={saveProjectFolder} disabled={projectFolderBusy || !projectFolderDraft.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Save folder</button>
               <button type="button" onClick={resetProjectFolder} disabled={projectFolderBusy || !projectFolderIsCustom} className="rounded-xl border border-line px-4 py-2 text-xs font-black text-content-faint hover:text-content disabled:opacity-40">Reset to app default</button>
@@ -618,7 +643,7 @@ export const SettingsView: React.FC = () => {
               />
               <span className="block text-[11px] text-content-faint">Use 1–65535. Changes take effect after restarting the app.</span>
             </label>
-            {desktopPortStatus && <p className={`text-xs ${desktopPortStatus.ok ? 'text-emerald-300' : 'text-rose-300'}`} role="alert">{desktopPortStatus.msg}</p>}
+            {desktopPortStatus && <p className={`text-xs ${desktopPortStatus.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`} role="alert">{desktopPortStatus.msg}</p>}
             <button type="button" onClick={saveDesktopPort} disabled={desktopPortBusy} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Save desktop setting</button>
           </div>
         </div>
@@ -631,8 +656,8 @@ export const SettingsView: React.FC = () => {
             <div
               className={`px-4 py-2.5 rounded-xl border text-xs font-bold ${
                 backupStatus.ok
-                  ? 'bg-emerald-950/30 border-emerald-900/50 text-emerald-300'
-                  : 'bg-rose-950/30 border-rose-900/50 text-rose-300'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/50 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300'
               }`}
             >
               {backupStatus.msg}
@@ -664,7 +689,7 @@ export const SettingsView: React.FC = () => {
               }}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-left transition-all disabled:opacity-40"
             >
-              <Download className="w-4 h-4 text-indigo-400 shrink-0" />
+              <Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
               <div>
                 <div className="text-xs font-black text-content">Export JSON Backup</div>
                 <div className="text-[13px] text-content-faint">Downloads a full snapshot of your workspace.</div>
@@ -672,7 +697,7 @@ export const SettingsView: React.FC = () => {
             </button>
 
             <label className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-2 border border-line hover:border-emerald-700 cursor-pointer text-left transition-all">
-              <Upload className="w-4 h-4 text-emerald-400 shrink-0" />
+              <Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <div>
                 <div className="text-xs font-black text-content">Restore JSON Backup</div>
                 <div className="text-[13px] text-content-faint">Imports a backup file into this workspace.</div>
@@ -683,7 +708,7 @@ export const SettingsView: React.FC = () => {
 
           <div className="p-5 rounded-2xl bg-surface border border-rose-950/60 space-y-4">
             <div>
-              <h3 className="text-sm font-black text-rose-300">Danger Zone</h3>
+              <h3 className="text-sm font-black text-rose-700 dark:text-rose-300">Danger Zone</h3>
               <p className="text-xs text-content-faint mt-0.5">
                 Deletes all server-side workspace data. This cannot be undone.
               </p>
@@ -692,25 +717,25 @@ export const SettingsView: React.FC = () => {
               type="button"
               disabled={isBusy}
               onClick={async () => {
-                if (!window.confirm('Reset workspace? This deletes all your projects/tasks/ideas/time entries/skills on the server.')) return;
+                if (!window.confirm('Purge all workspace data? This deletes all projects, tasks, ideas, time entries, skills, launch presets, and the saved project folder. Your account and app preferences stay intact.')) return;
                 setIsBusy(true);
                 try {
                   await resetDefaults();
-                  setBackupStatus({ ok: true, msg: 'Workspace cleared.' });
+                  setBackupStatus({ ok: true, msg: 'All workspace data was purged.' });
                   setCurrentView('dashboard');
                 } catch {
-                  setBackupStatus({ ok: false, msg: 'Reset failed.' });
+                  setBackupStatus({ ok: false, msg: 'Purge failed — no success message is shown until the workspace is confirmed empty.' });
                 } finally {
                   setIsBusy(false);
                   setTimeout(() => setBackupStatus(null), 4000);
                 }
               }}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-rose-950/20 border border-rose-900/50 hover:border-rose-700 text-left transition-all disabled:opacity-40"
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/50 hover:border-rose-700 text-left transition-all disabled:opacity-40"
             >
-              <RotateCcw className="w-4 h-4 text-rose-400 shrink-0" />
+              <RotateCcw className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
               <div>
-                <div className="text-xs font-black text-rose-200">Reset / Clear Server Data</div>
-                <div className="text-[13px] text-content-faint">Removes everything and starts fresh.</div>
+                <div className="text-xs font-black text-rose-700 dark:text-rose-200">Purge all workspace data</div>
+                <div className="text-[13px] text-content-faint">Removes every workspace record and verifies the result. Your account and app preferences stay intact.</div>
               </div>
             </button>
           </div>

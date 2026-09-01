@@ -28,7 +28,7 @@ class TaskFilter(django_filters.FilterSet):
 
 class IdeaFilter(django_filters.FilterSet):
     status = django_filters.CharFilter(field_name='status')
-    category = django_filters.CharFilter(field_name='category')
+    category = django_filters.CharFilter(field_name='category__name')
     class Meta:
         model = Idea
         fields = ['status', 'category']

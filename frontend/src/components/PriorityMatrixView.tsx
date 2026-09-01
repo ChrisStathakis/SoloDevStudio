@@ -86,7 +86,7 @@ export const PriorityMatrixView: React.FC = () => {
             className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all ${
               showCompleted
                 ? 'bg-white text-slate-900 border-white'
-                : 'bg-surface-2 text-content-faint border-line hover:text-white'
+                : 'bg-surface-2 text-content-faint border-line hover:text-content'
             }`}
           >
             {showCompleted ? 'Hide Completed' : 'Show Completed'}
@@ -160,7 +160,7 @@ export const PriorityMatrixView: React.FC = () => {
                         <div
                           key={task.id}
                           className={`p-3.5 rounded-2xl bg-surface-3 border border-line hover:border-line-strong shadow-sm transition-all ${
-                            task.completed ? 'opacity-50 bg-surface-inverse' : ''
+                            task.completed ? 'opacity-50 bg-surface-2' : ''
                           }`}
                         >
                           <div className="flex items-start justify-between gap-2.5">
@@ -170,7 +170,7 @@ export const PriorityMatrixView: React.FC = () => {
                               className="mt-0.5 p-0.5 text-content-faint hover:text-emerald-400 transition-colors shrink-0"
                             >
                               {task.completed ? (
-                                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                               ) : (
                                 <div className="w-4 h-4 rounded border-2 border-slate-600 hover:border-indigo-400" />
                               )}
@@ -198,7 +198,7 @@ export const PriorityMatrixView: React.FC = () => {
                                   </span>
                                 )}
                                 {task.timeSpentMinutes > 0 && (
-                                  <span className="flex items-center gap-0.5 text-emerald-400 font-mono font-semibold">
+                                  <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-mono font-semibold">
                                     <Clock className="w-3 h-3" />
                                     <span>{task.timeSpentMinutes}m spent</span>
                                   </span>
@@ -214,7 +214,7 @@ export const PriorityMatrixView: React.FC = () => {
                                   startTimer('pomodoro', task.projectId, task.id);
                                   setCurrentView('timetracker');
                                 }}
-                                className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30"
+                                className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30"
                                 title="Start Focus Timer"
                               >
                                 <Play className="w-3 h-3 fill-current" />

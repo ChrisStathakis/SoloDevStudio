@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { Milestone, Project, ProjectStage, Task, STAGE_CONFIG } from '../types';
 
@@ -93,7 +93,7 @@ export const MilestoneEditor: React.FC<Props> = ({ project, tasks, milestone, on
           </div>
         </div>
 
-        {error && <p className="text-xs text-rose-300" role="alert">{error}</p>}
+        {error && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-surface-2">Cancel</button>
           <button type="submit" disabled={saving || !title.trim()} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black disabled:opacity-50">{saving && <Check className="w-3.5 h-3.5 animate-pulse" />}{saving ? 'Saving…' : 'Save milestone'}</button>

@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 
 export type ButtonTone = 'primary' | 'secondary' | 'ghost' | 'danger' | 'success';
 
@@ -6,7 +6,7 @@ const buttonTones: Record<ButtonTone, string> = {
   primary: 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-400 active:bg-indigo-600',
   secondary: 'bg-surface-2 text-content border border-line hover:bg-surface-3 hover:border-line-strong',
   ghost: 'text-content-muted hover:bg-surface-2 hover:text-content',
-  danger: 'bg-rose-500/10 text-rose-300 border border-rose-500/20 hover:bg-rose-500/20',
+  danger: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-500/20 hover:bg-rose-500/20',
   success: 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20 hover:bg-emerald-400',
 };
 
@@ -43,10 +43,10 @@ export function Card({ className = '', children, ...props }: React.HTMLAttribute
 export function Badge({ tone = 'neutral', className = '', children }: { tone?: 'neutral' | 'indigo' | 'emerald' | 'amber' | 'rose'; className?: string; children: React.ReactNode }) {
   const tones = {
     neutral: 'bg-surface-2 text-content-muted border-line',
-    indigo: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20',
-    emerald: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
-    amber: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
-    rose: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
+    indigo: 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20',
+    emerald: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20',
+    amber: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20',
+    rose: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20',
   };
   return <span className={`inline-flex items-center rounded-lg border px-2 py-1 text-[11px] font-bold ${tones[tone]} ${className}`}>{children}</span>;
 }
@@ -55,7 +55,7 @@ export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?:
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div className="min-w-0">
-        {eyebrow && <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-300/80">{eyebrow}</p>}
+        {eyebrow && <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-600 dark:text-indigo-300/80">{eyebrow}</p>}
         <h1 className="text-3xl font-extrabold tracking-[-0.04em] text-content sm:text-4xl">{title}</h1>
         {description && <p className="mt-2 max-w-2xl text-sm leading-6 text-content-muted">{description}</p>}
       </div>

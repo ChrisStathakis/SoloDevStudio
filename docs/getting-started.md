@@ -66,7 +66,7 @@ npm run dev:vite
 For a self-contained native Windows app, install the desktop packaging dependency and JavaScript packages:
 
 ```powershell
-py -m pip install -r server\requirements-desktop.txt
+py -3.11 -m pip install -r server\requirements-desktop.txt
 npm install
 npm install --prefix frontend
 ```

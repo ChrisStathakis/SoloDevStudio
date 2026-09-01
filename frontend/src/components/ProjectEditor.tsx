@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Save, X } from 'lucide-react';
 import { AppCategory, Project, ProjectStage, STAGE_CONFIG } from '../types';
 import { PathPickerModal } from './PathPickerModal';
@@ -110,7 +110,7 @@ function ListEditor({ label, values, onChange, placeholder }: { label: string; v
             />
             <button type="button" onClick={() => move(index, -1)} disabled={index === 0} className="p-2 rounded-lg border border-line text-content-faint hover:text-content disabled:opacity-30" title="Move up"><ArrowUp className="w-3.5 h-3.5" /></button>
             <button type="button" onClick={() => move(index, 1)} disabled={index === values.length - 1} className="p-2 rounded-lg border border-line text-content-faint hover:text-content disabled:opacity-30" title="Move down"><ArrowDown className="w-3.5 h-3.5" /></button>
-            <button type="button" onClick={() => remove(index)} className="p-2 rounded-lg border border-line text-rose-300 hover:text-rose-200" title="Remove"><X className="w-3.5 h-3.5" /></button>
+            <button type="button" onClick={() => remove(index)} className="p-2 rounded-lg border border-line text-rose-700 dark:text-rose-300 hover:text-rose-200" title="Remove"><X className="w-3.5 h-3.5" /></button>
           </div>
         ))}
         <div className="flex items-center gap-2">
@@ -146,14 +146,14 @@ export function ProjectEditor({ project, saving, error, onSave, onCancel }: {
     <form onSubmit={event => { event.preventDefault(); void onSave(draft); }} className="p-6 rounded-3xl bg-surface border border-indigo-500/50 shadow-xl space-y-7">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-indigo-400 font-mono">Project editor</div>
+          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-indigo-600 dark:text-indigo-400 font-mono">Project editor</div>
           <h2 className="text-xl font-black text-content mt-1">Edit Project</h2>
           <p className="text-xs text-content-faint mt-1">Update all project-level details. Tasks, milestones, time logs, and the generated prompt stay in their own tabs.</p>
         </div>
         <button type="button" onClick={onCancel} className="p-2 rounded-xl border border-line text-content-faint hover:text-content" title="Cancel"><X className="w-4 h-4" /></button>
       </div>
 
-      {error && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+      {error && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-700 dark:text-rose-200">{error}</div>}
 
       <section className="space-y-4">
         <h3 className="text-xs font-black uppercase tracking-[0.18em] text-content font-mono">Identity & brief</h3>

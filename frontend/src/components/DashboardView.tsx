@@ -71,11 +71,11 @@ export const DashboardView: React.FC = () => {
     <div className="space-y-8 pb-12 animate-in fade-in">
       {/* NEW: Overdue alert banner (server timeline groups) */}
       {overdueCount !== null && overdueCount > 0 && (
-        <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-rose-950/30 border border-rose-900/50 text-rose-200 text-xs">
+        <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-200 text-xs">
           <div className="flex items-center gap-2 font-bold">
-            <AlertCircle className="w-4 h-4 text-rose-400" />
+            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
             <span>{overdueCount} overdue {overdueCount === 1 ? 'item' : 'items'} need attention</span>
-            <span className="font-normal text-rose-300/70 hidden sm:inline">— launches, milestones or task deadlines past due</span>
+            <span className="font-normal text-rose-700 dark:text-rose-300/70 hidden sm:inline">— launches, milestones or task deadlines past due</span>
           </div>
           <button type="button" onClick={() => setCurrentView('timeline')} className="px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black shrink-0">View Timeline →</button>
         </div>
@@ -491,7 +491,7 @@ export const DashboardView: React.FC = () => {
                             startTimer('pomodoro', session.projectId, session.taskId);
                             setCurrentView('timetracker');
                           }}
-                          className="p-1.5 rounded-lg text-content-faint hover:text-slate-900 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
+                          className="p-1.5 rounded-lg text-content-faint hover:text-slate-900 dark:hover:text-content hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
                           title="Start another session like this"
                         >
                           <Play className="w-3.5 h-3.5 fill-current" />

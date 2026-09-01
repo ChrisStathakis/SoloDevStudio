@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
-    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter,
+    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode
 )
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
@@ -354,6 +354,7 @@ class TaskSerializer(serializers.ModelSerializer):
 # ---------- Idea ----------
 
 class IdeaSerializer(serializers.ModelSerializer):
+    category = serializers.SlugRelatedField(slug_field='name', queryset=IdeaCategory.objects.all())
     class Meta:
         model = Idea
         fields = [
@@ -372,6 +373,27 @@ class IdeaSerializer(serializers.ModelSerializer):
         if not isinstance(value, list):
             raise serializers.ValidationError("tags must be a list.")
         return value
+
+
+class IdeaCategorySerializer(serializers.ModelSerializer):
+    idea_count = serializers.IntegerField(source='ideas.count', read_only=True)
+
+    class Meta:
+        model = IdeaCategory
+        fields = ['id', 'name', 'order', 'idea_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'idea_count', 'created_at', 'updated_at']
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Name is required.')
+        return value
+
+    def create(self, validated_data):
+        if 'order' not in validated_data:
+            last = IdeaCategory.objects.order_by('-order').first()
+            validated_data['order'] = (last.order + 1) if last else 0
+        return super().create(validated_data)
 
 # ---------- Agent Filter ----------
 

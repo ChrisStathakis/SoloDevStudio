@@ -243,6 +243,16 @@ export function mapTimeEntryToApi(e: Omit<TimeEntry, 'id'> & { projectId: string
 
 export function mapProjectDocFromApi(raw: any): ProjectDoc {
   const ids: any[] = Array.isArray(raw.projects) ? raw.projects : [];
+  // Django normally serializes the FK as a UUID string, but keep this tolerant
+  // of nested filter payloads and legacy `filter_id` responses. This prevents
+  // linked skills from losing their category when the API representation
+  // differs between endpoints/imported data.
+  const rawFilter = raw.filter ?? raw.filter_id ?? null;
+  const filterId = rawFilter && typeof rawFilter === 'object'
+    ? rawFilter.id ?? null
+    : rawFilter;
+  const filterName = raw.filter_name ?? (rawFilter && typeof rawFilter === 'object' ? rawFilter.name : null) ?? null;
+  const filterSlug = raw.filter_slug ?? (rawFilter && typeof rawFilter === 'object' ? rawFilter.slug : null) ?? null;
   return {
     id: String(raw.id),
     projectIds: ids.map(x => String(x)),
@@ -250,9 +260,9 @@ export function mapProjectDocFromApi(raw: any): ProjectDoc {
       ? raw.project_links.map((link: any) => ({ project: String(link.project), active: Boolean(link.active) }))
       : undefined,
     active: typeof raw.active === 'boolean' ? raw.active : null,
-    filterId: raw.filter ? String(raw.filter) : null,
-    filterName: raw.filter_name ?? null,
-    filterSlug: raw.filter_slug ?? null,
+    filterId: filterId ? String(filterId) : null,
+    filterName,
+    filterSlug,
     title: raw.title,
     content: raw.content || '',
     createdAt: raw.created_at,

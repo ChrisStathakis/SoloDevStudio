@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Project,
   Task,
@@ -131,6 +131,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pomodoroType: 'work',
     pomodorosCompleted: 0,
   });
+  const fetchGenerationRef = useRef(0);
 
   // Theme
   useEffect(() => {
@@ -159,8 +160,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Data fetch
   const fetchAll = useCallback(async () => {
+    const generation = ++fetchGenerationRef.current;
     if (!isAuthenticated) {
-      setProjects([]); setTasks([]); setIdeas([]); setTimeEntries([]);
+      if (generation === fetchGenerationRef.current) {
+        setProjects([]); setTasks([]); setIdeas([]); setTimeEntries([]);
+      }
       return;
     }
     setIsDataLoading(true);
@@ -171,6 +175,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         api.get('/ideas/', { params: { page_size: 100 } }),
         api.get('/time-entries/', { params: { page_size: 100 } }),
       ]);
+      if (generation !== fetchGenerationRef.current) return;
       setProjects(unwrapPaginated<any>(projRes.data).map(mapProjectFromApi));
       setTasks(unwrapPaginated<any>(tasksRes.data).map(mapTaskFromApi));
       setIdeas(unwrapPaginated<any>(ideasRes.data).map(mapIdeaFromApi));
@@ -178,7 +183,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error('Failed to fetch data', e);
     } finally {
-      setIsDataLoading(false);
+      if (generation === fetchGenerationRef.current) setIsDataLoading(false);
     }
   }, [isAuthenticated]);
 
@@ -536,27 +541,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetDefaults = async () => {
-    // For now: delete all user data then refetch (server will be empty)
-    // Delete in reverse dependency order: time entries, tasks, ideas, projects
+    const resetGeneration = ++fetchGenerationRef.current;
     try {
-      // Fetch ids (already in state, but refetch to be safe)
-      const [projRes, tasksRes, ideasRes, timeRes] = await Promise.all([
-        api.get('/projects/', { params: { page_size: 100 } }),
-        api.get('/tasks/', { params: { page_size: 100 } }),
-        api.get('/ideas/', { params: { page_size: 100 } }),
-        api.get('/time-entries/', { params: { page_size: 100 } }),
-      ]);
-      const timeIds: string[] = unwrapPaginated<any>(timeRes.data).map((x: any) => String(x.id));
-      const taskIds: string[] = unwrapPaginated<any>(tasksRes.data).map((x: any) => String(x.id));
-      const ideaIds: string[] = unwrapPaginated<any>(ideasRes.data).map((x: any) => String(x.id));
-      const projIds: string[] = unwrapPaginated<any>(projRes.data).map((x: any) => String(x.id));
-      for (const id of timeIds) await api.delete(`/time-entries/${id}/`).catch(() => {});
-      for (const id of taskIds) await api.delete(`/tasks/${id}/`).catch(() => {});
-      for (const id of ideaIds) await api.delete(`/ideas/${id}/`).catch(() => {});
-      for (const id of projIds) await api.delete(`/projects/${id}/`).catch(() => {});
-      await fetchAll();
+      const resetResponse = await api.post('/workspace/reset/');
+      if (resetResponse.data?.success !== true) throw new Error('The workspace reset was not completed.');
+
+      const verification = await api.get('/export/');
+      const remaining = ['projects', 'tasks', 'ideas', 'timeEntries', 'docs', 'modelPresets']
+        .filter(key => Array.isArray(verification.data?.[key]) && verification.data[key].length > 0);
+      if (remaining.length > 0) {
+        throw new Error(`The workspace still contains: ${remaining.join(', ')}.`);
+      }
+
+      if (resetGeneration !== fetchGenerationRef.current) return;
+      setProjects([]);
+      setTasks([]);
+      setIdeas([]);
+      setTimeEntries([]);
+      setSelectedProjectId(null);
+      setSelectedSparkId(null);
     } catch (e) {
       console.error('resetDefaults failed', e);
+      throw e;
     }
   };
 

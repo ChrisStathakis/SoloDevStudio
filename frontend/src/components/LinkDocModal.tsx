@@ -93,7 +93,7 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-xl text-content-faint hover:text-white hover:bg-surface-3 transition-colors"
+            className="p-1.5 rounded-xl text-content-faint hover:text-content hover:bg-surface-3 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -115,7 +115,7 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
         </div>
 
         {error && (
-          <div className="mx-5 mb-3 px-3 py-2 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+          <div className="mx-5 mb-3 px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
             {error}
           </div>
         )}
@@ -149,14 +149,14 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
                   onClick={() => handleLink(doc)}
                   className={`group w-full text-left p-3.5 rounded-2xl border transition-all ${
                     justLinked
-                      ? 'bg-emerald-500/5 border-emerald-900/50 opacity-70'
+                      ? 'bg-emerald-500/5 border-emerald-200 dark:border-emerald-900/50 opacity-70'
                       : 'bg-surface-2 border-line hover:border-indigo-700 disabled:opacity-40'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="mt-0.5 p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 shrink-0">
-                        <FileText className="w-3.5 h-3.5 text-indigo-400" />
+                        <FileText className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
                       </div>
                       <div className="min-w-0">
                         <span className="block text-xs font-black text-content truncate">{doc.title}</span>
@@ -170,9 +170,9 @@ export const LinkDocModal: React.FC<LinkDocModalProps> = ({ projectId, linkedIds
 
                     <span className="shrink-0">
                       {justLinked ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                       ) : isLinking ? (
-                        <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+                        <Loader2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 animate-spin" />
                       ) : (
                         <Link2 className="w-4 h-4 text-content-faint group-hover:text-indigo-400 transition-colors" />
                       )}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { Folder, File as FileIcon, ChevronUp, X, Loader2, HardDrive } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -91,13 +91,13 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-line">
           <div className="flex items-center gap-2 text-sm font-black text-content">
-            {mode === 'folder' ? <Folder className="w-4 h-4 text-indigo-400" /> : <FileIcon className="w-4 h-4 text-emerald-400" />}
+            {mode === 'folder' ? <Folder className="w-4 h-4 text-indigo-600 dark:text-indigo-400" /> : <FileIcon className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
             <span>{title || (mode === 'folder' ? 'Select Folder' : 'Select File')}</span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-surface-2 border border-line text-content-faint hover:text-white transition-colors"
+            className="p-1.5 rounded-lg bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
             title="Close"
           >
             <X className="w-4 h-4" />
@@ -110,7 +110,7 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
             type="button"
             onClick={handleUp}
             disabled={loading}
-            className="p-1.5 rounded-lg bg-surface-3 border border-line text-content hover:text-white transition-colors disabled:opacity-40"
+            className="p-1.5 rounded-lg bg-surface-3 border border-line text-content hover:text-content transition-colors disabled:opacity-40"
             title="Up one level"
           >
             <ChevronUp className="w-4 h-4" />
@@ -128,7 +128,7 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
             </div>
           )}
           {!loading && error && (
-            <div className="px-3 py-3 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+            <div className="px-3 py-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
               {error}
             </div>
           )}
@@ -156,7 +156,7 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
                 } ${disabledFile ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {entry.is_dir ? (
-                  isRoots ? <HardDrive className="w-4 h-4 text-indigo-400 shrink-0" /> : <Folder className="w-4 h-4 text-indigo-400 shrink-0" />
+                  isRoots ? <HardDrive className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" /> : <Folder className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
                 ) : (
                   <FileIcon className="w-4 h-4 text-content-faint shrink-0" />
                 )}

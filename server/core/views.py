@@ -8,9 +8,10 @@ from pathlib import Path
 from datetime import timedelta, date, datetime
 from .pathutils import normalize_path, resolve_venv
 from django.utils import timezone
-from django.db import transaction
+from django.db import connection, transaction
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.http import HttpResponse
 from rest_framework import viewsets, status, permissions, filters
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
@@ -18,17 +19,18 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
 from .serializers import (
     UserSerializer, RegisterSerializer,
     ProjectSerializer, MilestoneSerializer,
     TaskSerializer, SubtaskSerializer,
-    IdeaSerializer, TimeEntrySerializer,
+    IdeaSerializer, IdeaCategorySerializer, TimeEntrySerializer,
     ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer
 )
 from .filters import ProjectFilter, TaskFilter, IdeaFilter, TimeEntryFilter, ProjectDocFilter
 from .permissions import IsOwner
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
+from .pdf_exports import idea_pdf, project_pdf
 
 User = get_user_model()
 
@@ -234,6 +236,21 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+    @action(detail=True, methods=['get'], url_path='export-pdf')
+    def export_pdf(self, request, pk=None):
+        project = self.get_object()
+        tasks = list(
+            Task.objects.filter(project=project)
+            .prefetch_related('subtasks')
+            .order_by('-created_at')
+        )
+        time_entries = list(TimeEntry.objects.filter(project=project).order_by('-timestamp'))
+        filename, content = project_pdf(project, tasks, time_entries)
+        response = HttpResponse(content, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['Content-Length'] = len(content)
+        return response
 
     def _manage_initial_prompt(self, request, project):
         prompt = ProjectLaunchPrompt.objects.filter(project=project).first()
@@ -602,6 +619,15 @@ class IdeaViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
+    @action(detail=True, methods=['get'], url_path='export-pdf')
+    def export_pdf(self, request, pk=None):
+        idea = self.get_object()
+        filename, content = idea_pdf(idea)
+        response = HttpResponse(content, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['Content-Length'] = len(content)
+        return response
+
     @action(detail=True, methods=['post'], url_path='convert')
     def convert_to_project(self, request, pk=None):
         idea = self.get_object()
@@ -637,7 +663,7 @@ class IdeaViewSet(viewsets.ModelViewSet):
                     monetization=idea.monetization,
                     mvp_features=idea.mvp_features or [],
                     tags=idea.tags or [],
-                    category=idea.category,
+                    category=idea.category.name,
                     current_stage=ProjectStage.PLANNING,
                     start_date=today,
                     target_deadline=deadline,
@@ -699,6 +725,22 @@ class LauncherModelPresetViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+
+class IdeaCategoryViewSet(viewsets.ModelViewSet):
+    serializer_class = IdeaCategorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+    queryset = IdeaCategory.objects.all()
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.ideas.exists():
+            return Response(
+                {'detail': 'This category is still assigned to one or more ideas. Reassign those ideas before deleting it.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 # ---------- Time Entries ----------
 
@@ -772,6 +814,60 @@ def export_data_view(request):
         "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
     }
     return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def reset_workspace_view(request):
+    """Delete every user-owned workspace record in one atomic operation."""
+    user = request.user
+    with transaction.atomic():
+        project_ids = list(Project.objects.filter(owner=user).values_list('id', flat=True))
+        doc_ids = list(ProjectDoc.objects.filter(owner=user).values_list('id', flat=True))
+        deleted = {
+            'projects': len(project_ids),
+            'tasks': Task.objects.filter(project__owner=user).count(),
+            'ideas': Idea.objects.filter(owner=user).count(),
+            'timeEntries': TimeEntry.objects.filter(owner=user).count(),
+            'docs': len(doc_ids),
+            'modelPresets': LauncherModelPreset.objects.filter(owner=user).count(),
+        }
+
+        # Migration 0018 replaced Django's automatic M2M table with
+        # ProjectAgentLink, but early local databases retain the old table.
+        # Django no longer knows about it, so its rows must be removed before
+        # deleting projects or skills or SQLite rejects the transaction.
+        legacy_link_table = 'core_projectdoc_projects'
+        if legacy_link_table in connection.introspection.table_names() and (project_ids or doc_ids):
+            clauses = []
+            params = []
+            if doc_ids:
+                placeholders = ', '.join(['%s'] * len(doc_ids))
+                clauses.append(f'projectdoc_id IN ({placeholders})')
+                params.extend(value.hex for value in doc_ids)
+            if project_ids:
+                placeholders = ', '.join(['%s'] * len(project_ids))
+                clauses.append(f'project_id IN ({placeholders})')
+                params.extend(value.hex for value in project_ids)
+            with connection.cursor() as cursor:
+                cursor.execute(f'DELETE FROM {legacy_link_table} WHERE {" OR ".join(clauses)}', params)
+
+        # Delete direct user-owned records first. Project deletion cascades to
+        # milestones, subtasks, launch prompts, and project-skill links.
+        TimeEntry.objects.filter(owner=user).delete()
+        ProjectDoc.objects.filter(owner=user).delete()
+        LauncherModelPreset.objects.filter(owner=user).delete()
+        Idea.objects.filter(owner=user).delete()
+        Project.objects.filter(owner=user).delete()
+
+        # This setting is part of an exported workspace, unlike sign-in and
+        # device preferences such as theme and desktop port.
+        if user.potential_projects_root:
+            user.potential_projects_root = ''
+            user.save(update_fields=['potential_projects_root'])
+
+    return Response({'success': True, 'deleted': deleted})
+
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
@@ -956,6 +1052,12 @@ def import_data_view(request):
                 for k, v in i.items():
                     if k in key_map:
                         mapped[key_map[k]] = v
+                category_name = str(mapped.pop('category', '') or 'Web App / SaaS').strip()
+                category, _ = IdeaCategory.objects.get_or_create(
+                    name=category_name[:50],
+                    defaults={'order': IdeaCategory.objects.count()},
+                )
+                mapped['category'] = category
                 mapped['owner'] = user
                 Idea.objects.create(**mapped)
                 imported["ideas"] += 1

@@ -168,9 +168,9 @@ export const TimelineDeadlinesView: React.FC = () => {
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          {isOverdue && <AlertCircle className="w-4 h-4 text-rose-400" />}
+          {isOverdue && <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />}
           <h3 className={`text-xs font-black uppercase tracking-[0.2em] font-mono ${
-            isOverdue ? 'text-rose-400' : 'text-content-faint'
+            isOverdue ? 'text-rose-600 dark:text-rose-400' : 'text-content-faint'
           }`}>
             {title} ({items.length})
           </h3>
@@ -186,9 +186,9 @@ export const TimelineDeadlinesView: React.FC = () => {
               }}
               className={`p-4 rounded-2xl bg-surface border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 group ${
                 item.completed
-                  ? 'border-line opacity-50 bg-surface-inverse'
+                  ? 'border-line opacity-50 bg-surface-2'
                   : isOverdue
-                  ? 'border-rose-900/60 bg-rose-950/10 hover:border-rose-500'
+                  ? 'border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/10 hover:border-rose-500'
                   : 'border-line shadow-md hover:border-line-strong'
               }`}
             >
@@ -202,9 +202,9 @@ export const TimelineDeadlinesView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <span className={`text-[12px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${
                       item.type === 'launch'
-                        ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-300'
+                        ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300'
                         : item.type === 'milestone'
-                        ? 'bg-purple-500/10 border border-purple-500/20 text-purple-300'
+                        ? 'bg-purple-500/10 border border-purple-500/20 text-purple-700 dark:text-purple-300'
                         : 'bg-surface-3 border border-line-strong/60 text-content-muted'
                     }`}>
                       {item.type === 'launch' ? '🚀 Target Launch' : item.type === 'milestone' ? '🚩 Milestone' : '✓ Task Due'}
@@ -216,7 +216,7 @@ export const TimelineDeadlinesView: React.FC = () => {
                   </div>
 
                   <h4 className={`text-sm font-black mt-1 ${
-                    item.completed ? 'line-through text-content-faint' : 'text-white'
+                    item.completed ? 'line-through text-content-faint' : 'text-content'
                   }`}>
                     {item.title}
                   </h4>
@@ -231,11 +231,11 @@ export const TimelineDeadlinesView: React.FC = () => {
                   </div>
                   <div className={`text-[13px] font-mono font-bold ${
                     item.completed
-                      ? 'text-emerald-400'
+                      ? 'text-emerald-600 dark:text-emerald-400'
                       : item.daysRemaining < 0
-                      ? 'text-rose-400 font-black'
+                      ? 'text-rose-600 dark:text-rose-400 font-black'
                       : item.daysRemaining <= 3
-                      ? 'text-amber-400'
+                      ? 'text-amber-600 dark:text-amber-400'
                       : 'text-content-faint'
                   }`}>
                     {item.completed
@@ -248,7 +248,7 @@ export const TimelineDeadlinesView: React.FC = () => {
                   </div>
                 </div>
 
-                <ChevronRight className="w-4 h-4 text-content-faint group-hover:translate-x-1 group-hover:text-white transition-all" />
+                <ChevronRight className="w-4 h-4 text-content-faint group-hover:translate-x-1 group-hover:text-content transition-all" />
               </div>
             </div>
           ))}
@@ -288,7 +288,7 @@ export const TimelineDeadlinesView: React.FC = () => {
             type="button"
             onClick={handleExportICS}
             disabled={allItems.filter(i => !i.completed).length === 0}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-white text-xs font-black disabled:opacity-40 transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-content text-xs font-black disabled:opacity-40 transition-all"
             title="Export visible deadlines as ICS calendar file"
           >
             <Download className="w-3.5 h-3.5" />

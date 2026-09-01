@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { api } from '../services/api';
 import type { AgentFilter } from '../types';
 import { X, Loader2, Save, Filter } from 'lucide-react';
@@ -55,7 +55,7 @@ export const AgentFilterModal: React.FC<AgentFilterModalProps> = ({ initial = nu
         <div className="flex items-center justify-between p-5 pb-4 border-b border-line">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
-              <Filter className="w-3.5 h-3.5 text-indigo-400" />
+              <Filter className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
             </div>
             <div>
               <h3 className="text-sm font-black text-content tracking-tight">
@@ -69,7 +69,7 @@ export const AgentFilterModal: React.FC<AgentFilterModalProps> = ({ initial = nu
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-xl text-content-faint hover:text-white hover:bg-surface-3 transition-colors"
+            className="p-1.5 rounded-xl text-content-faint hover:text-content hover:bg-surface-3 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -78,7 +78,7 @@ export const AgentFilterModal: React.FC<AgentFilterModalProps> = ({ initial = nu
         {/* Body */}
         <div className="p-5 space-y-3">
           {error && (
-            <div className="px-3 py-2 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+            <div className="px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
               {error}
             </div>
           )}
@@ -110,7 +110,7 @@ export const AgentFilterModal: React.FC<AgentFilterModalProps> = ({ initial = nu
           <button
             type="button"
             onClick={onClose}
-            className="px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong text-xs font-black transition-all"
+            className="px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong text-xs font-black transition-all"
           >
             Cancel
           </button>

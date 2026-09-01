@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, unwrapPaginated } from '../services/api';
 import { mapProjectDocFromApi } from '../services/mappers';
 import type { AgentFilter, ProjectDoc } from '../types';
@@ -121,7 +121,7 @@ export const FilterManager: React.FC = () => {
       </div>
 
       {error && (
-        <div className="px-4 py-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+        <div className="px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
           {error}
         </div>
       )}
@@ -176,7 +176,7 @@ export const FilterManager: React.FC = () => {
                 </div>
 
                 <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 shrink-0">
-                  <Filter className="w-4 h-4 text-indigo-400" />
+                  <Filter className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 </div>
 
                 <div className="flex-1 min-w-0">
@@ -186,7 +186,7 @@ export const FilterManager: React.FC = () => {
                     <span
                       className={`text-[12px] font-mono font-bold px-2 py-0.5 rounded-md ${
                         used > 0
-                          ? 'text-emerald-300 bg-emerald-500/10 border border-emerald-500/20'
+                          ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20'
                           : 'text-content-faint bg-surface-2 border border-line'
                       }`}
                     >
@@ -196,7 +196,7 @@ export const FilterManager: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
-                  {isBusy && <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />}
+                  {isBusy && <Loader2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 animate-spin" />}
                   <button
                     type="button"
                     onClick={() => openEdit(f)}

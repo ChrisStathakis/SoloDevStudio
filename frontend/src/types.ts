@@ -32,6 +32,13 @@ export type AppCategory =
   | 'Desktop App' 
   | 'Portfolio / Website';
 
+export interface IdeaCategory {
+  id: string;
+  name: string;
+  order: number;
+  ideaCount: number;
+}
+
 export interface Subtask {
   id: string;
   title: string;
@@ -170,7 +177,7 @@ export interface Idea {
   problem: string;
   solution: string;
   notes: string;
-  category: AppCategory;
+  category: string;
   status: IdeaStatus;
   sketchDataUrl?: string; // Base64 png data URL from sketchpad
   targetAudience?: string;

@@ -4,8 +4,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     health_view, register_view, me_view,
     ProjectViewSet, MilestoneViewSet, TaskViewSet, IdeaViewSet, TimeEntryViewSet,
-    ProjectDocViewSet, AgentFilterViewSet, LauncherModelPresetViewSet,
-    export_data_view, import_data_view, dashboard_view, timeline_view,
+    ProjectDocViewSet, AgentFilterViewSet, IdeaCategoryViewSet, LauncherModelPresetViewSet,
+    export_data_view, import_data_view, reset_workspace_view, dashboard_view, timeline_view,
     filesystem_browse, project_folder_settings_view,
 )
 from .terminal_views import (
@@ -21,6 +21,7 @@ router.register(r'ideas', IdeaViewSet, basename='idea')
 router.register(r'time-entries', TimeEntryViewSet, basename='timeentry')
 router.register(r'docs', ProjectDocViewSet, basename='doc')
 router.register(r'agent-filters', AgentFilterViewSet, basename='agent-filter')
+router.register(r'idea-categories', IdeaCategoryViewSet, basename='idea-category')
 router.register(r'launcher-model-presets', LauncherModelPresetViewSet, basename='launcher-model-preset')
 
 urlpatterns = [
@@ -31,6 +32,7 @@ urlpatterns = [
     path('auth/me/', me_view, name='me'),
     path('export/', export_data_view, name='export'),
     path('import/', import_data_view, name='import_data'),
+    path('workspace/reset/', reset_workspace_view, name='workspace-reset'),
     path('dashboard/', dashboard_view, name='dashboard'),
     path('timeline/', timeline_view, name='timeline'),
     path('filesystem/', filesystem_browse, name='filesystem-browse'),

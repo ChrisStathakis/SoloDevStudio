@@ -35,16 +35,26 @@ import {
   X,
   Clipboard,
   Check,
-  ChevronDown
+  ChevronDown,
+  Download
 } from 'lucide-react';
 import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Project, PriorityQuadrant, TaskCategory, LauncherModelPreset } from '../types';
 import { api } from '../services/api';
+import { downloadPdf } from '../services/pdfDownload';
 import { DocsTab } from './DocsTab';
 import { PathPickerModal } from './PathPickerModal';
 import { TerminalDrawer, TerminalDrawerHandle } from './TerminalDrawer';
 import { PageHeader, Button } from './ui';
 import { MilestoneEditor } from './MilestoneEditor';
 import { ProjectEditor, ProjectDraft } from './ProjectEditor';
+import { buildInitializationCommand, CODEX_PLAN_COMMAND, formatBracketedPaste } from '../services/initialization';
+
+const recoverSavedProjectPrompt = (content: string) => {
+  const marker = content.match(/(?:^|\r?\n)## Active project skills(?:\r?\n|$)/);
+  if (!marker || marker.index === undefined) return null;
+  const recovered = content.slice(0, marker.index).trim();
+  return recovered || null;
+};
 
 export const ProjectsView: React.FC = () => {
   const { 
@@ -75,6 +85,7 @@ export const ProjectsView: React.FC = () => {
 
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
+  const [completedExpanded, setCompletedExpanded] = useState(false);
   const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'docs' | 'prompt'>('tasks');
   const [taskFilterStage, setTaskFilterStage] = useState<string>('all');
   const [taskFilterCategory, setTaskFilterCategory] = useState<string>('all');
@@ -83,6 +94,8 @@ export const ProjectsView: React.FC = () => {
   const [isEditingProject, setIsEditingProject] = useState<boolean>(false);
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
   const [isEditingDirPath, setIsEditingDirPath] = useState<boolean>(false);
   const [dirPathDraft, setDirPathDraft] = useState<string>('');
   const [isSavingDirPath, setIsSavingDirPath] = useState<boolean>(false);
@@ -112,6 +125,8 @@ export const ProjectsView: React.FC = () => {
   const [isPromptPreviewOpen, setIsPromptPreviewOpen] = useState(false);
   const [isLoadingPromptPreview, setIsLoadingPromptPreview] = useState(false);
   const [previewedPrompt, setPreviewedPrompt] = useState('');
+  const [previewedLineCount, setPreviewedLineCount] = useState(0);
+  const [previewedSkillCount, setPreviewedSkillCount] = useState(0);
   const [promptPreviewError, setPromptPreviewError] = useState<string | null>(null);
   const [copiedPreviewPrompt, setCopiedPreviewPrompt] = useState(false);
   const [launchTool, setLaunchTool] = useState<'opencode' | 'codex'>('opencode');
@@ -122,7 +137,7 @@ export const ProjectsView: React.FC = () => {
   const [toolAvailability, setToolAvailability] = useState<{ tool: 'opencode' | 'codex'; available: boolean; npm_available: boolean; install_command: string; documentation_url: string; message?: string } | null>(null);
   const [isCheckingTool, setIsCheckingTool] = useState(false);
   const [isInstallingTool, setIsInstallingTool] = useState(false);
-  const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'added' | 'error' | undefined>>({});
+  const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'selected' | undefined>>({});
   const [promptSource, setPromptSource] = useState<'project' | 'task'>('project');
   const [selectedPromptTaskId, setSelectedPromptTaskId] = useState('');
   const [milestoneEditor, setMilestoneEditor] = useState<{ milestone?: Project['milestones'][number] } | null>(null);
@@ -130,6 +145,7 @@ export const ProjectsView: React.FC = () => {
 
   // Selected project object
   const activeProject = projects.find(p => p.id === selectedProjectId) || null;
+  const hasGeneratedSkillContext = Boolean(activeProject?.initialPrompt && /(?:^|\r?\n)## Active project skills(?:\r?\n|$)/.test(activeProject.initialPrompt));
 
   const handleSaveProject = async (draft: ProjectDraft) => {
     if (!activeProject || isSavingProject) return;
@@ -143,6 +159,19 @@ export const ProjectsView: React.FC = () => {
       setProjectSaveError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : error?.message || 'Unable to save project.');
     } finally {
       setIsSavingProject(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!activeProject || isExportingPdf) return;
+    setIsExportingPdf(true);
+    setPdfExportError(null);
+    try {
+      await downloadPdf(`/projects/${activeProject.id}/export-pdf/`, `${activeProject.title || 'project'}-project-brief.pdf`);
+    } catch (error: any) {
+      setPdfExportError(error?.message || 'Unable to export PDF.');
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -173,6 +202,8 @@ export const ProjectsView: React.FC = () => {
     setIsPromptPreviewOpen(false);
     setIsLoadingPromptPreview(false);
     setPreviewedPrompt('');
+    setPreviewedLineCount(0);
+    setPreviewedSkillCount(0);
     setPromptPreviewError(null);
     setCopiedPreviewPrompt(false);
     setLaunchTool(activeProject?.initializationTool || 'opencode');
@@ -235,6 +266,8 @@ export const ProjectsView: React.FC = () => {
       const content = String(response.data?.content || '').trim();
       if (!content) throw new Error('The generated initialization prompt is empty.');
       setPreviewedPrompt(content);
+      setPreviewedLineCount(content.split(/\r?\n/).length);
+      setPreviewedSkillCount(Array.isArray(response.data?.active_skills) ? response.data.active_skills.length : 0);
     } catch (error: any) {
       setPromptPreviewError(error?.response?.data?.error || error?.message || 'Unable to load the initialization prompt.');
     } finally {
@@ -253,22 +286,35 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
-  const addTaskPromptToInitialPrompt = async (taskId: string) => {
-    try {
-      const res = await api.get(`/tasks/${taskId}/prompt/`);
-      const content = String(res.data?.content || '').trim();
-      if (!content) throw new Error('The task prompt is empty.');
-      setPromptDraft(content);
-      setIsEditingPrompt(true);
-      setActiveDetailTab('prompt');
-      setPromptCopyError(null);
-      setInitializationStatus('Task prompt added to Prompt. Review it, then save the prompt.');
-      setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'added' }));
-      window.setTimeout(() => setTaskPromptStatus(prev => ({ ...prev, [taskId]: undefined })), 2200);
-    } catch (error: any) {
-      setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'error' }));
-      setPromptCopyError(error?.response?.data?.error || error?.message || 'Unable to create the task prompt.');
+  const useTaskPromptForLaunch = (taskId: string) => {
+    const tool = activeProject?.initializationTool || 'opencode';
+    setPromptSource('task');
+    setSelectedPromptTaskId(taskId);
+    setLaunchTool(tool);
+    setLaunchModel(activeProject?.initializationModel || '');
+    setLaunchReasoningEffort(activeProject?.initializationReasoningEffort || 'medium');
+    setLaunchMode(activeProject?.initializationMode || 'build');
+    setToolAvailability(null);
+    setPromptCopyError(null);
+    setInitializationStatus('Task prompt selected for this launch. Your saved project prompt was not changed.');
+    setTaskPromptStatus(prev => ({ ...prev, [taskId]: 'selected' }));
+    setActiveDetailTab('prompt');
+    setIsLaunchDialogOpen(true);
+    void checkToolAvailability(tool);
+    window.setTimeout(() => setTaskPromptStatus(prev => ({ ...prev, [taskId]: undefined })), 2200);
+  };
+
+  const preparePromptCleanup = () => {
+    if (!activeProject || isSavingPrompt) return;
+    const recovered = recoverSavedProjectPrompt(activeProject.initialPrompt || '');
+    if (!recovered) {
+      setPromptSaveError('No generated Active project skills section was found in the saved prompt.');
+      return;
     }
+    setPromptDraft(recovered);
+    setIsEditingPrompt(true);
+    setPromptSaveError(null);
+    setInitializationStatus('Generated skill context was removed from the editable draft. Review it, then save the prompt if it looks correct.');
   };
 
   const handleStartInitialization = async (tool: 'opencode' | 'codex', model: string, reasoningEffort: 'low' | 'medium' | 'high', mode: 'build' | 'plan') => {
@@ -294,11 +340,9 @@ export const ProjectsView: React.FC = () => {
         return;
       }
       const res = await api.get(promptSource === 'task' ? `/tasks/${selectedPromptTaskId}/prompt/` : `/projects/${activeProject.id}/initialize-prompt/`);
-      const prompt = String(res.data?.content || activeProject.initialPrompt);
-      const promptWithMode = mode === 'plan' && tool === 'codex'
-        ? `${prompt}\n\n## Operating mode: Plan\nInspect the project and produce a decision-complete implementation plan. Do not modify, create, or delete files.`
-        : prompt;
-      await navigator.clipboard.writeText(promptWithMode);
+      const prompt = String(res.data?.content || (promptSource === 'project' ? activeProject.initialPrompt : '')).trim();
+      if (!prompt) throw new Error('The selected initialization prompt is empty.');
+      await navigator.clipboard.writeText(prompt);
       setCopiedPrompt(true);
       window.setTimeout(() => setCopiedPrompt(false), 2200);
       setIsCheckingTool(true);
@@ -319,13 +363,18 @@ export const ProjectsView: React.FC = () => {
           throw new Error('Terminal console is still loading. Please try again in a moment.');
         }
         const session = await drawer.create('cmd', { forceNew: true });
-        const command = tool === 'codex'
-          ? `codex --model "${normalizedModel}" --sandbox ${mode === 'plan' ? 'read-only' : 'workspace-write'} -c model_reasoning_effort="${reasoningEffort}"\r`
-          : `opencode --model "${normalizedModel}"\r`;
-        await drawer.sendInput(command, session.id);
-        setInitializationStatus(`${tool === 'codex' ? 'Codex' : 'OpenCode'} started with ${normalizedModel}${tool === 'codex' ? ` (${reasoningEffort}, ${mode})` : ''}. Paste the copied initialization prompt when ready.`);
+        const initialRevision = await drawer.waitForOutputIdle(session.id);
+        await drawer.sendInput(`${buildInitializationCommand({ tool, model: normalizedModel, reasoningEffort, mode })}\r`, session.id);
+        const applicationRevision = await drawer.waitForOutputIdle(session.id, { afterRevision: initialRevision });
+        if (tool === 'codex' && mode === 'plan') {
+          await drawer.sendInput(`${CODEX_PLAN_COMMAND}\r`, session.id);
+          await drawer.waitForOutputIdle(session.id, { afterRevision: applicationRevision });
+        }
+        await drawer.sendInput(formatBracketedPaste(prompt), session.id);
+        setInitializationStatus(`${tool === 'codex' ? 'Codex' : 'OpenCode'} is ready with ${normalizedModel}${tool === 'codex' ? ` (${reasoningEffort}, ${mode})` : ''}. The prompt is prepared in the composer; review it and press Enter.`);
       } catch (error: any) {
         const detail = error?.response?.data?.error || 'Set a CMD folder for this project to open its console.';
+        setIsLaunchDialogOpen(true);
         setPromptCopyError(`Prompt copied. ${detail}`);
       }
     } catch (error: any) {
@@ -391,16 +440,25 @@ export const ProjectsView: React.FC = () => {
     setLaunchMode(preset.mode);
   };
 
-  // Filtered projects list
-  const filteredProjects = projects.filter(p => {
-    const matchesStage = selectedStageFilter === 'all' || p.currentStage === selectedStageFilter;
+  // Apply the existing search/category filters first, then separate completed
+  // projects so they can live in their own section at the bottom.
+  const matchesProjectFilters = (p: Project) => {
     const matchesCategory = selectedCategoryFilter === 'all' || p.category === selectedCategoryFilter;
     const matchesSearch = !searchQuery || 
       p.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
       p.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.techStack.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchesStage && matchesCategory && matchesSearch;
-  });
+    return matchesCategory && matchesSearch;
+  };
+
+  const activeProjects = projects.filter(p =>
+    p.currentStage !== 'live' &&
+    (selectedStageFilter === 'all' || p.currentStage === selectedStageFilter) &&
+    matchesProjectFilters(p),
+  );
+  const completedProjects = (selectedStageFilter === 'all' || selectedStageFilter === 'live')
+    ? projects.filter(p => p.currentStage === 'live' && matchesProjectFilters(p))
+    : [];
 
   const getDaysRemaining = (targetDate: string) => {
     const target = new Date(targetDate);
@@ -409,6 +467,63 @@ export const ProjectsView: React.FC = () => {
     target.setHours(0, 0, 0, 0);
     const diff = Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
     return diff;
+  };
+
+  const renderProjectCard = (project: Project) => {
+    const projTasks = tasks.filter(t => t.projectId === project.id);
+    const projDone = projTasks.filter(t => t.completed).length;
+    const progressPct = projTasks.length > 0 ? Math.round((projDone / projTasks.length) * 100) : 0;
+    const stageInfo = STAGE_CONFIG[project.currentStage];
+    const daysRemaining = getDaysRemaining(project.targetDeadline);
+
+    return (
+      <div
+        key={project.id}
+        onClick={() => setSelectedProjectId(project.id)}
+        className="p-5 rounded-3xl bg-surface border border-line shadow-xl hover:border-line-strong transition-all cursor-pointer flex flex-col justify-between group"
+      >
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className={`text-[12px] font-black uppercase px-2.5 py-0.5 rounded-md border ${stageInfo.bgLight} ${stageInfo.bgDark}`}>
+              {stageInfo.label}
+            </span>
+            <span className="text-[12px] text-content-faint bg-surface-2 border border-line px-2 py-0.5 rounded-md font-mono font-semibold">
+              {project.category}
+            </span>
+          </div>
+
+          <div className="flex items-start gap-2.5 mb-2">
+            <div className="w-3.5 h-3.5 rounded-full shrink-0 mt-1 shadow-sm" style={{ backgroundColor: project.color || '#6366f1' }} />
+            <h3 className="text-base font-black text-content group-hover:text-indigo-400 transition-colors flex items-center gap-1.5">
+              {project.title}
+              {project.pinned && <Pin className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />}
+            </h3>
+          </div>
+
+          <p className="text-xs text-content-faint line-clamp-2 mb-4 leading-relaxed">{project.tagline}</p>
+
+          <div className="space-y-1.5 mb-4 font-mono">
+            <div className="flex items-center justify-between text-[13px]">
+              <span className="font-bold text-content-muted">{projDone}/{projTasks.length} tasks completed</span>
+              <span className="font-bold text-indigo-600 dark:text-indigo-400">{progressPct}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-surface-3 rounded-full overflow-hidden">
+              <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${progressPct}%` }} />
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-3.5 border-t border-line/80 flex items-center justify-between text-xs text-content-faint font-mono">
+          <div className="flex items-center gap-1.5 text-[13px]">
+            <Calendar className="w-3.5 h-3.5 text-content-faint" />
+            <span className={daysRemaining <= 3 && daysRemaining >= 0 ? 'text-amber-600 dark:text-amber-400 font-bold' : daysRemaining < 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+              {daysRemaining < 0 ? `${Math.abs(daysRemaining)}d overdue` : `${daysRemaining}d left`}
+            </span>
+          </div>
+          <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform flex items-center gap-0.5">Open Project →</span>
+        </div>
+      </div>
+    );
   };
 
   const handleSaveMilestone = async (values: Omit<Project['milestones'][number], 'id'>) => {
@@ -660,7 +775,7 @@ export const ProjectsView: React.FC = () => {
           className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
             selectedStageFilter === 'all'
               ? 'bg-indigo-600 text-white shadow-md'
-              : 'bg-surface-2 border border-line text-content-faint hover:text-white hover:border-line-strong'
+              : 'bg-surface-2 border border-line text-content-faint hover:text-content hover:border-line-strong'
           }`}
         >
           All Stages ({projects.length})
@@ -679,7 +794,7 @@ export const ProjectsView: React.FC = () => {
               className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
                 isSelected
                   ? 'bg-indigo-600 text-white shadow-md'
-                  : 'bg-surface-2 border border-line text-content-faint hover:text-white hover:border-line-strong'
+                  : 'bg-surface-2 border border-line text-content-faint hover:text-content hover:border-line-strong'
               }`}
             >
               <span>{cfg.label}</span>
@@ -706,12 +821,21 @@ export const ProjectsView: React.FC = () => {
               type="button"
               id="btn-back-to-projects"
               onClick={() => setSelectedProjectId(null)}
-              className="text-xs font-black text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5 transition-colors font-mono tracking-wide"
+              className="text-xs font-black text-indigo-600 dark:text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5 transition-colors font-mono tracking-wide"
             >
               <span>← Back to All Projects</span>
             </button>
 
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleExportPdf()}
+                disabled={isExportingPdf}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-indigo-500/60 text-xs font-black transition-colors disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {isExportingPdf ? 'Exporting…' : 'Export PDF'}
+              </button>
               <button
                 type="button"
                 onClick={() => { setProjectSaveError(null); setIsEditingProject(true); }}
@@ -723,10 +847,10 @@ export const ProjectsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => updateProject(activeProject.id, { pinned: !activeProject.pinned })}
-                className="p-2 text-content-faint hover:text-white rounded-xl bg-surface-2 border border-line hover:border-line-strong transition-colors"
+                className="p-2 text-content-faint hover:text-content rounded-xl bg-surface-2 border border-line hover:border-line-strong transition-colors"
                 title={activeProject.pinned ? 'Unpin' : 'Pin to top'}
               >
-                {activeProject.pinned ? <PinOff className="w-4 h-4 text-amber-400" /> : <Pin className="w-4 h-4" />}
+                {activeProject.pinned ? <PinOff className="w-4 h-4 text-amber-600 dark:text-amber-400" /> : <Pin className="w-4 h-4" />}
               </button>
 
               <button
@@ -736,13 +860,15 @@ export const ProjectsView: React.FC = () => {
                     deleteProject(activeProject.id);
                   }
                 }}
-                className="p-2 text-rose-400 hover:text-rose-300 rounded-xl bg-surface-2 border border-line hover:border-rose-800 transition-colors"
+                className="p-2 text-rose-600 dark:text-rose-400 hover:text-rose-300 rounded-xl bg-surface-2 border border-line hover:border-rose-800 transition-colors"
                 title="Delete Project"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
           </div>
+
+          {pdfExportError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{pdfExportError}</p>}
 
           {isEditingProject ? (
             <ProjectEditor
@@ -799,7 +925,7 @@ export const ProjectsView: React.FC = () => {
                     href={activeProject.liveUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-bold hover:bg-emerald-500/20 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold hover:bg-emerald-500/20 transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                     <span>Live</span>
@@ -810,7 +936,7 @@ export const ProjectsView: React.FC = () => {
                     href={activeProject.figmaUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-300 text-xs font-bold hover:bg-purple-500/20 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-700 dark:text-purple-300 text-xs font-bold hover:bg-purple-500/20 transition-colors"
                   >
                     <Figma className="w-3.5 h-3.5" />
                     <span>Figma</span>
@@ -835,7 +961,7 @@ export const ProjectsView: React.FC = () => {
                   onClick={handleRunScript}
                   disabled={isRunningScript}
                   title={activeProject.scriptPath ? `Run ${activeProject.scriptPath} in an in-app console` : 'Set a server script (.bat) path first'}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-bold hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
                 >
                   {isRunningScript ? (
                     <div className="w-3.5 h-3.5 border-2 border-emerald-700 border-t-emerald-300 rounded-full animate-spin" />
@@ -883,9 +1009,9 @@ export const ProjectsView: React.FC = () => {
 
             {/* Project Folder Path */}
             {folderError && (
-              <div className="flex items-start justify-between gap-3 px-3.5 py-2 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300" role="alert">
+              <div className="flex items-start justify-between gap-3 px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300" role="alert">
                 <span>{folderError}</span>
-                <button type="button" onClick={() => setFolderError(null)} className="shrink-0 text-rose-300 hover:text-white" aria-label="Dismiss error">×</button>
+                <button type="button" onClick={() => setFolderError(null)} className="shrink-0 text-rose-700 dark:text-rose-300 hover:text-content" aria-label="Dismiss error">×</button>
               </div>
             )}
             {isEditingDirPath ? (
@@ -896,7 +1022,7 @@ export const ProjectsView: React.FC = () => {
                   void handleSaveDirPath();
                 }}
               >
-                <FolderOpen className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <FolderOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                 <input
                   type="text"
                   autoFocus
@@ -919,7 +1045,7 @@ export const ProjectsView: React.FC = () => {
                   type="button"
                   onClick={() => setIsEditingDirPath(false)}
                   disabled={isSavingDirPath}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-white transition-colors"
+                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
                   title="Cancel"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -972,7 +1098,7 @@ export const ProjectsView: React.FC = () => {
                   void handleSaveScriptPath();
                 }}
               >
-                <Zap className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <Zap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <input
                   type="text"
                   autoFocus
@@ -995,7 +1121,7 @@ export const ProjectsView: React.FC = () => {
                   type="button"
                   onClick={() => setIsEditingScriptPath(false)}
                   disabled={isSavingScriptPath}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-white transition-colors"
+                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
                   title="Cancel"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -1042,7 +1168,7 @@ export const ProjectsView: React.FC = () => {
             {/* Port / Run Args */}
             {isEditingPort ? (
               <div className="flex flex-wrap items-center gap-2">
-                <Zap className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <Zap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <input
                   type="text"
                   autoFocus
@@ -1065,7 +1191,7 @@ export const ProjectsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsEditingPort(false)}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-white transition-colors"
+                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
                   title="Cancel"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -1119,7 +1245,7 @@ export const ProjectsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsEditingCmdDir(false)}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-white transition-colors"
+                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
                   title="Cancel"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -1188,7 +1314,7 @@ export const ProjectsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsEditingPythonEnv(false)}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-white transition-colors"
+                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
                   title="Cancel"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -1314,9 +1440,9 @@ export const ProjectsView: React.FC = () => {
                       onClick={() => advanceProjectStage(activeProject.id, stg)}
                       className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden ${
                         isCurrent
-                          ? 'border-indigo-500 bg-indigo-950/40 ring-1 ring-indigo-500 shadow-md'
+                          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 ring-1 ring-indigo-500 shadow-md'
                           : isCompleted
-                          ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-700'
+                          ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 hover:border-emerald-700'
                           : 'border-line bg-surface-2 hover:bg-surface-3 text-content-faint'
                       }`}
                     >
@@ -1324,7 +1450,7 @@ export const ProjectsView: React.FC = () => {
                         <span className="text-[12px] font-mono font-bold uppercase text-content-faint">
                           Stage {cfg.order}
                         </span>
-                        {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+                        {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
                         {isCurrent && <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />}
                       </div>
 
@@ -1345,18 +1471,18 @@ export const ProjectsView: React.FC = () => {
             <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-line/80 text-xs font-mono">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-1.5 text-content-muted">
-                  <Calendar className="w-4 h-4 text-indigo-400" />
+                  <Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                   <span className="font-bold">Target Launch:</span>
                   <span>{activeProject.targetDeadline}</span>
-                  <span className="text-[13px] px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 font-bold">
+                  <span className="text-[13px] px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold">
                     {getDaysRemaining(activeProject.targetDeadline)}d left
                   </span>
                 </div>
 
                 <div className="flex items-center gap-1.5 text-content-muted">
-                  <Clock className="w-4 h-4 text-emerald-400" />
+                  <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   <span className="font-bold">Time Logged:</span>
-                  <span className="text-emerald-400 font-bold">
+                  <span className="text-emerald-600 dark:text-emerald-400 font-bold">
                     {(
                       timeEntries
                         .filter(e => e.projectId === activeProject.id)
@@ -1383,7 +1509,7 @@ export const ProjectsView: React.FC = () => {
           {(activeProject.problem || activeProject.solution || activeProject.targetAudience || activeProject.monetization || activeProject.mvpFeatures?.length || activeProject.tags?.length) && (
             <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-5">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" />
+                <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Spark Details</h3>
               </div>
 
@@ -1391,13 +1517,13 @@ export const ProjectsView: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {activeProject.problem && (
                     <div className="p-4 rounded-2xl bg-surface-2 border border-line">
-                      <div className="text-[11px] font-black uppercase tracking-wider text-rose-400 mb-2">The Problem</div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-rose-600 dark:text-rose-400 mb-2">The Problem</div>
                       <p className="text-sm text-content-muted whitespace-pre-line leading-relaxed">{activeProject.problem}</p>
                     </div>
                   )}
                   {activeProject.solution && (
                     <div className="p-4 rounded-2xl bg-surface-2 border border-line">
-                      <div className="text-[11px] font-black uppercase tracking-wider text-amber-400 mb-2">The Solution</div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-2">The Solution</div>
                       <p className="text-sm text-content-muted whitespace-pre-line leading-relaxed">{activeProject.solution}</p>
                     </div>
                   )}
@@ -1408,13 +1534,13 @@ export const ProjectsView: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {activeProject.targetAudience && (
                     <div>
-                      <div className="text-[11px] font-black uppercase tracking-wider text-indigo-400 mb-1.5">Target Audience</div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-1.5">Target Audience</div>
                       <p className="text-sm text-content-muted">{activeProject.targetAudience}</p>
                     </div>
                   )}
                   {activeProject.monetization && (
                     <div>
-                      <div className="text-[11px] font-black uppercase tracking-wider text-emerald-400 mb-1.5">Monetization</div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1.5">Monetization</div>
                       <p className="text-sm text-content-muted">{activeProject.monetization}</p>
                     </div>
                   )}
@@ -1434,7 +1560,7 @@ export const ProjectsView: React.FC = () => {
 
               {activeProject.tags && activeProject.tags.length > 0 && (
                 <div>
-                  <div className="text-[11px] font-black uppercase tracking-wider text-purple-400 mb-2">Tags</div>
+                  <div className="text-[11px] font-black uppercase tracking-wider text-purple-600 dark:text-purple-400 mb-2">Tags</div>
                   <div className="flex flex-wrap gap-2">
                     {activeProject.tags.map(tag => (
                       <span key={tag} className="px-2.5 py-1 rounded-lg bg-surface-2 border border-line text-xs text-content-muted">{tag}</span>
@@ -1455,8 +1581,8 @@ export const ProjectsView: React.FC = () => {
                 onClick={() => setActiveDetailTab('tasks')}
                 className={`pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
                   activeDetailTab === 'tasks'
-                    ? 'border-indigo-500 text-indigo-400'
-                    : 'border-transparent text-content-faint hover:text-white'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
                 }`}
               >
                 Tasks & Checklist ({tasks.filter(t => t.projectId === activeProject.id).length})
@@ -1468,8 +1594,8 @@ export const ProjectsView: React.FC = () => {
                 onClick={() => setActiveDetailTab('milestones')}
                 className={`pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
                   activeDetailTab === 'milestones'
-                    ? 'border-indigo-500 text-indigo-400'
-                    : 'border-transparent text-content-faint hover:text-white'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
                 }`}
               >
                 Milestones & Roadmap ({activeProject.milestones.length})
@@ -1481,8 +1607,8 @@ export const ProjectsView: React.FC = () => {
                 onClick={() => setActiveDetailTab('timelogs')}
                 className={`pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
                   activeDetailTab === 'timelogs'
-                    ? 'border-indigo-500 text-indigo-400'
-                    : 'border-transparent text-content-faint hover:text-white'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
                 }`}
               >
                 Time Sessions ({timeEntries.filter(e => e.projectId === activeProject.id).length})
@@ -1494,8 +1620,8 @@ export const ProjectsView: React.FC = () => {
                 onClick={() => setActiveDetailTab('docs')}
                 className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
                   activeDetailTab === 'docs'
-                    ? 'border-indigo-500 text-indigo-400'
-                    : 'border-transparent text-content-faint hover:text-white'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
@@ -1508,8 +1634,8 @@ export const ProjectsView: React.FC = () => {
                 onClick={() => setActiveDetailTab('prompt')}
                 className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
                   activeDetailTab === 'prompt'
-                    ? 'border-indigo-500 text-indigo-400'
-                    : 'border-transparent text-content-faint hover:text-white'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
                 }`}
               >
                 <Clipboard className="w-3.5 h-3.5" />
@@ -1572,7 +1698,7 @@ export const ProjectsView: React.FC = () => {
                           key={task.id}
                           className={`p-4 rounded-2xl bg-surface border transition-all ${
                             task.completed
-                              ? 'border-line/80 opacity-60 bg-surface-inverse'
+                              ? 'border-line/80 opacity-60 bg-surface-2'
                               : 'border-line shadow-md hover:border-line-strong'
                           }`}
                         >
@@ -1584,7 +1710,7 @@ export const ProjectsView: React.FC = () => {
                                 className="mt-1 p-0.5 text-content-faint hover:text-emerald-400 transition-colors shrink-0"
                               >
                                 {task.completed ? (
-                                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                                  <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                                 ) : (
                                   <div className="w-5 h-5 rounded-lg border-2 border-line-strong hover:border-indigo-500 transition-colors bg-surface-2" />
                                 )}
@@ -1616,7 +1742,7 @@ export const ProjectsView: React.FC = () => {
                                   {task.milestoneIds?.map(milestoneId => {
                                     const milestone = activeProject.milestones.find(item => item.id === milestoneId);
                                     return milestone ? (
-                                      <span key={milestone.id} className="text-[11px] font-bold px-2 py-0.5 rounded-md border border-purple-500/25 bg-purple-500/10 text-purple-300" title="Linked milestone">
+                                      <span key={milestone.id} className="text-[11px] font-bold px-2 py-0.5 rounded-md border border-purple-500/25 bg-purple-500/10 text-purple-700 dark:text-purple-300" title="Linked milestone">
                                         {milestone.title}
                                       </span>
                                     ) : null;
@@ -1697,7 +1823,7 @@ export const ProjectsView: React.FC = () => {
                                   startTimer('pomodoro', activeProject.id, task.id);
                                   setCurrentView('timetracker');
                                 }}
-                                className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 hover:bg-indigo-500/20 text-xs font-bold transition-all"
+                                className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/20 text-xs font-bold transition-all"
                                 title="Start Focus timer on this task"
                               >
                                 <Play className="w-3 h-3" />
@@ -1706,12 +1832,12 @@ export const ProjectsView: React.FC = () => {
 
                               <button
                                 type="button"
-                                onClick={() => void addTaskPromptToInitialPrompt(task.id)}
-                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${taskPromptStatus[task.id] === 'added' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : taskPromptStatus[task.id] === 'error' ? 'bg-rose-500/10 border-rose-500/25 text-rose-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
-                                title="Add a focused prompt for this task and its subtasks to Prompt"
+                                onClick={() => useTaskPromptForLaunch(task.id)}
+                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${taskPromptStatus[task.id] === 'selected' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-700 dark:text-emerald-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
+                                title="Use this task prompt for one launch without changing the saved project prompt"
                               >
-                                {taskPromptStatus[task.id] === 'added' ? <Check className="w-3 h-3" /> : <Clipboard className="w-3 h-3" />}
-                                <span className="hidden sm:inline">{taskPromptStatus[task.id] === 'added' ? 'Added' : taskPromptStatus[task.id] === 'error' ? 'Retry' : 'Add to Prompt'}</span>
+                                {taskPromptStatus[task.id] === 'selected' ? <Check className="w-3 h-3" /> : <Clipboard className="w-3 h-3" />}
+                                <span className="hidden sm:inline">{taskPromptStatus[task.id] === 'selected' ? 'Selected' : 'Use for launch'}</span>
                               </button>
 
                               <button
@@ -1734,7 +1860,7 @@ export const ProjectsView: React.FC = () => {
                                   <span>Due: {task.dueDate}</span>
                                 </span>
                               )}
-                              <span className="flex items-center gap-1 text-emerald-400">
+                              <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                                 <Clock className="w-3 h-3" />
                                 <span>{task.timeSpentMinutes || 0}m spent (est. {task.estimatedMinutes || 60}m)</span>
                               </span>
@@ -1794,9 +1920,9 @@ export const ProjectsView: React.FC = () => {
                             className="text-content-faint hover:text-emerald-400"
                           >
                             {ms.completed ? (
-                              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                              <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                             ) : (
-                              <div className="w-5 h-5 rounded-lg border-2 border-line-strong bg-surface-inverse" />
+                              <div className="w-5 h-5 rounded-lg border-2 border-line-strong bg-surface-2" />
                             )}
                           </button>
 
@@ -1820,12 +1946,12 @@ export const ProjectsView: React.FC = () => {
                           <div className="text-[13px] font-bold text-content-muted">
                             {ms.targetDate}
                           </div>
-                          <span className="text-[12px] text-indigo-400 font-bold">
+                          <span className="text-[12px] text-indigo-600 dark:text-indigo-400 font-bold">
                             {STAGE_CONFIG[ms.stage]?.label}
                           </span>
                           <div className="flex items-center justify-end gap-2 mt-2">
-                            <button type="button" onClick={() => setMilestoneEditor({ milestone: ms })} className="text-[11px] font-bold text-indigo-300 hover:text-indigo-200">Edit</button>
-                            <button type="button" onClick={() => handleDeleteMilestone(ms)} className="text-[11px] font-bold text-rose-300 hover:text-rose-200">Delete</button>
+                            <button type="button" onClick={() => setMilestoneEditor({ milestone: ms })} className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 hover:text-indigo-200">Edit</button>
+                            <button type="button" onClick={() => handleDeleteMilestone(ms)} className="text-[11px] font-bold text-rose-700 dark:text-rose-300 hover:text-rose-200">Delete</button>
                           </div>
                         </div>
                       </div>
@@ -1860,7 +1986,7 @@ export const ProjectsView: React.FC = () => {
                             className="p-3.5 rounded-2xl bg-surface-2 border border-line flex items-center justify-between text-xs font-mono"
                           >
                             <div>
-                              <div className="font-bold text-white">
+                              <div className="font-bold text-content">
                                 {entry.notes || 'Focus Session'}
                               </div>
                               <div className="text-[13px] text-content-faint mt-0.5">
@@ -1869,7 +1995,7 @@ export const ProjectsView: React.FC = () => {
                               </div>
                             </div>
 
-                            <span className="font-mono font-bold text-indigo-400">
+                            <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
                               {Math.round(entry.durationSeconds / 60)} mins
                             </span>
                           </div>
@@ -1899,10 +2025,21 @@ export const ProjectsView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(true); setPromptSaveError(null); }}
-                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong text-xs font-black transition-all"
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong text-xs font-black transition-all"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
                           Edit prompt
+                        </button>
+                      )}
+                      {!isEditingPrompt && hasGeneratedSkillContext && (
+                        <button
+                          type="button"
+                          onClick={preparePromptCleanup}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/15 text-xs font-black transition-all"
+                          title="Remove generated linked-skill sections from the saved prompt draft for review"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Clean generated skill context
                         </button>
                       )}
                       <button
@@ -1910,7 +2047,7 @@ export const ProjectsView: React.FC = () => {
                         onClick={() => void openPromptPreview()}
                         disabled={!activeProject.initialPrompt || isEditingPrompt || isLoadingPromptPreview}
                         title={isEditingPrompt ? 'Save the prompt before previewing initialization' : 'Preview the full initialization prompt'}
-                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong text-xs font-black transition-all disabled:opacity-40"
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong text-xs font-black transition-all disabled:opacity-40"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         {isLoadingPromptPreview ? 'Loading preview…' : 'Preview prompt'}
@@ -1922,12 +2059,12 @@ export const ProjectsView: React.FC = () => {
                         title={isEditingPrompt ? 'Save the prompt before starting initialization' : 'Choose a tool and model, then open the project console'}
                         className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-black transition-all disabled:opacity-40 ${
                           copiedPrompt
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                            : 'bg-indigo-500/10 border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-indigo-500/10 border-indigo-500/25 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/20'
                         }`}
                       >
                         {copiedPrompt ? <Check className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                        {copiedPrompt ? 'Prompt copied' : 'Start initialization'}
+                        {copiedPrompt ? 'Prompt prepared' : 'Start initialization'}
                       </button>
                     </div>
                   </div>
@@ -1945,18 +2082,18 @@ export const ProjectsView: React.FC = () => {
                         <option value="">Use preset…</option>
                         {modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}
                       </select>
-                      <select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort">
+                      {launchTool === 'codex' && <select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort">
                         <option value="low">Low effort</option><option value="medium">Medium effort</option><option value="high">High effort</option>
-                      </select>
+                      </select>}
                       {launchTool === 'codex' && <select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="w-full sm:w-28 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Initialization mode"><option value="build">Build</option><option value="plan">Plan</option></select>}
-                      <button type="button" onClick={saveInitializationSettings} disabled={!launchModel.trim() || isSavingInitializationSettings} className="w-full sm:w-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-black text-content-muted hover:text-white disabled:opacity-40">{isSavingInitializationSettings ? 'Saving…' : 'Save default'}</button>
+                      <button type="button" onClick={saveInitializationSettings} disabled={!launchModel.trim() || isSavingInitializationSettings} className="w-full sm:w-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-black text-content-muted hover:text-content disabled:opacity-40">{isSavingInitializationSettings ? 'Saving…' : 'Save default'}</button>
                     </div>
                     <datalist id="project-model-presets">{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.modelId}>{p.label}</option>)}</datalist>
-                    {modelPresets.filter(p => p.enabled).length === 0 && <p className="text-[11px] text-amber-300">No enabled presets for this tool. Type a model ID, then save it as the project default or <button type="button" onClick={() => setCurrentView('settings')} className="underline hover:text-amber-200">manage presets in Settings → Launch Presets</button>.</p>}
+                    {modelPresets.filter(p => p.enabled).length === 0 && <p className="text-[11px] text-amber-700 dark:text-amber-300">No enabled presets for this tool. Type a model ID, then save it as the project default or <button type="button" onClick={() => setCurrentView('settings')} className="underline hover:text-amber-200">manage presets in Settings → Launch Presets</button>.</p>}
                   </div>
-                  {promptCopyError && <p className="text-xs text-rose-300" role="alert">{promptCopyError}</p>}
-                  {initializationStatus && <p className="text-xs text-emerald-300" role="status">{initializationStatus}</p>}
-                  {promptSaveError && <p className="text-xs text-rose-300" role="alert">{promptSaveError}</p>}
+                  {promptCopyError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{promptCopyError}</p>}
+                  {initializationStatus && <p className="text-xs text-emerald-700 dark:text-emerald-300" role="status">{initializationStatus}</p>}
+                  {promptSaveError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{promptSaveError}</p>}
                   {isEditingPrompt ? (
                     <>
                       <textarea
@@ -1964,7 +2101,7 @@ export const ProjectsView: React.FC = () => {
                         onChange={e => setPromptDraft(e.target.value)}
                         rows={18}
                         autoFocus
-                        className="w-full resize-y min-h-[20rem] rounded-2xl bg-surface-inverse border border-line focus:border-indigo-500 p-4 text-xs leading-relaxed text-content font-mono outline-none"
+                        className="w-full resize-y min-h-[20rem] rounded-2xl bg-surface-inverse border border-line focus:border-indigo-500 p-4 text-xs leading-relaxed text-slate-100 font-mono outline-none placeholder:text-slate-500"
                         placeholder="Write the initial project prompt..."
                       />
                       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1972,13 +2109,13 @@ export const ProjectsView: React.FC = () => {
                           type="button"
                           onClick={handleClearInitialPrompt}
                           disabled={!promptDraft || isSavingPrompt}
-                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-900/50 text-rose-300 hover:bg-rose-500/10 text-xs font-black disabled:opacity-40"
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 hover:bg-rose-500/10 text-xs font-black disabled:opacity-40"
                         >
                           <X className="w-3.5 h-3.5" />
                           Clear text
                         </button>
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(false); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white text-xs font-black">
+                          <button type="button" onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(false); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content text-xs font-black">
                             Cancel
                           </button>
                           <button type="button" onClick={handleSaveInitialPrompt} disabled={!promptDraft.trim() || isSavingPrompt} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black disabled:opacity-40">
@@ -1989,7 +2126,7 @@ export const ProjectsView: React.FC = () => {
                       </div>
                     </>
                   ) : activeProject.initialPrompt ? (
-                    <pre className="whitespace-pre-wrap select-text max-h-[32rem] overflow-auto rounded-2xl bg-surface-inverse border border-line p-4 text-xs leading-relaxed text-content font-mono">
+                    <pre className="whitespace-pre-wrap select-text max-h-[32rem] overflow-auto rounded-2xl bg-surface-inverse border border-line p-4 text-xs leading-relaxed text-slate-100 font-mono">
                       {activeProject.initialPrompt}
                     </pre>
                   ) : (
@@ -2002,23 +2139,23 @@ export const ProjectsView: React.FC = () => {
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Choose initialization model">
                     <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-5 shadow-2xl space-y-4">
                       <div className="flex items-start justify-between gap-3">
-                        <div><h3 className="text-base font-black text-content">Initialize with…</h3><p className="text-xs text-content-faint mt-1">The prompt will be copied, then the selected CLI will open in the project folder.</p></div>
-                        <button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="p-1.5 text-content-faint hover:text-white" aria-label="Close"><X className="w-4 h-4" /></button>
+                        <div><h3 className="text-base font-black text-content">Initialize with…</h3><p className="text-xs text-content-faint mt-1">The prompt will be copied and prepared in the selected CLI composer for your review.</p></div>
+                        <button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="p-1.5 text-content-faint hover:text-content" aria-label="Close"><X className="w-4 h-4" /></button>
                       </div>
                       <label className="block text-xs font-black text-content">Prompt source<select value={promptSource} onChange={e => { const next = e.target.value as 'project' | 'task'; setPromptSource(next); if (next === 'project') setSelectedPromptTaskId(''); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="project">Full project initialization</option><option value="task">Task prompt</option></select></label>
                       {promptSource === 'task' && (() => {
                         const openTasks = tasks.filter(t => t.projectId === activeProject.id && !t.completed);
-                        return <label className="block text-xs font-black text-content">Open task<select value={selectedPromptTaskId} onChange={e => setSelectedPromptTaskId(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose a task…</option>{openTasks.map(task => <option key={task.id} value={task.id}>{task.title}{task.subtasks.length ? ` (${task.subtasks.length} steps)` : ''}</option>)}</select>{openTasks.length === 0 && <span className="mt-1 block text-[11px] text-amber-300">There are no open tasks in this project.</span>}</label>;
+                        return <label className="block text-xs font-black text-content">Open task<select value={selectedPromptTaskId} onChange={e => setSelectedPromptTaskId(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose a task…</option>{openTasks.map(task => <option key={task.id} value={task.id}>{task.title}{task.subtasks.length ? ` (${task.subtasks.length} steps)` : ''}</option>)}</select>{openTasks.length === 0 && <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-300">There are no open tasks in this project.</span>}</label>;
                       })()}
                       <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); setLaunchReasoningEffort('medium'); if (next === 'opencode') setLaunchMode('build'); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
                       <label className="block text-xs font-black text-content">Model<input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" /></label>
                       <label className="block text-xs font-black text-content">Saved preset<select value="" onChange={e => applyLauncherPreset(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose…</option>{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}</select></label>
-                      <label className="block text-xs font-black text-content">Reasoning effort<select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+                      {launchTool === 'codex' && <label className="block text-xs font-black text-content">Reasoning effort<select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>}
                       {launchTool === 'codex' && <label className="block text-xs font-black text-content">Mode<select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select></label>}
-                      {launchTool === 'opencode' && <p className="text-[11px] text-content-faint">OpenCode supports Build only here; strict read-only Plan mode is available with Codex.</p>}
+                      {launchTool === 'opencode' && <p className="text-[11px] text-content-faint">OpenCode supports Build only here. Reasoning variants are provider-specific; strict read-only Plan mode is available with Codex.</p>}
                       {isCheckingTool && <p className="text-xs text-content-faint">Checking whether {launchTool === 'codex' ? 'Codex' : 'OpenCode'} is installed…</p>}
-                      {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
-                      <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel, launchReasoningEffort, launchMode)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Copy & start</button></div>
+                      {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-700 dark:text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-700 dark:text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-700 dark:text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-700 dark:text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
+                      <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel, launchReasoningEffort, launchMode)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Prepare in terminal</button></div>
                     </div>
                   </div>
                 )}
@@ -2029,16 +2166,19 @@ export const ProjectsView: React.FC = () => {
                         <div>
                           <h3 className="text-base font-black text-content">Initialization prompt preview</h3>
                           <p className="text-xs text-content-faint mt-1">This is the generated full-project prompt used by the default initialization flow.</p>
+                          {!isLoadingPromptPreview && !promptPreviewError && previewedPrompt && (
+                            <p className="text-[11px] text-content-muted mt-1 font-mono">{previewedLineCount.toLocaleString()} lines · {previewedSkillCount} active {previewedSkillCount === 1 ? 'skill' : 'skills'}</p>
+                          )}
                         </div>
-                        <button type="button" onClick={() => setIsPromptPreviewOpen(false)} className="p-1.5 text-content-faint hover:text-white" aria-label="Close preview"><X className="w-4 h-4" /></button>
+                        <button type="button" onClick={() => setIsPromptPreviewOpen(false)} className="p-1.5 text-content-faint hover:text-content" aria-label="Close preview"><X className="w-4 h-4" /></button>
                       </div>
                       <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl border border-line bg-surface-inverse p-4">
                         {isLoadingPromptPreview ? (
-                          <p className="text-xs text-content-faint">Generating preview…</p>
+                          <p className="text-xs text-slate-300">Generating preview…</p>
                         ) : promptPreviewError ? (
                           <p className="text-xs text-rose-300" role="alert">{promptPreviewError}</p>
                         ) : (
-                          <pre className="whitespace-pre-wrap select-text text-xs leading-relaxed text-content font-mono">{previewedPrompt}</pre>
+                          <pre className="whitespace-pre-wrap select-text text-xs leading-relaxed text-slate-100 font-mono">{previewedPrompt}</pre>
                         )}
                       </div>
                       <div className="mt-4 flex items-center justify-end gap-2">
@@ -2057,81 +2197,44 @@ export const ProjectsView: React.FC = () => {
         </div>
       ) : (
         /* PROJECTS GRID VIEW */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredProjects.map(project => {
-            const projTasks = tasks.filter(t => t.projectId === project.id);
-            const projDone = projTasks.filter(t => t.completed).length;
-            const progressPct = projTasks.length > 0 ? Math.round((projDone / projTasks.length) * 100) : 0;
-            const stageInfo = STAGE_CONFIG[project.currentStage];
-            const daysRemaining = getDaysRemaining(project.targetDeadline);
+        <div className="space-y-8">
+          {activeProjects.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {activeProjects.map(renderProjectCard)}
+            </div>
+          ) : selectedStageFilter !== 'live' ? (
+            <div className="rounded-3xl border border-dashed border-line bg-surface/50 px-6 py-12 text-center">
+              <p className="text-sm font-black text-content-faint">No active projects match these filters.</p>
+              <p className="mt-1 text-xs text-content-faint">Create a project or adjust the stage, category, or search filters.</p>
+            </div>
+          ) : null}
 
-            return (
-              <div
-                key={project.id}
-                onClick={() => setSelectedProjectId(project.id)}
-                className="p-5 rounded-3xl bg-surface border border-line shadow-xl hover:border-line-strong transition-all cursor-pointer flex flex-col justify-between group"
+          {completedProjects.length > 0 && (
+            <section className="rounded-3xl border border-emerald-500/20 bg-emerald-500/[0.03] p-4 sm:p-5">
+              <button
+                type="button"
+                onClick={() => setCompletedExpanded(expanded => !expanded)}
+                aria-expanded={selectedStageFilter === 'live' || completedExpanded}
+                className="flex w-full items-center justify-between gap-3 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
               >
-                <div>
-                  {/* Top category & stage tag */}
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <span className={`text-[12px] font-black uppercase px-2.5 py-0.5 rounded-md border ${stageInfo.bgLight} ${stageInfo.bgDark}`}>
-                      {stageInfo.label}
-                    </span>
-                    <span className="text-[12px] text-content-faint bg-surface-2 border border-line px-2 py-0.5 rounded-md font-mono font-semibold">
-                      {project.category}
-                    </span>
-                  </div>
-
-                  <div className="flex items-start gap-2.5 mb-2">
-                    <div
-                      className="w-3.5 h-3.5 rounded-full shrink-0 mt-1 shadow-sm"
-                      style={{ backgroundColor: project.color || '#6366f1' }}
-                    />
-                    <h3 className="text-base font-black text-content group-hover:text-indigo-400 transition-colors flex items-center gap-1.5">
-                      {project.title}
-                      {project.pinned && <Pin className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-                    </h3>
-                  </div>
-
-                  <p className="text-xs text-content-faint line-clamp-2 mb-4 leading-relaxed">
-                    {project.tagline}
-                  </p>
-
-                  {/* Progress Bar */}
-                  <div className="space-y-1.5 mb-4 font-mono">
-                    <div className="flex items-center justify-between text-[13px]">
-                      <span className="font-bold text-content-muted">
-                        {projDone}/{projTasks.length} tasks completed
-                      </span>
-                      <span className="font-bold text-indigo-400">
-                        {progressPct}%
-                      </span>
-                    </div>
-                    <div className="w-full h-1.5 bg-surface-3 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-indigo-500 rounded-full transition-all duration-500"
-                        style={{ width: `${progressPct}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Card Footer */}
-                <div className="pt-3.5 border-t border-line/80 flex items-center justify-between text-xs text-content-faint font-mono">
-                  <div className="flex items-center gap-1.5 text-[13px]">
-                    <Calendar className="w-3.5 h-3.5 text-content-faint" />
-                    <span className={daysRemaining <= 3 && daysRemaining >= 0 ? 'text-amber-400 font-bold' : daysRemaining < 0 ? 'text-rose-400 font-bold' : ''}>
-                      {daysRemaining < 0 ? `${Math.abs(daysRemaining)}d overdue` : `${daysRemaining}d left`}
-                    </span>
-                  </div>
-
-                  <span className="text-xs font-black text-indigo-400 group-hover:translate-x-1 transition-transform flex items-center gap-0.5">
-                    Open Project →
+                <span className="flex items-center gap-2.5">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                  <span>
+                    <span className="block text-sm font-black text-content">Completed apps</span>
+                    <span className="block text-xs text-content-faint">Live &amp; Shipped projects kept for reference</span>
                   </span>
+                  <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300">{completedProjects.length}</span>
+                </span>
+                <ChevronDown className={`h-4 w-4 text-content-faint transition-transform ${selectedStageFilter === 'live' || completedExpanded ? 'rotate-180' : ''}`} />
+              </button>
+
+              {(selectedStageFilter === 'live' || completedExpanded) && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {completedProjects.map(renderProjectCard)}
                 </div>
-              </div>
-            );
-          })}
+              )}
+            </section>
+          )}
         </div>
       )}
 

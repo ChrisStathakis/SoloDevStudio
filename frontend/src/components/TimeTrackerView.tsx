@@ -110,7 +110,7 @@ export const TimeTrackerView: React.FC = () => {
           onClick={() => setShowManualModal(true)}
           tone="secondary"
         >
-          <Plus className="w-4 h-4 text-emerald-400" />
+          <Plus className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           <span>Manual Time Log</span>
         </Button>} />
 
@@ -135,7 +135,7 @@ export const TimeTrackerView: React.FC = () => {
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   timeTracker.mode === 'pomodoro' && timeTracker.pomodoroType === 'work'
                     ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                    : 'bg-surface-3 text-content-faint hover:text-white border border-line'
+                    : 'bg-surface-3 text-content-faint hover:text-content border border-line'
                 }`}
               >
                 <Briefcase className="w-3.5 h-3.5" />
@@ -149,7 +149,7 @@ export const TimeTrackerView: React.FC = () => {
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   timeTracker.mode === 'pomodoro' && timeTracker.pomodoroType === 'short_break'
                     ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
-                    : 'bg-surface-3 text-content-faint hover:text-white border border-line'
+                    : 'bg-surface-3 text-content-faint hover:text-content border border-line'
                 }`}
               >
                 <Coffee className="w-3.5 h-3.5" />
@@ -163,7 +163,7 @@ export const TimeTrackerView: React.FC = () => {
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   timeTracker.mode === 'stopwatch'
                     ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-                    : 'bg-surface-3 text-content-faint hover:text-white border border-line'
+                    : 'bg-surface-3 text-content-faint hover:text-content border border-line'
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
@@ -173,7 +173,7 @@ export const TimeTrackerView: React.FC = () => {
 
             {/* Large Digit Display */}
             <div className="my-4 z-10">
-              <div className="font-mono text-7xl sm:text-8xl font-black tracking-tight text-white tabular-nums drop-shadow-lg">
+              <div className="font-mono text-7xl sm:text-8xl font-black tracking-tight text-content tabular-nums drop-shadow-lg">
                 {formatTime(currentSeconds)}
               </div>
               <div className="text-[13px] font-black uppercase tracking-[0.25em] text-content-faint mt-2 font-mono">
@@ -194,7 +194,7 @@ export const TimeTrackerView: React.FC = () => {
                 <select
                   value={timeTracker.projectId || ''}
                   onChange={e => startTimer(timeTracker.mode, e.target.value || undefined, undefined)}
-                  className="px-3 py-2 text-xs bg-surface border border-line rounded-xl text-white font-medium outline-none focus:border-indigo-500"
+                  className="px-3 py-2 text-xs bg-surface border border-line rounded-xl text-content font-medium outline-none focus:border-indigo-500"
                 >
                   <option value="">No Project Assigned</option>
                   {projects.map(p => (
@@ -205,7 +205,7 @@ export const TimeTrackerView: React.FC = () => {
                 <select
                   value={timeTracker.taskId || ''}
                   onChange={e => startTimer(timeTracker.mode, timeTracker.projectId, e.target.value || undefined)}
-                  className="px-3 py-2 text-xs bg-surface border border-line rounded-xl text-white font-medium outline-none focus:border-indigo-500"
+                  className="px-3 py-2 text-xs bg-surface border border-line rounded-xl text-content font-medium outline-none focus:border-indigo-500"
                 >
                   <option value="">No Specific Task</option>
                   {tasks
@@ -276,7 +276,7 @@ export const TimeTrackerView: React.FC = () => {
 
             {/* Completed Pomodoro Counter */}
             <div className="flex items-center gap-2 mt-6 text-xs text-content-faint font-bold z-10 font-mono">
-              <Flame className="w-4 h-4 text-amber-400 fill-amber-400" />
+              <Flame className="w-4 h-4 text-amber-600 dark:text-amber-400 fill-amber-400" />
               <span>{timeTracker.pomodorosCompleted} Pomodoro sprints finished today</span>
             </div>
           </div>
@@ -288,7 +288,7 @@ export const TimeTrackerView: React.FC = () => {
           {/* Summary Card */}
           <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-5">
             <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] flex items-center gap-2 font-mono">
-              <BarChart3 className="w-4 h-4 text-indigo-400" />
+              <BarChart3 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span>Focus Distribution</span>
             </h3>
 
@@ -345,7 +345,7 @@ export const TimeTrackerView: React.FC = () => {
                       <div className="text-[12px] text-content-faint uppercase font-black tracking-wider">
                         {STAGE_CONFIG[stg].label}
                       </div>
-                      <div className="font-black text-white font-mono text-sm mt-1">
+                      <div className="font-black text-content font-mono text-sm mt-1">
                         {mins >= 60 ? `${(mins / 60).toFixed(1)}h` : `${mins}m`}
                       </div>
                     </div>
@@ -362,7 +362,7 @@ export const TimeTrackerView: React.FC = () => {
       <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-indigo-400" />
+            <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">
               Focus History Logs ({timeEntries.length} sessions)
             </h3>
@@ -384,11 +384,11 @@ export const TimeTrackerView: React.FC = () => {
                   className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
                 >
                   <div className="space-y-0.5">
-                    <div className="font-bold text-white">
+                    <div className="font-bold text-content">
                       {entry.notes || entry.taskTitle || 'Solo Focus Block'}
                     </div>
                     <div className="flex items-center gap-2 text-[13px] text-content-faint">
-                      <span className="font-semibold text-indigo-400">
+                      <span className="font-semibold text-indigo-600 dark:text-indigo-400">
                         {entry.projectTitle}
                       </span>
                       {entry.taskTitle && <span>• Task: {entry.taskTitle}</span>}
@@ -397,7 +397,7 @@ export const TimeTrackerView: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-3 self-end sm:self-auto">
-                    <span className="px-3 py-1 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 font-mono font-bold">
+                    <span className="px-3 py-1 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-mono font-bold">
                       {mins} mins
                     </span>
                     <button
@@ -431,7 +431,7 @@ export const TimeTrackerView: React.FC = () => {
                 <select
                   value={manualProjectId}
                   onChange={e => setManualProjectId(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-white outline-none focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500"
                 >
                   {projects.map(p => (
                     <option key={p.id} value={p.id}>{p.title}</option>
@@ -446,7 +446,7 @@ export const TimeTrackerView: React.FC = () => {
                 <select
                   value={manualTaskId}
                   onChange={e => setManualTaskId(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-white outline-none focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500"
                 >
                   <option value="">None</option>
                   {tasks.filter(t => t.projectId === manualProjectId).map(t => (
@@ -466,7 +466,7 @@ export const TimeTrackerView: React.FC = () => {
                     step="5"
                     value={manualMinutes}
                     onChange={e => setManualMinutes(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-white outline-none focus:border-indigo-500 font-mono"
+                    className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500 font-mono"
                   />
                 </div>
 
@@ -478,7 +478,7 @@ export const TimeTrackerView: React.FC = () => {
                     type="date"
                     value={manualDate}
                     onChange={e => setManualDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-white outline-none focus:border-indigo-500 font-mono"
+                    className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500 font-mono"
                   />
                 </div>
               </div>
@@ -500,7 +500,7 @@ export const TimeTrackerView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowManualModal(false)}
-                  className="px-4 py-2 rounded-xl text-content-faint hover:text-white font-bold transition-colors"
+                  className="px-4 py-2 rounded-xl text-content-faint hover:text-content font-bold transition-colors"
                 >
                   Cancel
                 </button>

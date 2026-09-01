@@ -68,7 +68,7 @@ export const AuthView: React.FC = () => {
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8} placeholder="At least 8 characters" className="w-full rounded-xl border border-line bg-surface-2 px-3.5 py-3 text-sm text-content outline-none placeholder:text-content-muted focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20" />
           </div>
 
-          {error && <div className="text-xs text-rose-300 bg-rose-950/30 border border-rose-900/50 rounded-xl px-3 py-2">{error}</div>}
+          {error && <div className="text-xs text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-xl px-3 py-2">{error}</div>}
 
           <Button type="submit" disabled={loading} className="mt-2 w-full">{loading ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Create account'}</Button>
         </form>

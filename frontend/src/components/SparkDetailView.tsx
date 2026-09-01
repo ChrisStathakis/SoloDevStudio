@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   ArrowLeft,
@@ -12,20 +12,12 @@ import {
   CheckSquare,
   Pencil,
   Image as ImageIcon,
+  Download,
 } from 'lucide-react';
-import { Idea, IdeaStatus, AppCategory, SketchObject } from '../types';
+import { Idea, IdeaStatus, SketchObject } from '../types';
 import { SketchCanvas } from './SketchCanvas';
-
-const CATEGORIES: AppCategory[] = [
-  'Web App / SaaS',
-  'Mobile App',
-  'Chrome Extension',
-  'Developer Tool / CLI',
-  'Open Source Library',
-  'AI / ML Tool',
-  'Desktop App',
-  'Portfolio / Website',
-];
+import { downloadPdf } from '../services/pdfDownload';
+import { useIdeaCategories } from '../hooks/useIdeaCategories';
 
 const STATUS_FLOW: { value: IdeaStatus; label: string }[] = [
   { value: 'spark', label: 'Raw Spark' },
@@ -53,6 +45,7 @@ export const SparkDetailView: React.FC = () => {
   } = useApp();
 
   const idea = ideas.find(i => i.id === selectedSparkId) || null;
+  const { categories } = useIdeaCategories();
 
   const [title, setTitle] = useState('');
   const [tagline, setTagline] = useState('');
@@ -68,6 +61,8 @@ export const SparkDetailView: React.FC = () => {
   const [sketchModal, setSketchModal] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!idea) return;
@@ -88,7 +83,7 @@ export const SparkDetailView: React.FC = () => {
         <button
           type="button"
           onClick={() => setSelectedSparkId(null)}
-          className="text-xs font-black text-amber-400 hover:text-amber-300 flex items-center gap-1.5"
+          className="text-xs font-black text-amber-600 dark:text-amber-400 hover:text-amber-300 flex items-center gap-1.5"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to Sparks</span>
@@ -139,6 +134,19 @@ export const SparkDetailView: React.FC = () => {
     if (confirm(`Delete spark "${idea.title}"?`)) deleteIdea(idea.id);
   };
 
+  const handleExportPdf = async () => {
+    if (isExportingPdf) return;
+    setIsExportingPdf(true);
+    setPdfExportError(null);
+    try {
+      await downloadPdf(`/ideas/${idea.id}/export-pdf/`, `${idea.title || 'idea'}-idea-brief.pdf`);
+    } catch (error: any) {
+      setPdfExportError(error?.message || 'Unable to export PDF.');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   const handleConvert = async () => {
     if (isConverting) return;
     setIsConverting(true);
@@ -163,13 +171,22 @@ export const SparkDetailView: React.FC = () => {
         <button
           type="button"
           onClick={() => setSelectedSparkId(null)}
-          className="text-xs font-black text-amber-400 hover:text-amber-300 flex items-center gap-1.5"
+          className="text-xs font-black text-amber-600 dark:text-amber-400 hover:text-amber-300 flex items-center gap-1.5"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to Sparks</span>
         </button>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleExportPdf()}
+            disabled={isExportingPdf}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-indigo-500/60 text-xs font-bold transition-colors disabled:opacity-50"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{isExportingPdf ? 'Exporting…' : 'Export PDF'}</span>
+          </button>
           {idea.status === 'converted' && idea.convertedProjectId ? (
             <button
               type="button"
@@ -178,7 +195,7 @@ export const SparkDetailView: React.FC = () => {
                 setSelectedSparkId(null);
                 setCurrentView('projects');
               }}
-              className="flex items-center gap-1.5 text-xs font-bold text-indigo-400 hover:text-indigo-300"
+              className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-300"
             >
               <span>View Project →</span>
             </button>
@@ -194,12 +211,13 @@ export const SparkDetailView: React.FC = () => {
             </button>
           )}
 
-          {conversionError && <p className="text-xs text-rose-300" role="alert">{conversionError}</p>}
+          {conversionError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{conversionError}</p>}
+          {pdfExportError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{pdfExportError}</p>}
 
           <button
             type="button"
             onClick={handleDelete}
-            className="p-2 text-rose-400 hover:text-rose-300 rounded-xl bg-surface-2 border border-line hover:border-rose-800 transition-colors"
+            className="p-2 text-rose-600 dark:text-rose-400 hover:text-rose-300 rounded-xl bg-surface-2 border border-line hover:border-rose-800 transition-colors"
             title="Delete Spark"
           >
             <Trash2 className="w-4 h-4" />
@@ -211,7 +229,7 @@ export const SparkDetailView: React.FC = () => {
       <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-5">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
-            <span className="text-[12px] font-black uppercase tracking-[0.2em] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md">
+            <span className="text-[12px] font-black uppercase tracking-[0.2em] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md">
               SPARK DETAIL
             </span>
           </div>
@@ -229,7 +247,7 @@ export const SparkDetailView: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className={labelCls}><Sparkles className="w-3.5 h-3.5 text-amber-400" />Title</label>
+            <label className={labelCls}><Sparkles className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />Title</label>
             <input
               className={fieldCls + ' text-base font-black'}
               value={title}
@@ -255,10 +273,10 @@ export const SparkDetailView: React.FC = () => {
           <select
             className={fieldCls}
             value={idea.category}
-            onChange={e => commit({ category: e.target.value as AppCategory })}
+            onChange={e => commit({ category: e.target.value })}
           >
-            {CATEGORIES.map(c => (
-              <option key={c} value={c}>{c}</option>
+            {categories.map(category => (
+              <option key={category.id} value={category.name}>{category.name}</option>
             ))}
           </select>
         </div>
@@ -268,7 +286,7 @@ export const SparkDetailView: React.FC = () => {
       {/* Problem / Solution */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-2">
-          <label className={labelCls}><Target className="w-3.5 h-3.5 text-rose-400" />The Problem</label>
+          <label className={labelCls}><Target className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />The Problem</label>
           <textarea
             className={fieldCls + ' min-h-[120px] resize-y'}
             value={problem}
@@ -278,7 +296,7 @@ export const SparkDetailView: React.FC = () => {
           />
         </div>
         <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-2">
-          <label className={labelCls}><Zap className="w-3.5 h-3.5 text-amber-400" />The Solution</label>
+          <label className={labelCls}><Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />The Solution</label>
           <textarea
             className={fieldCls + ' min-h-[120px] resize-y'}
             value={solution}
@@ -302,7 +320,7 @@ export const SparkDetailView: React.FC = () => {
           />
         </div>
         <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-2">
-          <label className={labelCls}><DollarSign className="w-3.5 h-3.5 text-emerald-400" />Monetization</label>
+          <label className={labelCls}><DollarSign className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />Monetization</label>
           <input
             className={fieldCls}
             value={monetization}
@@ -315,7 +333,7 @@ export const SparkDetailView: React.FC = () => {
 
       {/* Sketch */}
       <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-3">
-        <label className={labelCls}><ImageIcon className="w-3.5 h-3.5 text-indigo-400" />Concept Sketch</label>
+        <label className={labelCls}><ImageIcon className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />Concept Sketch</label>
         {idea.sketchDataUrl ? (
           <div className="relative group rounded-2xl overflow-hidden border border-line bg-surface-inverse p-2">
             <img src={idea.sketchDataUrl} alt="Idea sketch" className="max-h-72 w-full object-contain rounded-xl" />
@@ -330,7 +348,7 @@ export const SparkDetailView: React.FC = () => {
             onClick={() => setSketchModal(true)}
             className="w-full py-3 px-4 rounded-2xl border border-dashed border-line hover:border-amber-500/60 bg-surface-3/50 hover:bg-amber-500/5 text-content-faint hover:text-amber-300 text-xs font-bold flex items-center justify-center gap-2 transition-all"
           >
-            <Pencil className="w-4 h-4 text-amber-400" />
+            <Pencil className="w-4 h-4 text-amber-600 dark:text-amber-400" />
             <span>Draw Wireframe Sketch</span>
           </button>
         )}
@@ -338,7 +356,7 @@ export const SparkDetailView: React.FC = () => {
 
       {/* MVP Features */}
       <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-3">
-        <label className={labelCls}><CheckSquare className="w-3.5 h-3.5 text-indigo-400" />MVP Feature Scope ({mvpFeatures.length})</label>
+        <label className={labelCls}><CheckSquare className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />MVP Feature Scope ({mvpFeatures.length})</label>
         <div className="space-y-1.5">
           {mvpFeatures.map((feat, idx) => (
             <div key={idx} className="flex items-center justify-between text-sm bg-surface-3 border border-line px-3 py-2 rounded-xl text-content-muted group">
@@ -365,7 +383,7 @@ export const SparkDetailView: React.FC = () => {
 
       {/* Tags */}
       <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-3">
-        <label className={labelCls}><Tag className="w-3.5 h-3.5 text-amber-400" />Tags</label>
+        <label className={labelCls}><Tag className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />Tags</label>
         <div className="flex flex-wrap items-center gap-2">
           {tags.map(t => (
             <span key={t} className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-surface-3 border border-line text-content-muted text-xs font-medium">

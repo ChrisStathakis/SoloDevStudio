@@ -15,6 +15,7 @@ import {
   Play
 } from 'lucide-react';
 import { ProjectStage, PriorityQuadrant, AppCategory, IdeaStatus, TaskCategory } from '../types';
+import { useIdeaCategories } from '../hooks/useIdeaCategories';
 
 export const QuickAddModal: React.FC = () => {
   const {
@@ -66,9 +67,16 @@ export const QuickAddModal: React.FC = () => {
   const [ideaProblem, setIdeaProblem] = useState('');
   const [ideaSolution, setIdeaSolution] = useState('');
   const [ideaNotes, setIdeaNotes] = useState('');
-  const [ideaCategory, setIdeaCategory] = useState<AppCategory>('Web App / SaaS');
+  const [ideaCategory, setIdeaCategory] = useState('Web App / SaaS');
   const [ideaStatus, setIdeaStatus] = useState<IdeaStatus>('spark');
   const [ideaTags, setIdeaTags] = useState('mvp, idea');
+  const { categories: ideaCategories } = useIdeaCategories();
+
+  useEffect(() => {
+    if (ideaCategories.length && !ideaCategories.some(category => category.name === ideaCategory)) {
+      setIdeaCategory(ideaCategories[0].name);
+    }
+  }, [ideaCategories, ideaCategory]);
 
   // Timer form state
   const [timerProjectId, setTimerProjectId] = useState('');
@@ -214,7 +222,7 @@ export const QuickAddModal: React.FC = () => {
       <div className="bg-surface rounded-3xl shadow-2xl border border-line w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Modal Header & Tabs */}
-        <div className="p-4 bg-surface-inverse border-b border-line flex items-center justify-between">
+        <div className="p-4 bg-surface-2 dark:bg-surface-inverse border-b border-line flex items-center justify-between">
           <div className="flex items-center gap-1.5 bg-surface-3 p-1 rounded-2xl border border-line/80">
             <button
               type="button"
@@ -223,7 +231,7 @@ export const QuickAddModal: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'task'
                   ? 'bg-indigo-600 text-white shadow-md'
-                  : 'text-content-faint hover:text-white'
+                  : 'text-content-faint hover:text-content'
               }`}
             >
               <CheckSquare className="w-3.5 h-3.5" />
@@ -237,7 +245,7 @@ export const QuickAddModal: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'project'
                   ? 'bg-indigo-600 text-white shadow-md'
-                  : 'text-content-faint hover:text-white'
+                  : 'text-content-faint hover:text-content'
               }`}
             >
               <FolderPlus className="w-3.5 h-3.5" />
@@ -251,7 +259,7 @@ export const QuickAddModal: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'idea'
                   ? 'bg-amber-600 text-white shadow-md'
-                  : 'text-content-faint hover:text-white'
+                  : 'text-content-faint hover:text-content'
               }`}
             >
               <Lightbulb className="w-3.5 h-3.5" />
@@ -265,7 +273,7 @@ export const QuickAddModal: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'timer'
                   ? 'bg-rose-600 text-white shadow-md'
-                  : 'text-content-faint hover:text-white'
+                  : 'text-content-faint hover:text-content'
               }`}
             >
               <Timer className="w-3.5 h-3.5" />
@@ -276,7 +284,7 @@ export const QuickAddModal: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsQuickAddOpen(false)}
-            className="p-1.5 text-content-faint hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+            className="p-1.5 text-content-faint hover:text-content rounded-xl hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -437,7 +445,7 @@ export const QuickAddModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-white hover:bg-slate-800 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
                 >
                   Cancel
                 </button>
@@ -580,7 +588,7 @@ export const QuickAddModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-white hover:bg-slate-800 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
                 >
                   Cancel
                 </button>
@@ -647,14 +655,10 @@ export const QuickAddModal: React.FC = () => {
                   </label>
                   <select
                     value={ideaCategory}
-                    onChange={e => setIdeaCategory(e.target.value as AppCategory)}
+                    onChange={e => setIdeaCategory(e.target.value)}
                     className="w-full px-3 py-2 text-xs bg-surface-2 border border-line rounded-xl text-content focus:border-amber-500 outline-none font-bold"
                   >
-                    <option value="Web App / SaaS">Web App / SaaS</option>
-                    <option value="Developer Tool / CLI">Developer Tool / CLI</option>
-                    <option value="Chrome Extension">Chrome Extension</option>
-                    <option value="AI / ML Tool">AI / ML Tool</option>
-                    <option value="Mobile App">Mobile App</option>
+                    {ideaCategories.map(category => <option key={category.id} value={category.name}>{category.name}</option>)}
                   </select>
                 </div>
 
@@ -664,7 +668,7 @@ export const QuickAddModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-white hover:bg-slate-800 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
                 >
                   Cancel
                 </button>
@@ -702,7 +706,7 @@ export const QuickAddModal: React.FC = () => {
                   onClick={() => setTimerMode('pomodoro')}
                   className={`p-4 rounded-2xl border text-left transition-all ${
                     timerMode === 'pomodoro'
-                      ? 'border-rose-500 bg-rose-950/20 text-rose-200 ring-1 ring-rose-500'
+                      ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-200 ring-1 ring-rose-500'
                       : 'border-line bg-surface-2 hover:bg-surface-3 text-content-muted'
                   }`}
                 >
@@ -717,7 +721,7 @@ export const QuickAddModal: React.FC = () => {
                   onClick={() => setTimerMode('stopwatch')}
                   className={`p-4 rounded-2xl border text-left transition-all ${
                     timerMode === 'stopwatch'
-                      ? 'border-rose-500 bg-rose-950/20 text-rose-200 ring-1 ring-rose-500'
+                      ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-200 ring-1 ring-rose-500'
                       : 'border-line bg-surface-2 hover:bg-surface-3 text-content-muted'
                   }`}
                 >
@@ -732,7 +736,7 @@ export const QuickAddModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-white hover:bg-slate-800 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
                 >
                   Cancel
                 </button>

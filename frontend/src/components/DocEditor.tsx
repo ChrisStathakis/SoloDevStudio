@@ -130,7 +130,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
         <button
           type="button"
           onClick={onBack}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong text-xs font-black transition-all"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong text-xs font-black transition-all"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           <span>Back</span>
@@ -143,7 +143,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
               type="button"
               onClick={() => setEditorMode('edit')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] font-black transition-all ${
-                editorMode === 'edit' ? 'bg-indigo-600 text-white' : 'text-content-faint hover:text-white'
+                editorMode === 'edit' ? 'bg-indigo-600 text-white' : 'text-content-faint hover:text-content'
               }`}
             >
               <Edit3 className="w-3 h-3" />
@@ -153,7 +153,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
               type="button"
               onClick={() => setEditorMode('preview')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] font-black transition-all ${
-                editorMode === 'preview' ? 'bg-indigo-600 text-white' : 'text-content-faint hover:text-white'
+                editorMode === 'preview' ? 'bg-indigo-600 text-white' : 'text-content-faint hover:text-content'
               }`}
             >
               <Eye className="w-3 h-3" />
@@ -167,8 +167,8 @@ export const DocEditor: React.FC<DocEditorProps> = ({
             disabled={!draftContent.trim()}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-black transition-all disabled:opacity-40 ${
               copied
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                : 'bg-surface-2 border-line text-content-muted hover:text-white hover:border-line-strong'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+                : 'bg-surface-2 border-line text-content-muted hover:text-content hover:border-line-strong'
             }`}
             title="Copy full skill content"
           >
@@ -190,7 +190,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
             <button
               type="button"
               onClick={handleDelete}
-              className="p-2 rounded-xl bg-surface-2 border border-line text-rose-400 hover:text-rose-300 hover:border-rose-900/60 transition-all"
+              className="p-2 rounded-xl bg-surface-2 border border-line text-rose-600 dark:text-rose-400 hover:text-rose-300 hover:border-rose-900/60 transition-all"
             title={contextProjectId ? 'Remove skill from this project' : 'Delete skill from all projects'}
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -200,7 +200,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
       </div>
 
       {error && (
-        <div className="px-4 py-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+        <div className="px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
           {error}
         </div>
       )}
@@ -216,7 +216,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
       {/* Filter category selector */}
       <div className="p-4 rounded-2xl bg-surface border border-line space-y-2.5">
         <div className="flex items-center gap-1.5">
-          <Filter className="w-3.5 h-3.5 text-indigo-400" />
+          <Filter className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
           <span className="text-[12px] font-black uppercase tracking-[0.15em] text-content-faint font-mono">
             Filter
           </span>
@@ -230,8 +230,8 @@ export const DocEditor: React.FC<DocEditorProps> = ({
             onClick={() => setDraftFilterId(null)}
             className={`px-2.5 py-1 rounded-lg text-[13px] font-bold border transition-all ${
               draftFilterId === null
-                ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-300'
-                : 'bg-surface-2 border-line text-content-faint hover:border-line-strong hover:text-white'
+                ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-700 dark:text-indigo-300'
+                : 'bg-surface-2 border-line text-content-faint hover:border-line-strong hover:text-content'
             }`}
           >
             None
@@ -245,8 +245,8 @@ export const DocEditor: React.FC<DocEditorProps> = ({
                 onClick={() => setDraftFilterId(active ? null : f.id)}
                 className={`px-2.5 py-1 rounded-lg text-[13px] font-bold border transition-all ${
                   active
-                    ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-300'
-                    : 'bg-surface-2 border-line text-content-faint hover:border-line-strong hover:text-white'
+                    ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-surface-2 border-line text-content-faint hover:border-line-strong hover:text-content'
                 }`}
               >
                 {f.name}
@@ -259,7 +259,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
       {/* Linked Projects multi-select */}
       <div className="p-4 rounded-2xl bg-surface border border-line space-y-2.5">
         <div className="flex items-center gap-1.5">
-          <Link2 className="w-3.5 h-3.5 text-indigo-400" />
+          <Link2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
           <span className="text-[12px] font-black uppercase tracking-[0.15em] text-content-faint font-mono">
             Linked Projects ({draftProjectIds.length})
           </span>
@@ -280,8 +280,8 @@ export const DocEditor: React.FC<DocEditorProps> = ({
                 onClick={() => toggleDraftProject(p.id)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[13px] font-bold border transition-all ${
                   active
-                    ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-300'
-                    : 'bg-surface-2 border-line text-content-faint hover:border-line-strong hover:text-white'
+                    ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-surface-2 border-line text-content-faint hover:border-line-strong hover:text-content'
                 }`}
               >
                 <span

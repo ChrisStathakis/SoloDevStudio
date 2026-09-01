@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from rest_framework.test import APITestCase
 
-from .models import Idea, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, Task, User
+from .models import AgentFilter, Idea, IdeaCategory, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, Subtask, Task, TimeEntry, User
 from .serializers import ProjectSerializer
 
 
@@ -14,8 +14,10 @@ class ProjectLaunchPromptTests(APITestCase):
             email='prompt-owner@example.com',
             password='test-password-123',
         )
+        self.category = IdeaCategory.objects.get_or_create(name='Web App / SaaS')[0]
         self.idea = Idea.objects.create(
             owner=self.user,
+            category=self.category,
             title='Team Notes',
             tagline='Shared notes for small teams',
             problem='Important decisions get lost in chat.',
@@ -38,6 +40,7 @@ class ProjectLaunchPromptTests(APITestCase):
         self.assertEqual(response.data['project']['launch_prompt']['content'], prompt.content)
         self.assertEqual(project.problem, self.idea.problem)
         self.assertEqual(project.solution, self.idea.solution)
+
         self.assertEqual(project.target_audience, self.idea.target_audience)
         self.assertEqual(project.monetization, self.idea.monetization)
         self.assertEqual(project.mvp_features, self.idea.mvp_features)
@@ -57,6 +60,30 @@ class ProjectLaunchPromptTests(APITestCase):
         )
 
         self.assertIsNone(ProjectSerializer(project).data['launch_prompt'])
+
+    def test_initialization_endpoints_include_saved_prompt_and_active_skills(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(f'/api/ideas/{self.idea.pk}/convert/')
+        self.assertEqual(response.status_code, 201)
+        project = Project.objects.get(pk=response.data['project']['id'])
+        active_skill = ProjectDoc.objects.create(owner=self.user, title='React conventions', content='Prefer small components.')
+        inactive_skill = ProjectDoc.objects.create(owner=self.user, title='Inactive skill', content='Do not include this.')
+        ProjectAgentLink.objects.create(project=project, agent=active_skill, active=True)
+        ProjectAgentLink.objects.create(project=project, agent=inactive_skill, active=False)
+        task = Task.objects.create(project=project, title='Build notes', description='Keep the first slice small.')
+
+        project_prompt = self.client.get(f'/api/projects/{project.pk}/initialize-prompt/')
+        self.assertEqual(project_prompt.status_code, 200)
+        self.assertIn('Team Notes', project_prompt.data['content'])
+        self.assertIn('Prefer small components.', project_prompt.data['content'])
+        self.assertNotIn('Do not include this.', project_prompt.data['content'])
+        self.assertEqual([skill['title'] for skill in project_prompt.data['active_skills']], ['React conventions'])
+
+        task_prompt = self.client.get(f'/api/tasks/{task.pk}/prompt/')
+        self.assertEqual(task_prompt.status_code, 200)
+        self.assertIn('Build notes', task_prompt.data['content'])
+        self.assertIn('Keep the first slice small.', task_prompt.data['content'])
+        self.assertIn('Prefer small components.', task_prompt.data['content'])
 
     def test_project_updates_accept_spark_fields(self):
         self.client.force_authenticate(self.user)
@@ -110,6 +137,105 @@ class ProjectLaunchPromptTests(APITestCase):
         self.assertEqual(ProjectLaunchPrompt.objects.count(), 0)
         self.idea.refresh_from_db()
         self.assertEqual(self.idea.status, 'spark')
+
+
+class IdeaCategoryTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='category-owner', email='category@example.com', password='test-password-123')
+        self.client.force_authenticate(self.user)
+
+    def test_categories_are_seeded_and_custom_categories_are_safe_to_manage(self):
+        seeded = self.client.get('/api/idea-categories/')
+        self.assertEqual(seeded.status_code, 200)
+        self.assertIn('Mobile App', [category['name'] for category in seeded.data])
+
+        created = self.client.post('/api/idea-categories/', {'name': 'Browser Game'})
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.data['name'], 'Browser Game')
+
+        idea = self.client.post('/api/ideas/', {'title': 'Arcade idea', 'category': 'Browser Game'})
+        self.assertEqual(idea.status_code, 201)
+        self.assertEqual(idea.data['category'], 'Browser Game')
+
+        protected_delete = self.client.delete(f"/api/idea-categories/{created.data['id']}/")
+        self.assertEqual(protected_delete.status_code, 409)
+
+        renamed = self.client.patch(f"/api/idea-categories/{created.data['id']}/", {'name': 'Web Game'})
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(self.client.get(f"/api/ideas/{idea.data['id']}/").data['category'], 'Web Game')
+
+
+class PdfExportTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='pdf-owner', email='pdf@example.com', password='test-password-123')
+        self.other_user = User.objects.create_user(username='pdf-other', email='pdf-other@example.com', password='test-password-123')
+        self.category = IdeaCategory.objects.get_or_create(name='Web App / SaaS')[0]
+        self.project = Project.objects.create(
+            owner=self.user,
+            title='Printable Project',
+            tagline='A report-ready project',
+            description='A detailed project description.',
+            problem='A clear problem.',
+            solution='A focused solution.',
+            target_audience='Small teams',
+            monetization='Subscription',
+            mvp_features=['Export reports'],
+            tags=['reports'],
+            tech_stack=['Django', 'React'],
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        self.milestone = Milestone.objects.create(project=self.project, title='First release', target_date=date(2026, 4, 1))
+        self.task = Task.objects.create(project=self.project, title='Build PDF export', description='Make a printable report.')
+        Subtask.objects.create(task=self.task, title='Render the layout')
+        TimeEntry.objects.create(owner=self.user, project=self.project, task=self.task, project_title=self.project.title, task_title=self.task.title, duration_seconds=1800, timestamp='2026-01-01T12:00:00Z')
+        self.idea = Idea.objects.create(
+            owner=self.user,
+            category=self.category,
+            title='Printable Idea',
+            problem='Ideas need a shareable format.',
+            solution='Generate a PDF.',
+            mvp_features=['Download PDF'],
+            tags=['pdf'],
+            sketch_data_url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JviIAAAAASUVORK5CYII=',
+            market_research={
+                'marketSummary': 'There is demand for concise reports.',
+                'competitors': [{'name': 'Example', 'description': 'A similar tool.', 'pricing': 'Free', 'differentiationOpportunity': 'Focused project exports.'}],
+                'keyRisks': ['Long content'],
+                'sources': [{'title': 'Example source', 'url': 'https://example.com'}],
+            },
+        )
+        self.invalid_sketch_idea = Idea.objects.create(
+            owner=self.user,
+            category=self.category,
+            title='Invalid Sketch',
+            sketch_data_url='not-a-valid-image',
+        )
+        self.client.force_authenticate(self.user)
+
+    def assert_pdf(self, response, expected_filename):
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn(expected_filename, response['Content-Disposition'])
+        self.assertTrue(response.content.startswith(b'%PDF-'))
+        self.assertGreater(len(response.content), 1000)
+
+    def test_project_export_is_a_pdf_with_project_data(self):
+        response = self.client.get(f'/api/projects/{self.project.pk}/export-pdf/')
+        self.assert_pdf(response, 'printable-project-project-brief.pdf')
+
+    def test_idea_export_is_a_pdf_with_a_sketch_and_research(self):
+        response = self.client.get(f'/api/ideas/{self.idea.pk}/export-pdf/')
+        self.assert_pdf(response, 'printable-idea-idea-brief.pdf')
+
+    def test_idea_export_ignores_invalid_sketch_data(self):
+        response = self.client.get(f'/api/ideas/{self.invalid_sketch_idea.pk}/export-pdf/')
+        self.assert_pdf(response, 'invalid-sketch-idea-brief.pdf')
+
+    def test_exports_are_private_to_the_owner(self):
+        self.client.force_authenticate(self.other_user)
+        self.assertEqual(self.client.get(f'/api/projects/{self.project.pk}/export-pdf/').status_code, 404)
+        self.assertEqual(self.client.get(f'/api/ideas/{self.idea.pk}/export-pdf/').status_code, 404)
 
 
 class MilestoneTaskLinkTests(APITestCase):
@@ -214,3 +340,37 @@ class LauncherModelPresetTests(APITestCase):
         preset = LauncherModelPreset.objects.create(owner=self.other_user, tool='codex', model_id='gpt-5.6-terra', reasoning_effort='medium', label='Other')
         response = self.client.get(f'/api/launcher-model-presets/{preset.pk}/')
         self.assertEqual(response.status_code, 404)
+
+
+class WorkspaceResetTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='reset-owner', email='reset@example.com', password='test-password-123', potential_projects_root='D:/projects')
+        self.other_user = User.objects.create_user(username='reset-other', email='reset-other@example.com', password='test-password-123')
+        self.project = Project.objects.create(owner=self.user, title='Reset me', target_deadline=date(2026, 12, 1), start_date=date(2026, 1, 1))
+        self.other_project = Project.objects.create(owner=self.other_user, title='Keep me', target_deadline=date(2026, 12, 1), start_date=date(2026, 1, 1))
+        self.task = Task.objects.create(project=self.project, title='Reset task')
+        self.idea = Idea.objects.create(owner=self.user, title='Reset idea', category=IdeaCategory.objects.get_or_create(name='Web App / SaaS')[0])
+        self.skill = ProjectDoc.objects.create(owner=self.user, title='Reset skill')
+        ProjectAgentLink.objects.create(project=self.project, agent=self.skill)
+        self.preset = LauncherModelPreset.objects.create(owner=self.user, tool='codex', model_id='gpt-5.6-terra', reasoning_effort='medium', label='Reset preset')
+        TimeEntry.objects.create(owner=self.user, project=self.project, task=self.task, project_title=self.project.title, task_title=self.task.title, duration_seconds=60, timestamp='2026-01-01T12:00:00Z')
+        self.filter = AgentFilter.objects.create(name='Reset filter', slug='reset-filter', order=99)
+        self.client.force_authenticate(self.user)
+
+    def test_reset_deletes_all_workspace_data_but_preserves_account_and_shared_filters(self):
+        response = self.client.post('/api/workspace/reset/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['success'])
+        self.assertEqual(response.data['deleted']['docs'], 1)
+        self.assertEqual(response.data['deleted']['modelPresets'], 1)
+        self.assertFalse(Project.objects.filter(owner=self.user).exists())
+        self.assertFalse(Task.objects.filter(project__owner=self.user).exists())
+        self.assertFalse(Idea.objects.filter(owner=self.user).exists())
+        self.assertFalse(TimeEntry.objects.filter(owner=self.user).exists())
+        self.assertFalse(ProjectDoc.objects.filter(owner=self.user).exists())
+        self.assertFalse(LauncherModelPreset.objects.filter(owner=self.user).exists())
+        self.assertTrue(Project.objects.filter(pk=self.other_project.pk).exists())
+        self.assertTrue(AgentFilter.objects.filter(pk=self.filter.pk).exists())
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.potential_projects_root, '')

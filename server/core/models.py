@@ -43,6 +43,21 @@ class AppCategory(models.TextChoices):
     PORTFOLIO = 'Portfolio / Website', 'Portfolio / Website'
 
 
+class IdeaCategory(models.Model):
+    """A shared, settings-managed category for idea records."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50, unique=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
+
+
 class PriorityQuadrant(models.TextChoices):
     Q1_DO = 'q1_do', 'Do First'
     Q2_SCHEDULE = 'q2_schedule', 'Schedule & Deep Work'
@@ -241,7 +256,7 @@ class Idea(models.Model):
     problem = models.TextField(blank=True, default='')
     solution = models.TextField(blank=True, default='')
     notes = models.TextField(blank=True, default='')
-    category = models.CharField(max_length=50, choices=AppCategory.choices, default=AppCategory.WEB_SAAS)
+    category = models.ForeignKey(IdeaCategory, on_delete=models.PROTECT, related_name='ideas')
     status = models.CharField(max_length=20, choices=IdeaStatus.choices, default=IdeaStatus.SPARK)
     sketch_data_url = models.TextField(null=True, blank=True)
     sketch_objects = models.JSONField(default=list, blank=True, null=True)

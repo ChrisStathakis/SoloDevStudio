@@ -103,7 +103,7 @@ Open the frontend, register a local user, and sign in. Application data is scope
 
 ## OpenCode and Codex initialization
 
-Projects can save an Initial Prompt and active Skills, then compose a full project or task-specific prompt for copying into OpenCode or Codex. Configure model presets in Settings before selecting a project default. Authentication and provider setup are handled by the selected CLI.
+Projects can save an Initial Prompt and active Skills, then compose a full project or task-specific prompt for preparation in OpenCode or Codex. Configure model presets in Settings before selecting a project default. Authentication and provider setup are handled by the selected CLI; the generated prompt is also copied as a fallback and is never submitted without your confirmation.
 
 ## Windows terminal notes
 

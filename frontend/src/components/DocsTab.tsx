@@ -127,7 +127,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
     return (
       <div className="space-y-4">
         {error && (
-          <div className="px-4 py-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+          <div className="px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
             {error}
           </div>
         )}
@@ -155,7 +155,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
           <button
             type="button"
             onClick={() => setShowLinkModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-white text-xs font-black transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-content text-xs font-black transition-all"
           >
             <Link2 className="w-3.5 h-3.5" />
             <span>Link Existing Skill</span>
@@ -173,7 +173,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
       </div>
 
       {error && (
-        <div className="px-4 py-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-xs font-bold text-rose-300">
+        <div className="px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
           {error}
         </div>
       )}
@@ -195,7 +195,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black transition-all ${
                   isSelected
                     ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-surface-2 border border-line text-content-muted hover:text-white hover:border-line-strong'
+                    : 'bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong'
                 }`}
               >
                 {label}
@@ -227,7 +227,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                 <button
                   type="button"
                   onClick={() => setShowLinkModal(true)}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-white text-xs font-black transition-all"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-content text-xs font-black transition-all"
                 >
                   <Link2 className="w-3.5 h-3.5" />
                   <span>Link Existing Skill</span>
@@ -263,7 +263,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3 flex-1 min-w-0">
                     <div className="mt-0.5 p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 shrink-0">
-                      <FileText className="w-4 h-4 text-indigo-400" />
+                      <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -274,13 +274,13 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                           .md · {formatDate(doc.updatedAt)}
                         </span>
                         {doc.filterName && (
-                          <span className="text-[12px] font-black text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
+                          <span className="text-[12px] font-black text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
                             {doc.filterName}
                           </span>
                         )}
                         {sharedCount > 0 && (
                           <span
-                            className="text-[12px] font-mono font-bold text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md"
+                            className="text-[12px] font-mono font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md"
                             title={`Also linked to ${sharedCount} other project${sharedCount > 1 ? 's' : ''}`}
                           >
                             shared · +{sharedCount}
@@ -301,7 +301,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                     aria-pressed={doc.active !== false}
                     onClick={e => { e.stopPropagation(); handleToggleActive(doc); }}
                     onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleToggleActive(doc); } }}
-                    className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${doc.active === false ? 'text-slate-600 hover:text-emerald-400' : 'text-emerald-400 hover:text-amber-300'}`}
+                    className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${doc.active === false ? 'text-slate-600 hover:text-emerald-400' : 'text-emerald-600 dark:text-emerald-400 hover:text-amber-300'}`}
                     title={doc.active === false ? 'Activate skill for this project' : 'Deactivate skill for this project'}
                   >
                     <Power className="w-4 h-4" />
@@ -324,7 +324,7 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                     title="Copy full skill content"
                   >
                     {copiedId === doc.id ? (
-                      <Check className="w-4 h-4 text-emerald-400" />
+                      <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     ) : (
                       <Copy className="w-4 h-4" />
                     )}
