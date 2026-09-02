@@ -4,6 +4,8 @@ SoloDev Studio is a local-first workspace for turning ideas into shipped softwar
 
 The application is designed primarily for local Windows development. A React frontend communicates with a Django REST API backed by SQLite, while the in-app terminal uses Windows pseudo-console support.
 
+The electron app is currently in beta.
+
 ## Highlights
 
 - Turn validated Sparks into projects with a structured MVP brief.

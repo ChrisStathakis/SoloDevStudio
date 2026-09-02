@@ -97,6 +97,38 @@ def project_folder_settings_view(request):
     return Response(_project_folder_payload(user))
 
 
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def project_drive_settings_view(request):
+    """Remap the configured drive letter for every project owned by the user."""
+    raw_drive = request.data.get('drive')
+    drive = str(raw_drive or '').strip().rstrip(':').upper()
+    allowed_drives = {'C', 'D', 'E', 'F', 'G', 'H'}
+    if drive not in allowed_drives:
+        return Response(
+            {'drive': ['Choose a drive letter from C through H.']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from .pathutils import remap_drive
+
+    updated_count = 0
+    with transaction.atomic():
+        projects = Project.objects.select_for_update().filter(owner=request.user)
+        for project in projects:
+            project.drive = drive
+            for field in ('cmd_directory', 'script_path', 'directory_path'):
+                current = getattr(project, field) or ''
+                if current:
+                    setattr(project, field, remap_drive(current, drive))
+            project.save(update_fields=[
+                'drive', 'cmd_directory', 'script_path', 'directory_path', 'updated_at',
+            ])
+            updated_count += 1
+
+    return Response({'drive': drive, 'updated_count': updated_count})
+
+
 def build_launch_prompt(idea):
     """Create a stable, readable coding-agent brief from the idea's saved fields."""
     lines = [
@@ -164,6 +196,33 @@ def create_potential_project_folder(title, user=None):
             suffix += 1
 
 
+def _copy_project_source(source, destination):
+    excluded_directories = {
+        '.git', '.hg', '.svn', 'node_modules', 'dist', 'build', 'out',
+        '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+        '.venv', 'venv', 'env', 'coverage', '.next', '.nuxt', 'output', 'tmp',
+    }
+
+    def ignore(_directory, names):
+        return [name for name in names if name.casefold() in excluded_directories]
+
+    shutil.copytree(source, destination, ignore=ignore, dirs_exist_ok=True)
+
+
+def _remap_project_path(raw_path, source, destination):
+    raw = (raw_path or '').strip().strip('"').strip("'")
+    if not raw:
+        return ''
+    try:
+        source_abs = os.path.abspath(source)
+        raw_abs = os.path.abspath(raw)
+        if os.path.commonpath([source_abs, raw_abs]).casefold() != source_abs.casefold():
+            return ''
+        return str(Path(destination) / os.path.relpath(raw_abs, source_abs))
+    except (OSError, ValueError):
+        return ''
+
+
 def compose_project_initialization_prompt(project, user):
     """Compose the saved project prompt with the project's currently active Skills."""
     prompt = ProjectLaunchPrompt.objects.filter(project=project).first()
@@ -176,8 +235,16 @@ def compose_project_initialization_prompt(project, user):
         (link.agent.title or '').casefold(),
         str(link.agent.id),
     ))
+    # Skills explicitly embedded through the Skills tab are already present in
+    # the saved prompt; don't inject them a second time at launch.
+    embedded_skill_ids = set(re.findall(
+        r'<!--\s*solodev:embedded-skill:([0-9a-f-]{32,36})\s*-->', base,
+        flags=re.IGNORECASE,
+    ))
     sections = []
     for link in links:
+        if str(link.agent_id) in embedded_skill_ids:
+            continue
         agent = link.agent
         lines = [f'### {agent.title}']
         if agent.filter:
@@ -379,6 +446,98 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Failed to open directory: {e}"}, status=500)
         return Response({"ok": True, "path": raw})
 
+    @action(detail=True, methods=['post'], url_path='duplicate')
+    def duplicate(self, request, pk=None):
+        source_project = self.get_object()
+        title = request.data.get('title')
+        if not isinstance(title, str) or not title.strip():
+            return Response({'title': 'A name is required for the copied project.'}, status=status.HTTP_400_BAD_REQUEST)
+        title = title.strip()
+        if len(title) > 300:
+            return Response({'title': 'Project name must be 300 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        source_raw = (source_project.directory_path or '').strip().strip('"').strip("'")
+        if not source_raw:
+            return Response({'error': 'This project does not have a source folder to copy.'}, status=status.HTTP_400_BAD_REQUEST)
+        source_dir = Path(source_raw).expanduser()
+        if not source_dir.is_dir():
+            return Response({'error': f'Project folder does not exist: {source_raw}'}, status=status.HTTP_400_BAD_REQUEST)
+        source_dir = source_dir.resolve()
+        destination = None
+        try:
+            destination = Path(create_potential_project_folder(title, request.user)).resolve()
+            try:
+                destination.relative_to(source_dir)
+            except ValueError:
+                pass
+            else:
+                raise OSError('The configured project root is inside the source folder; choose a different project root before copying.')
+            _copy_project_source(source_dir, destination)
+            script_path = _remap_project_path(source_project.script_path, source_dir, destination)
+            destination_drive = destination.drive[:1].upper() if destination.drive else source_project.drive
+            with transaction.atomic():
+                project_values = {
+                    field.name: getattr(source_project, field.name)
+                    for field in Project._meta.concrete_fields
+                    if field.name not in {'id', 'owner', 'title', 'created_at', 'updated_at', 'directory_path', 'cmd_directory', 'script_path', 'python_env', 'port', 'drive'}
+                }
+                project = Project.objects.create(
+                    owner=request.user,
+                    title=title,
+                    directory_path=str(destination),
+                    cmd_directory=str(destination),
+                    script_path=script_path,
+                    python_env='',
+                    port='',
+                    drive=destination_drive,
+                    **project_values,
+                )
+                milestone_map = {}
+                for milestone in source_project.milestones.all():
+                    copied = Milestone.objects.create(
+                        project=project,
+                        title=milestone.title,
+                        stage=milestone.stage,
+                        target_date=milestone.target_date,
+                        completed=milestone.completed,
+                        description=milestone.description,
+                        order=milestone.order,
+                    )
+                    milestone_map[milestone.pk] = copied
+                for task in source_project.tasks.prefetch_related('subtasks', 'milestones').all():
+                    copied_task = Task.objects.create(
+                        project=project,
+                        title=task.title,
+                        description=task.description,
+                        stage=task.stage,
+                        quadrant=task.quadrant,
+                        category=task.category,
+                        completed=task.completed,
+                        due_date=task.due_date,
+                        estimated_minutes=task.estimated_minutes,
+                        time_spent_minutes=0,
+                        tags=list(task.tags or []),
+                        completed_at=None,
+                    )
+                    for index, subtask in enumerate(task.subtasks.all()):
+                        Subtask.objects.create(
+                            task=copied_task,
+                            title=subtask.title,
+                            completed=subtask.completed,
+                            order=subtask.order if subtask.order is not None else index,
+                        )
+                    copied_task.milestones.set([milestone_map[m.pk] for m in task.milestones.all() if m.pk in milestone_map])
+                prompt = ProjectLaunchPrompt.objects.filter(project=source_project).first()
+                if prompt:
+                    ProjectLaunchPrompt.objects.create(project=project, content=prompt.content)
+                for link in source_project.agent_links.all():
+                    ProjectAgentLink.objects.create(project=project, agent=link.agent, active=link.active)
+        except Exception as exc:
+            if destination and destination.is_dir():
+                shutil.rmtree(destination, ignore_errors=True)
+            return Response({'error': f'Unable to copy project: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'project': ProjectSerializer(project).data}, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=['post'], url_path='run-script')
     def run_script(self, request, pk=None):
         project = self.get_object()
@@ -458,6 +617,36 @@ class ProjectViewSet(viewsets.ModelViewSet):
         link.active = bool(raw_active)
         link.save(update_fields=['active'])
         return Response({'project': str(project.id), 'agent': str(link.agent_id), 'active': link.active})
+
+    @action(detail=True, methods=['post'], url_path=r'agents/(?P<agent_id>[^/.]+)/add-to-prompt')
+    def add_skill_to_prompt(self, request, pk=None, agent_id=None):
+        project = self.get_object()
+        try:
+            link = ProjectAgentLink.objects.select_related('agent').get(
+                project=project, agent_id=agent_id, agent__owner=request.user
+            )
+        except ProjectAgentLink.DoesNotExist:
+            return Response({'error': 'Skill is not linked to this project.'}, status=status.HTTP_404_NOT_FOUND)
+
+        prompt = ProjectLaunchPrompt.objects.filter(project=project).first()
+        if not prompt or not (prompt.content or '').strip():
+            return Response({'error': 'Save a project prompt before adding a skill.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        marker = f'<!-- solodev:embedded-skill:{link.agent_id} -->'
+        content = prompt.content or ''
+        if marker not in content:
+            block = '\n\n'.join((
+                marker,
+                f'## Skill: {link.agent.title}',
+                link.agent.content or '',
+            )).strip()
+            prompt.content = f'{content.rstrip()}\n\n{block}'
+            prompt.save(update_fields=['content', 'updated_at'])
+        return Response({
+            'content': prompt.content,
+            'skill': {'id': str(link.agent_id), 'title': link.agent.title},
+            'already_added': marker in content,
+        })
 
     @action(detail=True, methods=['get'], url_path='copy-prompt')
     def copy_prompt(self, request, pk=None):
@@ -544,6 +733,37 @@ class TaskViewSet(viewsets.ModelViewSet):
                 {'title': link.agent.title, 'filter': link.agent.filter.name if link.agent.filter else None, 'content': link.agent.content or ''}
                 for link in links
             ],
+        })
+
+    @action(detail=True, methods=['post'], url_path='add-to-prompt')
+    def add_to_prompt(self, request, pk=None):
+        task = self.get_object()
+        prompt = ProjectLaunchPrompt.objects.filter(project=task.project).first()
+        if not prompt or not (prompt.content or '').strip():
+            return Response({'error': 'Save an initial project prompt before adding a task.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        marker = f'<!-- solodev:embedded-task:{task.id} -->'
+        content = prompt.content or ''
+        already_added = marker in content
+        if not already_added:
+            lines = [marker, f'## Task: {task.title}']
+            if task.description and task.description.strip():
+                lines.extend(['', '### Description', task.description.strip()])
+            subtasks = list(task.subtasks.order_by('order', 'created_at'))
+            if subtasks:
+                lines.extend([
+                    '',
+                    '### Checklist',
+                    *[f"- [{'x' if sub.completed else ' '}] {sub.title}" for sub in subtasks],
+                ])
+            block = '\n'.join(lines).strip()
+            prompt.content = f'{content.rstrip()}\n\n{block}'
+            prompt.save(update_fields=['content', 'updated_at'])
+
+        return Response({
+            'content': prompt.content,
+            'task': {'id': str(task.id), 'title': task.title},
+            'already_added': already_added,
         })
 
     @action(detail=True, methods=['post'], url_path='toggle-complete')

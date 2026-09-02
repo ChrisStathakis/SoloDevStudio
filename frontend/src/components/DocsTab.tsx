@@ -14,6 +14,7 @@ import {
   Filter,
   Copy,
   Check,
+  ClipboardPlus,
   Power
 } from 'lucide-react';
 import { DocEditor } from './DocEditor';
@@ -21,6 +22,7 @@ import { LinkDocModal } from './LinkDocModal';
 
 interface DocsTabProps {
   projectId: string;
+  onPromptAdded?: () => void;
 }
 
 const formatDate = (iso: string) => {
@@ -31,8 +33,8 @@ const formatDate = (iso: string) => {
   }
 };
 
-export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
-  const { projects } = useApp();
+export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) => {
+  const { projects, refreshData } = useApp();
 
   const [docs, setDocs] = useState<ProjectDoc[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -44,6 +46,8 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
   const [openDocId, setOpenDocId] = useState<string | null>(null);
   const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const [addedId, setAddedId] = useState<string | null>(null);
 
   const copyTimeout = React.useRef<number | null>(null);
 
@@ -66,6 +70,23 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
     } catch (e) {
       console.error('Failed to update agent activity', e);
       setError('Failed to update agent activity.');
+    }
+  };
+
+  const handleAddToPrompt = async (doc: ProjectDoc) => {
+    if (addingId === doc.id) return;
+    setAddingId(doc.id);
+    setError(null);
+    try {
+      await api.post(`/projects/${projectId}/agents/${doc.id}/add-to-prompt/`);
+      setAddedId(doc.id);
+      window.setTimeout(() => setAddedId(current => current === doc.id ? null : current), 1800);
+      await refreshData();
+      onPromptAdded?.();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Failed to add skill to the project prompt.');
+    } finally {
+      setAddingId(null);
     }
   };
 
@@ -305,6 +326,18 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId }) => {
                     title={doc.active === false ? 'Activate skill for this project' : 'Deactivate skill for this project'}
                   >
                     <Power className="w-4 h-4" />
+                  </span>
+
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={e => { e.stopPropagation(); void handleAddToPrompt(doc); }}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); void handleAddToPrompt(doc); } }}
+                    className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${addedId === doc.id ? 'text-emerald-600 dark:text-emerald-400' : 'text-content-faint hover:text-indigo-400 hover:bg-indigo-500/10'}`}
+                    title="Add this skill snapshot to the saved project prompt"
+                    aria-label={`Add ${doc.title} to project prompt`}
+                  >
+                    {addingId === doc.id ? <span className="block w-4 h-4 text-center text-[11px]">…</span> : addedId === doc.id ? <Check className="w-4 h-4" /> : <ClipboardPlus className="w-4 h-4" />}
                   </span>
 
                   <span

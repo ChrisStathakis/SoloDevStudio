@@ -26,7 +26,8 @@ import {
   Check,
   Monitor,
   FolderOpen,
-  Tags
+  Tags,
+  HardDrive
 } from 'lucide-react';
 import { PageHeader } from './ui';
 import { DocEditor } from './DocEditor';
@@ -46,7 +47,7 @@ const formatDate = (iso: string) => {
 };
 
 export const SettingsView: React.FC = () => {
-  const { projects, exportData, importData, resetDefaults, setCurrentView } = useApp();
+  const { projects, exportData, importData, resetDefaults, setCurrentView, refreshData } = useApp();
   const { user, logout } = useAuth();
 
   const [section, setSection] = useState<SettingsSection>('documents');
@@ -80,6 +81,9 @@ export const SettingsView: React.FC = () => {
   const [projectFolderError, setProjectFolderError] = useState<string | null>(null);
   const [projectFolderBusy, setProjectFolderBusy] = useState(false);
   const [showProjectFolderPicker, setShowProjectFolderPicker] = useState(false);
+  const [globalDrive, setGlobalDrive] = useState('');
+  const [globalDriveBusy, setGlobalDriveBusy] = useState(false);
+  const [globalDriveStatus, setGlobalDriveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Windows desktop runtime state
   const isDesktop = Boolean(window.solodevDesktop?.isDesktop);
@@ -178,6 +182,21 @@ export const SettingsView: React.FC = () => {
       setProjectFolderError(null);
     } catch { setProjectFolderError('Unable to reset project folder.'); }
     finally { setProjectFolderBusy(false); }
+  };
+
+  const applyGlobalDrive = async () => {
+    const drive = globalDrive.trim().toUpperCase();
+    if (!drive) return;
+    if (!window.confirm('Change the drive for all projects? This remaps each project folder, CMD directory, and server script path.')) return;
+    setGlobalDriveBusy(true);
+    setGlobalDriveStatus(null);
+    try {
+      const res = await api.patch('/settings/drive/', { drive });
+      await refreshData();
+      setGlobalDriveStatus({ ok: true, msg: `Updated ${res.data?.updated_count ?? 0} project${res.data?.updated_count === 1 ? '' : 's'} to ${res.data?.drive || drive}:.` });
+    } catch (error: any) {
+      setGlobalDriveStatus({ ok: false, msg: error?.response?.data?.drive?.[0] || 'Unable to update the drive for all projects.' });
+    } finally { setGlobalDriveBusy(false); }
   };
 
   const saveDesktopPort = async () => {
@@ -619,6 +638,20 @@ export const SettingsView: React.FC = () => {
               <button type="button" onClick={saveProjectFolder} disabled={projectFolderBusy || !projectFolderDraft.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Save folder</button>
               <button type="button" onClick={resetProjectFolder} disabled={projectFolderBusy || !projectFolderIsCustom} className="rounded-xl border border-line px-4 py-2 text-xs font-black text-content-faint hover:text-content disabled:opacity-40">Reset to app default</button>
             </div>
+          </div>
+          <div className="p-5 rounded-2xl bg-surface border border-line space-y-4">
+            <div>
+              <h3 className="text-sm font-black text-content flex items-center gap-2"><HardDrive className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />Drive for all projects</h3>
+              <p className="text-xs text-content-faint mt-1">Use this when the drive letter changed on your computer. It updates every project you own and remaps folder, CMD, and server-script paths. Python environments are not changed.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={globalDrive} onChange={e => { setGlobalDrive(e.target.value); setGlobalDriveStatus(null); }} disabled={globalDriveBusy} className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content">
+                <option value="">Select drive</option>
+                {['C', 'D', 'E', 'F', 'G', 'H'].map(drive => <option key={drive} value={drive}>{drive}:/</option>)}
+              </select>
+              <button type="button" onClick={applyGlobalDrive} disabled={globalDriveBusy || !globalDrive} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Apply to all projects</button>
+            </div>
+            {globalDriveStatus && <p className={`text-xs ${globalDriveStatus.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`} role="alert">{globalDriveStatus.msg}</p>}
           </div>
           {showProjectFolderPicker && <PathPickerModal mode="folder" initialPath={projectFolderDraft || projectFolderEffective} title="Choose project folder" onClose={() => setShowProjectFolderPicker(false)} onSelect={path => { setProjectFolderDraft(path); setShowProjectFolderPicker(false); }} />}
         </div>

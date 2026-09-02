@@ -3,3 +3,7 @@ node_modules/
 backend-dist/
 .desktop-build/
 release/
+
+# Scratch / test output
+output/
+tmp/

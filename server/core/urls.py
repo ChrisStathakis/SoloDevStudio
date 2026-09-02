@@ -6,7 +6,7 @@ from .views import (
     ProjectViewSet, MilestoneViewSet, TaskViewSet, IdeaViewSet, TimeEntryViewSet,
     ProjectDocViewSet, AgentFilterViewSet, IdeaCategoryViewSet, LauncherModelPresetViewSet,
     export_data_view, import_data_view, reset_workspace_view, dashboard_view, timeline_view,
-    filesystem_browse, project_folder_settings_view,
+    filesystem_browse, project_folder_settings_view, project_drive_settings_view,
 )
 from .terminal_views import (
     create_project_terminal, list_terminals, kill_terminal,
@@ -37,6 +37,7 @@ urlpatterns = [
     path('timeline/', timeline_view, name='timeline'),
     path('filesystem/', filesystem_browse, name='filesystem-browse'),
     path('settings/project-folder/', project_folder_settings_view, name='project-folder-settings'),
+    path('settings/drive/', project_drive_settings_view, name='project-drive-settings'),
     # In-app terminal sessions
     path('terminals/', list_terminals, name='terminal-list'),
     path('terminals/<str:session_id>/output/', terminal_output, name='terminal-output'),

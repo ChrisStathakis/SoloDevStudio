@@ -46,6 +46,7 @@ interface AppContextType {
   refreshData: () => Promise<void>;
   addProject: (project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Project>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
+  duplicateProject: (id: string, title: string) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   advanceProjectStage: (id: string, nextStage: ProjectStage) => Promise<void>;
   addMilestone: (projectId: string, milestone: Omit<Milestone, 'id'>) => Promise<Milestone>;
@@ -255,6 +256,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const res = await api.patch(`/projects/${id}/`, payload);
     const updated = mapProjectFromApi(res.data);
     setProjects(prev => prev.map(p => (p.id === id ? updated : p)));
+  };
+
+  const duplicateProject = async (id: string, title: string): Promise<Project> => {
+    const res = await api.post(`/projects/${id}/duplicate/`, { title: title.trim() });
+    const created = mapProjectFromApi(res.data.project);
+    await fetchAll();
+    setSelectedProjectId(created.id);
+    return created;
   };
 
   const deleteProject = async (id: string) => {
@@ -587,6 +596,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshData,
         addProject,
         updateProject,
+        duplicateProject,
         deleteProject,
         advanceProjectStage,
         addMilestone,

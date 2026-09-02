@@ -34,9 +34,11 @@ import {
   Boxes,
   X,
   Clipboard,
+  ClipboardPlus,
   Check,
   ChevronDown,
-  Download
+  Download,
+  Copy
 } from 'lucide-react';
 import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Project, PriorityQuadrant, TaskCategory, LauncherModelPreset } from '../types';
 import { api } from '../services/api';
@@ -56,6 +58,22 @@ const recoverSavedProjectPrompt = (content: string) => {
   return recovered || null;
 };
 
+type InitializationSettings = {
+  tool: 'opencode' | 'codex';
+  modelId: string;
+  reasoningEffort: 'low' | 'medium' | 'high';
+  mode: 'build' | 'plan';
+};
+
+const mapInitializationSettings = (raw: any): InitializationSettings => ({
+  tool: raw?.tool === 'codex' ? 'codex' : 'opencode',
+  modelId: typeof raw?.model_id === 'string' ? raw.model_id : '',
+  reasoningEffort: raw?.reasoning_effort === 'low' || raw?.reasoning_effort === 'high'
+    ? raw.reasoning_effort
+    : 'medium',
+  mode: raw?.mode === 'plan' ? 'plan' : 'build',
+});
+
 export const ProjectsView: React.FC = () => {
   const { 
     projects, 
@@ -69,6 +87,7 @@ export const ProjectsView: React.FC = () => {
     deleteMilestone,
     deleteProject,
     updateProject,
+    duplicateProject,
     toggleTaskCompletion,
     updateTask,
     toggleSubtask,
@@ -93,6 +112,10 @@ export const ProjectsView: React.FC = () => {
   const [editingSubtask, setEditingSubtask] = useState<{ taskId: string; subtaskId: string; title: string } | null>(null);
   const [isEditingProject, setIsEditingProject] = useState<boolean>(false);
   const [isSavingProject, setIsSavingProject] = useState(false);
+  const [isCopyingProject, setIsCopyingProject] = useState(false);
+  const [copyProjectOpen, setCopyProjectOpen] = useState(false);
+  const [copyProjectTitle, setCopyProjectTitle] = useState('');
+  const [copyProjectError, setCopyProjectError] = useState<string | null>(null);
   const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [pdfExportError, setPdfExportError] = useState<string | null>(null);
@@ -138,6 +161,9 @@ export const ProjectsView: React.FC = () => {
   const [isCheckingTool, setIsCheckingTool] = useState(false);
   const [isInstallingTool, setIsInstallingTool] = useState(false);
   const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'selected' | undefined>>({});
+  const [addingTaskPromptId, setAddingTaskPromptId] = useState<string | null>(null);
+  const [addedTaskPromptId, setAddedTaskPromptId] = useState<string | null>(null);
+  const [taskPromptError, setTaskPromptError] = useState<string | null>(null);
   const [promptSource, setPromptSource] = useState<'project' | 'task'>('project');
   const [selectedPromptTaskId, setSelectedPromptTaskId] = useState('');
   const [milestoneEditor, setMilestoneEditor] = useState<{ milestone?: Project['milestones'][number] } | null>(null);
@@ -175,6 +201,23 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
+  const handleDuplicateProject = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!activeProject || !copyProjectTitle.trim() || isCopyingProject) return;
+    setIsCopyingProject(true);
+    setCopyProjectError(null);
+    try {
+      await duplicateProject(activeProject.id, copyProjectTitle);
+      setCopyProjectOpen(false);
+      setCopyProjectTitle('');
+    } catch (error: any) {
+      const detail = error?.response?.data?.error || error?.response?.data?.title || error?.message;
+      setCopyProjectError(detail || 'Unable to copy this project.');
+    } finally {
+      setIsCopyingProject(false);
+    }
+  };
+
   // Reset all path editors / drafts / picker when switching projects so a stale
   // draft from one project can't be saved onto another (Bug 1: "paths not saved").
   useEffect(() => {
@@ -206,18 +249,73 @@ export const ProjectsView: React.FC = () => {
     setPreviewedSkillCount(0);
     setPromptPreviewError(null);
     setCopiedPreviewPrompt(false);
-    setLaunchTool(activeProject?.initializationTool || 'opencode');
-    setLaunchModel(activeProject?.initializationModel || '');
-    setLaunchReasoningEffort(activeProject?.initializationReasoningEffort || 'medium');
-    setLaunchMode(activeProject?.initializationMode || 'build');
     setIsLaunchDialogOpen(false);
     setToolAvailability(null);
     setTaskPromptStatus({});
+    setAddingTaskPromptId(null);
+    setAddedTaskPromptId(null);
+    setTaskPromptError(null);
     setIsEditingProject(false);
     setProjectSaveError(null);
     setPromptSource('project');
     setSelectedPromptTaskId('');
   }, [activeProject?.id]);
+
+  // Keep the launch controls in sync with the saved project defaults even when
+  // the project object is refreshed without changing its ID. The detail API is
+  // authoritative here because the list response can be stale while a project
+  // remains selected.
+  useEffect(() => {
+    const projectId = activeProject?.id;
+    if (!projectId) {
+      setLaunchTool('opencode');
+      setLaunchModel('');
+      setLaunchReasoningEffort('medium');
+      setLaunchMode('build');
+      return;
+    }
+
+    let cancelled = false;
+    api.get(`/projects/${projectId}/initialization-settings/`)
+      .then(res => {
+        if (cancelled) return;
+        const settings = mapInitializationSettings(res.data);
+        setLaunchTool(settings.tool);
+        setLaunchModel(settings.modelId);
+        setLaunchReasoningEffort(settings.reasoningEffort);
+        setLaunchMode(settings.mode);
+      })
+      .catch(() => {
+        // The project list values remain available as a local fallback. Avoid
+        // replacing them with an error state when only this optional refresh
+        // request fails.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeProject?.id,
+    activeProject?.initializationTool,
+    activeProject?.initializationModel,
+    activeProject?.initializationReasoningEffort,
+    activeProject?.initializationMode,
+  ]);
+
+  // If refreshData replaces the selected project object, immediately reflect
+  // those new values while the authoritative detail request is in flight.
+  useEffect(() => {
+    setLaunchTool(activeProject?.initializationTool || 'opencode');
+    setLaunchModel(activeProject?.initializationModel || '');
+    setLaunchReasoningEffort(activeProject?.initializationReasoningEffort || 'medium');
+    setLaunchMode(activeProject?.initializationMode || 'build');
+  }, [
+    activeProject?.id,
+    activeProject?.initializationTool,
+    activeProject?.initializationModel,
+    activeProject?.initializationReasoningEffort,
+    activeProject?.initializationMode,
+  ]);
 
   useEffect(() => {
     if (!isEditingPrompt) setPromptDraft(activeProject?.initialPrompt || '');
@@ -302,6 +400,24 @@ export const ProjectsView: React.FC = () => {
     setIsLaunchDialogOpen(true);
     void checkToolAvailability(tool);
     window.setTimeout(() => setTaskPromptStatus(prev => ({ ...prev, [taskId]: undefined })), 2200);
+  };
+
+  const addTaskToPrompt = async (taskId: string) => {
+    if (addingTaskPromptId === taskId) return;
+    setAddingTaskPromptId(taskId);
+    setTaskPromptError(null);
+    try {
+      const response = await api.post(`/tasks/${taskId}/add-to-prompt/`);
+      setAddedTaskPromptId(taskId);
+      await refreshData();
+      setActiveDetailTab('prompt');
+      window.setTimeout(() => setAddedTaskPromptId(current => current === taskId ? null : current), 2200);
+      if (response.data?.already_added) setInitializationStatus('This task is already included in the saved project prompt.');
+    } catch (error: any) {
+      setTaskPromptError(error?.response?.data?.error || 'Unable to add this task to the project prompt.');
+    } finally {
+      setAddingTaskPromptId(null);
+    }
   };
 
   const preparePromptCleanup = () => {
@@ -422,7 +538,12 @@ export const ProjectsView: React.FC = () => {
     if (!activeProject || !launchModel.trim() || isSavingInitializationSettings) return;
     setIsSavingInitializationSettings(true);
     try {
-      await api.patch(`/projects/${activeProject.id}/initialization-settings/`, { tool: launchTool, model_id: launchModel.trim(), reasoning_effort: launchReasoningEffort, mode: launchMode });
+      const response = await api.patch(`/projects/${activeProject.id}/initialization-settings/`, { tool: launchTool, model_id: launchModel.trim(), reasoning_effort: launchReasoningEffort, mode: launchMode });
+      const settings = mapInitializationSettings(response.data);
+      setLaunchTool(settings.tool);
+      setLaunchModel(settings.modelId);
+      setLaunchReasoningEffort(settings.reasoningEffort);
+      setLaunchMode(settings.mode);
       await refreshData();
       setInitializationStatus('Project initialization defaults saved.');
     } catch (error: any) {
@@ -843,6 +964,15 @@ export const ProjectsView: React.FC = () => {
               >
                 <Edit3 className="w-3.5 h-3.5" />
                 Edit Project
+              </button>
+              <button
+                type="button"
+                onClick={() => { setCopyProjectTitle(`${activeProject.title} Copy`); setCopyProjectError(null); setCopyProjectOpen(true); }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-indigo-500/60 text-xs font-black transition-colors"
+                title="Copy Project"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Copy Project
               </button>
               <button
                 type="button"
@@ -1646,6 +1776,7 @@ export const ProjectsView: React.FC = () => {
             {/* TAB: TASKS */}
             {activeDetailTab === 'tasks' && (
               <div className="space-y-4">
+                {taskPromptError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{taskPromptError}</p>}
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <select
@@ -1842,6 +1973,17 @@ export const ProjectsView: React.FC = () => {
 
                               <button
                                 type="button"
+                                onClick={() => void addTaskToPrompt(task.id)}
+                                disabled={addingTaskPromptId === task.id}
+                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all disabled:cursor-wait disabled:opacity-60 ${addedTaskPromptId === task.id ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-700 dark:text-emerald-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
+                                title="Add this task snapshot to the saved project prompt"
+                              >
+                                {addingTaskPromptId === task.id ? <span className="text-[11px]">…</span> : addedTaskPromptId === task.id ? <Check className="w-3 h-3" /> : <ClipboardPlus className="w-3 h-3" />}
+                                <span className="hidden sm:inline">{addedTaskPromptId === task.id ? 'Added' : 'Add to prompt'}</span>
+                              </button>
+
+                              <button
+                                type="button"
                                 onClick={() => { if (confirm(`Delete task "${task.title}" and its subtasks?`)) void deleteTask(task.id); }}
                                 className="p-1.5 text-content-faint hover:text-rose-400 rounded-lg transition-colors"
                                 aria-label="Delete task"
@@ -2008,7 +2150,7 @@ export const ProjectsView: React.FC = () => {
 
             {/* TAB: DOCS */}
             {activeDetailTab === 'docs' && (
-              <DocsTab projectId={activeProject.id} />
+              <DocsTab projectId={activeProject.id} onPromptAdded={() => setActiveDetailTab('prompt')} />
             )}
 
             {/* TAB: PROMPT */}
@@ -2235,6 +2377,27 @@ export const ProjectsView: React.FC = () => {
               )}
             </section>
           )}
+        </div>
+      )}
+
+      {copyProjectOpen && activeProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="copy-project-title">
+          <form onSubmit={handleDuplicateProject} className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="copy-project-title" className="text-lg font-black text-content">Copy Project</h2>
+                <p className="mt-1 text-xs text-content-faint">Create a new project folder and copy the source files.</p>
+              </div>
+              <button type="button" onClick={() => setCopyProjectOpen(false)} className="rounded-lg p-1 text-content-faint hover:text-content" aria-label="Close copy project dialog"><X className="h-4 w-4" /></button>
+            </div>
+            <label className="mt-5 block text-xs font-black uppercase tracking-wider text-content-muted">New project name</label>
+            <input autoFocus required maxLength={300} value={copyProjectTitle} onChange={e => setCopyProjectTitle(e.target.value)} className="mt-1.5 w-full rounded-xl border border-line bg-surface-2 px-3.5 py-2.5 text-sm text-content outline-none focus:border-indigo-500" placeholder="e.g. Project v2" />
+            {copyProjectError && <p className="mt-2 text-xs text-rose-400" role="alert">{copyProjectError}</p>}
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" onClick={() => setCopyProjectOpen(false)} disabled={isCopyingProject} className="rounded-xl px-4 py-2 text-xs font-bold text-content-faint hover:bg-surface-2">Cancel</button>
+              <button type="submit" disabled={isCopyingProject || !copyProjectTitle.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white hover:bg-indigo-500 disabled:cursor-wait disabled:opacity-50">{isCopyingProject ? 'Copying…' : 'Copy Project'}</button>
+            </div>
+          </form>
         </div>
       )}
 

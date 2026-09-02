@@ -80,4 +80,8 @@ def remap_drive(path, new_drive):
     normalized = normalize_path(path)
     if not normalized:
         return path
+    # Only normalize values that actually have a drive-letter prefix. UNC and
+    # relative paths must remain unchanged when no remap is applicable.
+    if not _DRIVE_RE.match(normalized):
+        return path
     return _DRIVE_RE.sub(lambda _m: letter + ':\\', normalized, count=1)

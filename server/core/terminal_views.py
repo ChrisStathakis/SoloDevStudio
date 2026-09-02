@@ -164,11 +164,19 @@ def _ndjson(obj) -> bytes:
 
 class NDJSONPassthroughRenderer(BaseRenderer):
     """Tells DRF content negotiation to accept `application/x-ndjson` for the
-    streaming terminal endpoint. The view returns a raw StreamingHttpResponse,
-    so this renderer is never actually invoked — it only satisfies negotiation."""
+    streaming terminal endpoint. Successful requests return a raw
+    StreamingHttpResponse; DRF still uses this renderer for regular responses
+    such as missing-session errors."""
 
     media_type = 'application/x-ndjson'
     format = 'ndjson'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b''
+        if isinstance(data, bytes):
+            return data
+        return _ndjson(data)
 
 
 def _stream_events(session, start_offset):

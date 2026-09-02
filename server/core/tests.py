@@ -1,4 +1,6 @@
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from rest_framework.test import APITestCase
@@ -85,6 +87,111 @@ class ProjectLaunchPromptTests(APITestCase):
         self.assertIn('Keep the first slice small.', task_prompt.data['content'])
         self.assertIn('Prefer small components.', task_prompt.data['content'])
 
+    def test_initialization_settings_returns_saved_project_defaults(self):
+        project = Project.objects.create(
+            owner=self.user,
+            title='Saved defaults project',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+            initialization_tool='codex',
+            initialization_model='gpt-5.6-terra',
+            initialization_reasoning_effort='high',
+            initialization_mode='plan',
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(f'/api/projects/{project.pk}/initialization-settings/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {
+            'tool': 'codex',
+            'model_id': 'gpt-5.6-terra',
+            'reasoning_effort': 'high',
+            'mode': 'plan',
+        })
+
+    def test_skill_can_be_added_to_saved_prompt_without_runtime_duplication(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post(f'/api/ideas/{self.idea.pk}/convert/')
+        project = Project.objects.get(pk=response.data['project']['id'])
+        skill = ProjectDoc.objects.create(owner=self.user, title='React conventions', content='Prefer small components.')
+        ProjectAgentLink.objects.create(project=project, agent=skill, active=True)
+
+        added = self.client.post(f'/api/projects/{project.pk}/agents/{skill.pk}/add-to-prompt/')
+        self.assertEqual(added.status_code, 200)
+        self.assertIn('Prefer small components.', added.data['content'])
+        self.assertFalse(added.data['already_added'])
+
+        repeated = self.client.post(f'/api/projects/{project.pk}/agents/{skill.pk}/add-to-prompt/')
+        self.assertEqual(repeated.status_code, 200)
+        self.assertTrue(repeated.data['already_added'])
+        self.assertEqual(repeated.data['content'], added.data['content'])
+
+        initialized = self.client.get(f'/api/projects/{project.pk}/initialize-prompt/')
+        self.assertEqual(initialized.status_code, 200)
+        self.assertEqual(initialized.data['content'].count('Prefer small components.'), 1)
+
+    def test_task_can_be_added_to_saved_prompt_without_runtime_duplication(self):
+        project = Project.objects.create(
+            owner=self.user,
+            title='Task prompt project',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        ProjectLaunchPrompt.objects.create(project=project, content='Base project instructions.')
+        task = Task.objects.create(project=project, title='Build dashboard', description='Create the first dashboard view.')
+        Subtask.objects.create(task=task, title='Add metrics', completed=True, order=0)
+        Subtask.objects.create(task=task, title='Add empty state', order=1)
+        self.client.force_authenticate(self.user)
+
+        added = self.client.post(f'/api/tasks/{task.pk}/add-to-prompt/')
+        self.assertEqual(added.status_code, 200)
+        self.assertFalse(added.data['already_added'])
+        self.assertIn('## Task: Build dashboard', added.data['content'])
+        self.assertIn('Create the first dashboard view.', added.data['content'])
+        self.assertIn('- [x] Add metrics', added.data['content'])
+        self.assertIn('- [ ] Add empty state', added.data['content'])
+
+        repeated = self.client.post(f'/api/tasks/{task.pk}/add-to-prompt/')
+        self.assertEqual(repeated.status_code, 200)
+        self.assertTrue(repeated.data['already_added'])
+        self.assertEqual(repeated.data['content'], added.data['content'])
+
+    def test_task_add_to_prompt_requires_saved_project_prompt(self):
+        project = Project.objects.create(
+            owner=self.user,
+            title='Task prompt project without prompt',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        task = Task.objects.create(project=project, title='Build dashboard')
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(f'/api/tasks/{task.pk}/add-to-prompt/')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'Save an initial project prompt before adding a task.')
+
+    def test_task_add_to_prompt_is_private_to_project_owner(self):
+        other_user = User.objects.create_user(
+            username='other-task-owner',
+            email='other-task-owner@example.com',
+            password='test-password-123',
+        )
+        project = Project.objects.create(
+            owner=other_user,
+            title='Private task prompt project',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        ProjectLaunchPrompt.objects.create(project=project, content='Private instructions.')
+        task = Task.objects.create(project=project, title='Private task')
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(f'/api/tasks/{task.pk}/add-to-prompt/')
+
+        self.assertEqual(response.status_code, 404)
+
     def test_project_updates_accept_spark_fields(self):
         self.client.force_authenticate(self.user)
         project = Project.objects.create(
@@ -110,6 +217,7 @@ class ProjectLaunchPromptTests(APITestCase):
         self.assertEqual(response.data['tags'], ['spark'])
         project.refresh_from_db()
         self.assertEqual(project.target_audience, 'Small teams')
+
 
     def test_project_updates_reject_opencode_plan_mode(self):
         self.client.force_authenticate(self.user)
@@ -137,6 +245,128 @@ class ProjectLaunchPromptTests(APITestCase):
         self.assertEqual(ProjectLaunchPrompt.objects.count(), 0)
         self.idea.refresh_from_db()
         self.assertEqual(self.idea.status, 'spark')
+
+
+class ProjectDriveSettingsTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='drive-owner', email='drive-owner@example.com', password='test-password-123',
+        )
+        self.other_user = User.objects.create_user(
+            username='other-drive-owner', email='other-drive-owner@example.com', password='test-password-123',
+        )
+        defaults = {'target_deadline': date(2026, 12, 1), 'start_date': date(2026, 1, 1)}
+        self.project = Project.objects.create(
+            owner=self.user, title='Drive project', drive='D',
+            directory_path=r'D:\workspace\app', script_path=r'D:\workspace\app\run.cmd',
+            cmd_directory=r'D:\workspace\app', python_env=r'C:\venvs\app', **defaults,
+        )
+        self.second_project = Project.objects.create(
+            owner=self.user, title='Second drive project', drive='C',
+            directory_path=r'\\server\share\app', script_path=r'relative\run.cmd', **defaults,
+        )
+        self.other_project = Project.objects.create(
+            owner=self.other_user, title='Other user project', drive='D',
+            directory_path=r'D:\private\app', **defaults,
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_project_detail_drive_update_is_scoped_to_one_project(self):
+        response = self.client.patch(f'/api/projects/{self.project.pk}/', {'drive': 'E'}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.project.refresh_from_db()
+        self.second_project.refresh_from_db()
+        self.assertEqual(self.project.drive, 'E')
+        self.assertEqual(self.project.directory_path, r'E:\workspace\app')
+        self.assertEqual(self.project.script_path, r'E:\workspace\app\run.cmd')
+        self.assertEqual(self.project.cmd_directory, r'E:\workspace\app')
+        self.assertEqual(self.project.python_env, r'C:\venvs\app')
+        self.assertEqual(self.second_project.drive, 'C')
+
+    def test_global_drive_update_remaps_only_owned_projects(self):
+        response = self.client.patch('/api/settings/drive/', {'drive': 'F'}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {'drive': 'F', 'updated_count': 2})
+        self.project.refresh_from_db()
+        self.second_project.refresh_from_db()
+        self.other_project.refresh_from_db()
+        self.assertEqual(self.project.drive, 'F')
+        self.assertEqual(self.project.directory_path, r'F:\workspace\app')
+        self.assertEqual(self.project.python_env, r'C:\venvs\app')
+        self.assertEqual(self.second_project.drive, 'F')
+        self.assertEqual(self.second_project.directory_path, r'\\server\share\app')
+        self.assertEqual(self.second_project.script_path, r'relative\run.cmd')
+        self.assertEqual(self.other_project.drive, 'D')
+        self.assertEqual(self.other_project.directory_path, r'D:\private\app')
+
+    def test_global_drive_update_rejects_invalid_drive(self):
+        response = self.client.patch('/api/settings/drive/', {'drive': 'Z'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('drive', response.data)
+
+    def test_global_drive_update_is_atomic(self):
+        from . import pathutils
+
+        original = pathutils.remap_drive
+        calls = {'count': 0}
+
+        def fail_after_first(path, drive):
+            calls['count'] += 1
+            if calls['count'] == 2:
+                raise RuntimeError('simulated remap failure')
+            return original(path, drive)
+
+        with patch('server.core.pathutils.remap_drive', side_effect=fail_after_first):
+            with self.assertRaises(RuntimeError):
+                self.client.patch('/api/settings/drive/', {'drive': 'G'}, format='json')
+
+        self.project.refresh_from_db()
+        self.second_project.refresh_from_db()
+        self.assertEqual(self.project.drive, 'D')
+        self.assertEqual(self.project.directory_path, r'D:\workspace\app')
+        self.assertEqual(self.second_project.drive, 'C')
+
+
+class ProjectDuplicateTests(APITestCase):
+    def test_duplicate_uses_requested_title_and_copies_source_folder(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / 'source-project'
+            source_dir.mkdir()
+            (source_dir / 'README.md').write_text('source project', encoding='utf-8')
+            destination_root = root / 'potential-projects'
+
+            user = User.objects.create_user(
+                username='duplicate-owner',
+                email='duplicate-owner@example.com',
+                password='test-password-123',
+                potential_projects_root=str(destination_root),
+            )
+            project = Project.objects.create(
+                owner=user,
+                title='Original project',
+                target_deadline=date(2026, 12, 1),
+                start_date=date(2026, 1, 1),
+                directory_path=str(source_dir),
+            )
+            self.client.force_authenticate(user)
+
+            response = self.client.post(
+                f'/api/projects/{project.pk}/duplicate/',
+                {'title': 'Copied project'},
+                format='json',
+            )
+
+            self.assertEqual(response.status_code, 201)
+            copied = Project.objects.get(pk=response.data['project']['id'])
+            self.assertNotEqual(copied.pk, project.pk)
+            self.assertEqual(copied.title, 'Copied project')
+            self.assertEqual(project.title, 'Original project')
+            copied_readme = Path(copied.directory_path) / 'README.md'
+            self.assertEqual(copied_readme.read_text(encoding='utf-8'), 'source project')
 
 
 class IdeaCategoryTests(APITestCase):
@@ -374,3 +604,23 @@ class WorkspaceResetTests(APITestCase):
         self.assertTrue(AgentFilter.objects.filter(pk=self.filter.pk).exists())
         self.user.refresh_from_db()
         self.assertEqual(self.user.potential_projects_root, '')
+
+
+class TerminalOutputTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='terminal-owner',
+            email='terminal-owner@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_missing_terminal_returns_rendered_ndjson_error(self):
+        response = self.client.get(
+            '/api/terminals/missing-session/output/?after=0',
+            HTTP_ACCEPT='application/x-ndjson',
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(response['Content-Type'].startswith('application/x-ndjson'))
+        self.assertEqual(response.content, b'{"error":"Terminal session not found."}\n')

@@ -7,7 +7,7 @@ import { Button, IconButton } from './ui';
 
 export const Navigation: React.FC<{ collapsed: boolean; onToggle: () => void }> = ({ collapsed, onToggle }) => {
   const { isAuthenticated } = useAuth();
-  const { currentView, setCurrentView, isDarkMode, toggleDarkMode, searchQuery, setSearchQuery, timeTracker, pauseTimer, resumeTimer, openQuickAdd, projects, tasks, ideas } = useApp();
+  const { currentView, setCurrentView, selectedProjectId, setSelectedProjectId, isDarkMode, toggleDarkMode, searchQuery, setSearchQuery, timeTracker, pauseTimer, resumeTimer, openQuickAdd, projects, tasks, ideas } = useApp();
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   if (!isAuthenticated) return null;
@@ -17,7 +17,11 @@ export const Navigation: React.FC<{ collapsed: boolean; onToggle: () => void }> 
     { id: 'matrix', label: 'Priority Matrix', icon: Grid2X2, count: tasks.filter(t => !t.completed).length }, { id: 'ideas', label: 'Idea Canvas', icon: Lightbulb, count: ideas.filter(i => i.status !== 'archived').length },
     { id: 'timetracker', label: 'Focus & Timer', icon: Timer }, { id: 'timeline', label: 'Timeline', icon: CalendarClock },
   ];
-  const navigate = (view: ActiveView) => { setCurrentView(view); setMoreOpen(false); };
+  const navigate = (view: ActiveView) => {
+    if (view === 'projects' && selectedProjectId) setSelectedProjectId(null);
+    setCurrentView(view);
+    setMoreOpen(false);
+  };
   return <>
     <aside className={`fixed inset-y-0 left-0 z-40 hidden flex-col border-r border-line bg-surface/95 dark:bg-surface-inverse/95 backdrop-blur-xl transition-[width] duration-200 md:flex ${collapsed ? 'w-[76px]' : 'w-64'}`}>
       <div className={`flex h-20 items-center border-b border-line px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
