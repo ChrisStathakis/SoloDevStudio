@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from rest_framework.test import APITestCase
 
-from .models import AgentFilter, Idea, IdeaCategory, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, Subtask, Task, TimeEntry, User
+from .models import AgentFilter, Idea, IdeaCategory, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, StageWorkspace, Subtask, Task, TimeEntry, User
 from .serializers import ProjectSerializer
 
 
@@ -516,6 +516,40 @@ class ProjectSkillLinkTests(APITestCase):
         self.assertFalse(ProjectAgentLink.objects.filter(project=self.first_project, agent=self.skill).exists())
         self.assertTrue(ProjectAgentLink.objects.filter(project=self.second_project, agent=self.skill).exists())
         self.assertTrue(ProjectDoc.objects.filter(pk=self.skill.pk).exists())
+
+
+class StageWorkspaceTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='workspace-owner', email='workspace-owner@example.com', password='test-password-123')
+        self.other_user = User.objects.create_user(username='workspace-other', email='workspace-other@example.com', password='test-password-123')
+        self.project = Project.objects.create(owner=self.user, title='Workspace project', target_deadline=date(2026, 12, 1), start_date=date(2026, 1, 1), current_stage='ideation')
+        self.client.force_authenticate(self.user)
+
+    def test_empty_workspace_can_be_read_and_saved(self):
+        empty = self.client.get(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/')
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(empty.data['notes'], '')
+        saved = self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/', {'notes': '# Hypothesis', 'completed_items': ['problem-defined']}, format='json')
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.data['completed_items'], ['problem-defined'])
+        self.assertEqual(StageWorkspace.objects.get(project=self.project, stage='ideation').notes, '# Hypothesis')
+
+    def test_stage_and_checklist_validation(self):
+        self.assertEqual(self.client.get(f'/api/projects/{self.project.pk}/stage-workspaces/not-a-stage/').status_code, 400)
+        invalid = self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/', {'completed_items': ['not-real']}, format='json')
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_workspace_is_owner_scoped(self):
+        self.client.force_authenticate(self.other_user)
+        self.assertEqual(self.client.get(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/').status_code, 404)
+
+    def test_each_stage_is_isolated_and_prompt_unchanged(self):
+        self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/', {'notes': 'Idea notes'}, format='json')
+        self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/planning/', {'notes': 'Plan notes'}, format='json')
+        self.assertEqual(StageWorkspace.objects.get(project=self.project, stage='ideation').notes, 'Idea notes')
+        self.assertEqual(StageWorkspace.objects.get(project=self.project, stage='planning').notes, 'Plan notes')
+        ProjectLaunchPrompt.objects.create(project=self.project, content='Base prompt')
+        self.assertNotIn('Idea notes', self.client.get(f'/api/projects/{self.project.pk}/initialize-prompt/').data['content'])
 
 
 class LauncherModelPresetTests(APITestCase):

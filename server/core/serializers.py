@@ -7,9 +7,10 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
-    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter,
+    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode
 )
+from .stage_workspaces import checklist_ids
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 
 User = get_user_model()
@@ -84,6 +85,28 @@ class SubtaskSerializer(serializers.ModelSerializer):
         return value
 
 # ---------- Project ----------
+
+class StageWorkspaceSerializer(serializers.ModelSerializer):
+    project_id = serializers.UUIDField(source='project.id', read_only=True)
+
+    class Meta:
+        model = StageWorkspace
+        fields = ['id', 'project_id', 'stage', 'notes', 'completed_items', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'stage', 'created_at', 'updated_at']
+
+    def validate_completed_items(self, value):
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise serializers.ValidationError('completed_items must be a list of strings.')
+        stage = self.instance.stage if self.instance else self.context.get('stage')
+        invalid = sorted(set(value) - checklist_ids(stage))
+        if invalid:
+            raise serializers.ValidationError(f'Unknown checklist item(s) for {stage}: {", ".join(invalid)}')
+        return list(dict.fromkeys(value))
+
+    def validate_notes(self, value):
+        if not isinstance(value, str):
+            raise serializers.ValidationError('notes must be a string.')
+        return value
 
 class ProjectLaunchPromptSerializer(serializers.ModelSerializer):
     class Meta:

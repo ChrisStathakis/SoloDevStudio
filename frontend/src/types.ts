@@ -115,6 +115,16 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface StageWorkspace {
+  id?: string;
+  projectId?: string;
+  stage: ProjectStage;
+  notes: string;
+  completedItems: string[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface LauncherModelPreset {
   id: string;
   tool: 'opencode' | 'codex';
@@ -337,6 +347,16 @@ export const STAGE_CONFIG: Record<ProjectStage, { label: string; order: number; 
     bgDark: 'dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300',
     description: 'Production monitoring, user feedback & iterations'
   }
+};
+
+export const STAGE_WORKSPACE_CONFIG: Record<ProjectStage, { guidance: string; prompts: string[]; checklist: { id: string; label: string }[] }> = {
+  ideation: { guidance: 'Turn the idea into a testable problem and a clear validation decision.', prompts: ['What problem are we solving?', 'Who experiences it and how do we know?', 'What evidence would make us proceed or stop?'], checklist: [{ id: 'problem-defined', label: 'Problem statement is clear' }, { id: 'audience-defined', label: 'Target audience is identified' }, { id: 'assumptions-recorded', label: 'Key assumptions are recorded' }, { id: 'evidence-collected', label: 'Validation evidence is captured' }, { id: 'go-no-go', label: 'Go / no-go criteria are defined' }] },
+  planning: { guidance: 'Turn the validated idea into an achievable scope and delivery plan.', prompts: ['What belongs in the MVP and what is explicitly out of scope?', 'What dependencies, risks, and estimates shape the plan?', 'Which milestones prove progress?'], checklist: [{ id: 'mvp-scope', label: 'MVP scope and non-goals are agreed' }, { id: 'requirements', label: 'Core requirements are captured' }, { id: 'estimates', label: 'Work is estimated' }, { id: 'dependencies-risks', label: 'Dependencies and risks are recorded' }, { id: 'milestones', label: 'Milestones are defined' }] },
+  architecture: { guidance: 'Make the important product and technical decisions before implementation gets expensive.', prompts: ['What are the key user flows and system boundaries?', 'Which data model and interfaces will remain stable?', 'What security and performance constraints matter?'], checklist: [{ id: 'ux-flows', label: 'UX flows are mapped' }, { id: 'data-model', label: 'Data model is defined' }, { id: 'interfaces', label: 'Interfaces and APIs are documented' }, { id: 'decisions', label: 'Architecture decisions are recorded' }, { id: 'constraints', label: 'Security and performance constraints are listed' }] },
+  development: { guidance: 'Keep implementation focused, observable, and easy to hand off.', prompts: ['Is the local environment reproducible?', 'What implementation slice is next?', 'Which blockers or tradeoffs need recording?'], checklist: [{ id: 'setup', label: 'Development setup is verified' }, { id: 'slices', label: 'Implementation is split into deliverable slices' }, { id: 'blockers', label: 'Blockers and tradeoffs are tracked' }, { id: 'quality', label: 'Code quality checks are running' }, { id: 'documentation', label: 'Technical documentation is kept current' }] },
+  testing: { guidance: 'Build confidence in the critical paths and make release readiness explicit.', prompts: ['Which user journeys must never regress?', 'What bugs, edge cases, and environments remain?', 'What evidence is required for release?'], checklist: [{ id: 'critical-paths', label: 'Critical paths have coverage' }, { id: 'regression', label: 'Regression checks are complete' }, { id: 'accessibility', label: 'Responsive and accessibility checks are complete' }, { id: 'bugs', label: 'Bugs are triaged' }, { id: 'release-criteria', label: 'Release criteria are met' }] },
+  deployment: { guidance: 'Ship predictably with a verified environment, observability, and recovery path.', prompts: ['Are configuration and secrets ready for the target environment?', 'How will we detect and recover from a bad release?', 'What should users and operators know about this release?'], checklist: [{ id: 'environment', label: 'Deployment environment is configured' }, { id: 'secrets', label: 'Secrets and configuration are verified' }, { id: 'backup-migration', label: 'Backups and migrations are ready' }, { id: 'cicd', label: 'CI/CD path is verified' }, { id: 'monitoring-rollback', label: 'Monitoring and rollback are ready' }, { id: 'release-notes', label: 'Release notes are prepared' }] },
+  live: { guidance: 'Learn from real usage, keep the product healthy, and turn feedback into the next iteration.', prompts: ['Which health and usage signals are we watching?', 'What are users telling us?', 'What maintenance and improvements should come next?'], checklist: [{ id: 'health', label: 'Health and usage metrics are reviewed' }, { id: 'feedback', label: 'User feedback is captured' }, { id: 'incidents', label: 'Incidents are recorded and reviewed' }, { id: 'maintenance', label: 'Maintenance work is planned' }, { id: 'improvements', label: 'Improvement backlog is prioritized' }, { id: 'retrospective', label: 'A release retrospective is captured' }] },
 };
 
 export const QUADRANT_CONFIG: Record<PriorityQuadrant, { title: string; subtitle: string; tag: string; color: string; badgeClass: string; borderClass: string; bgClass: string }> = {

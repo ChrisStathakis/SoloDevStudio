@@ -23,7 +23,7 @@ The renderer remains sandboxed with context isolation and no Node integration. T
 ## Backend modules
 
 - `server/config/` contains Django settings, URL inclusion, WSGI, and ASGI configuration.
-- `server/core/models.py` defines the owner-scoped domain: users, projects, milestones, tasks, subtasks, ideas, launch prompts, filters, project docs, and time entries.
+- `server/core/models.py` defines the owner-scoped domain: users, projects, milestones, tasks, subtasks, ideas, launch prompts, filters, project docs, stage workspaces, and time entries.
 - `server/core/serializers.py` validates request data and maps nested milestones, subtasks, milestone IDs, and nullable launch prompts.
 - `server/core/views.py` provides resource viewsets, project actions, idea conversion, dashboard/timeline aggregation, export/import, and filesystem browsing.
 - `server/core/terminal_views.py` exposes project terminal creation, listing, input, resize, output streaming, and deletion.
@@ -31,9 +31,9 @@ The renderer remains sandboxed with context isolation and no Node integration. T
 
 ## Data ownership and relationships
 
-Every project, idea, task, time entry, and project document is filtered by the authenticated owner. A project owns milestones and tasks. Tasks own subtasks and may have a many-to-many relationship with milestones. `ProjectLaunchPrompt` is optional and one-to-one with a project; manually created and older projects may have no prompt.
+Every project, idea, task, time entry, and project document is filtered by the authenticated owner. A project owns milestones, tasks, and one optional `StageWorkspace` per lifecycle stage. Tasks own subtasks and may have a many-to-many relationship with milestones. `ProjectLaunchPrompt` is optional and one-to-one with a project; manually created and older projects may have no prompt. Stage workspace guidance is built into `server/core/stage_workspaces.py`; notes and checklist state are intentionally excluded from generated coding-agent prompts.
 
-Idea conversion and its project, prompt, milestones, tasks, and status update run in one database transaction. Export/import preserves prompt content and milestone links while assigning new IDs to imported records.
+Idea conversion and its project, prompt, milestones, tasks, and status update run in one database transaction. Export/import preserves prompt content, milestone links, and stage workspaces while assigning new IDs to imported records.
 
 ## Authentication and transport
 

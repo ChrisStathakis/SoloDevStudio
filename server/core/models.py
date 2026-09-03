@@ -151,6 +151,27 @@ class Project(models.Model):
         return self.title
 
 
+class StageWorkspace(models.Model):
+    """Private notes and checklist progress for one project lifecycle stage."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='stage_workspaces')
+    stage = models.CharField(max_length=20, choices=ProjectStage.choices)
+    notes = models.TextField(blank=True, default='')
+    completed_items = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['stage']
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'stage'], name='unique_project_stage_workspace'),
+        ]
+        indexes = [models.Index(fields=['project', 'stage'])]
+
+    def __str__(self):
+        return f"{self.project.title} — {self.get_stage_display()} workspace"
+
+
 class ProjectLaunchPrompt(models.Model):
     """The initial coding-agent brief generated when an idea becomes a project."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

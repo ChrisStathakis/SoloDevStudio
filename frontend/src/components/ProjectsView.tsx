@@ -44,6 +44,7 @@ import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Proj
 import { api } from '../services/api';
 import { downloadPdf } from '../services/pdfDownload';
 import { DocsTab } from './DocsTab';
+import { StageWorkspaceTab } from './StageWorkspaceTab';
 import { PathPickerModal } from './PathPickerModal';
 import { TerminalDrawer, TerminalDrawerHandle } from './TerminalDrawer';
 import { PageHeader, Button } from './ui';
@@ -105,7 +106,7 @@ export const ProjectsView: React.FC = () => {
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [completedExpanded, setCompletedExpanded] = useState(false);
-  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'docs' | 'prompt'>('tasks');
+  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'workspace' | 'docs' | 'prompt'>('tasks');
   const [taskFilterStage, setTaskFilterStage] = useState<string>('all');
   const [taskFilterCategory, setTaskFilterCategory] = useState<string>('all');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState<{ [taskId: string]: string }>({});
@@ -1746,6 +1747,20 @@ export const ProjectsView: React.FC = () => {
 
               <button
                 type="button"
+                id="btn-tab-workspace"
+                onClick={() => setActiveDetailTab('workspace')}
+                className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
+                  activeDetailTab === 'workspace'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Stage Workspace
+              </button>
+
+              <button
+                type="button"
                 id="btn-tab-docs"
                 onClick={() => setActiveDetailTab('docs')}
                 className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
@@ -1820,6 +1835,7 @@ export const ProjectsView: React.FC = () => {
                     .filter(t => t.projectId === activeProject.id)
                     .filter(t => taskFilterStage === 'all' || t.stage === taskFilterStage)
                     .filter(t => taskFilterCategory === 'all' || (t as any).category === taskFilterCategory)
+                    .sort((a, b) => Number(a.completed) - Number(b.completed))
                     .map(task => {
                       const qConfig = QUADRANT_CONFIG[task.quadrant];
                       const subtaskInput = newSubtaskTitle[task.id] || '';
@@ -2146,6 +2162,11 @@ export const ProjectsView: React.FC = () => {
                   )}
                 </div>
               </div>
+            )}
+
+            {/* TAB: STAGE WORKSPACE */}
+            {activeDetailTab === 'workspace' && (
+              <StageWorkspaceTab project={activeProject} tasks={tasks} timeEntries={timeEntries} />
             )}
 
             {/* TAB: DOCS */}

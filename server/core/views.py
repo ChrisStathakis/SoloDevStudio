@@ -19,10 +19,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
 from .serializers import (
     UserSerializer, RegisterSerializer,
-    ProjectSerializer, MilestoneSerializer,
+    ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer,
     TaskSerializer, SubtaskSerializer,
     IdeaSerializer, IdeaCategorySerializer, TimeEntrySerializer,
     ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer
@@ -31,6 +31,7 @@ from .filters import ProjectFilter, TaskFilter, IdeaFilter, TimeEntryFilter, Pro
 from .permissions import IsOwner
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 from .pdf_exports import idea_pdf, project_pdf
+from .stage_workspaces import STAGE_WORKSPACE_CONFIG, checklist_ids
 
 User = get_user_model()
 
@@ -299,7 +300,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     ordering_fields = ['created_at', 'target_deadline', 'start_date', 'updated_at']
 
     def get_queryset(self):
-        return Project.objects.filter(owner=self.request.user).prefetch_related('milestones')
+        return Project.objects.filter(owner=self.request.user).prefetch_related('milestones', 'stage_workspaces')
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -430,6 +431,28 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project.save(update_fields=['current_stage', 'actual_launch_date', 'updated_at'])
         return Response(ProjectSerializer(project).data)
 
+    @action(detail=True, methods=['get', 'patch'], url_path=r'stage-workspaces/(?P<stage>[^/.]+)')
+    def stage_workspace(self, request, pk=None, stage=None):
+        project = self.get_object()
+        valid_stages = {value for value, _label in ProjectStage.choices}
+        if stage not in valid_stages or stage not in STAGE_WORKSPACE_CONFIG:
+            return Response({'stage': f'Invalid stage. Must be one of {sorted(valid_stages)}'}, status=status.HTTP_400_BAD_REQUEST)
+        workspace = StageWorkspace.objects.filter(project=project, stage=stage).first()
+        if request.method == 'GET':
+            if workspace:
+                return Response(StageWorkspaceSerializer(workspace).data)
+            return Response({'id': None, 'project_id': str(project.id), 'stage': stage, 'notes': '', 'completed_items': [], 'created_at': None, 'updated_at': None})
+        if workspace:
+            serializer = StageWorkspaceSerializer(workspace, data=request.data, partial=True, context={'request': request, 'stage': stage})
+        else:
+            serializer = StageWorkspaceSerializer(data=request.data, partial=True, context={'request': request, 'stage': stage})
+        serializer.is_valid(raise_exception=True)
+        if workspace:
+            workspace = serializer.save()
+        else:
+            workspace = StageWorkspace.objects.create(project=project, stage=stage, **serializer.validated_data)
+        return Response(StageWorkspaceSerializer(workspace).data)
+
     @action(detail=True, methods=['post'], url_path='open-folder')
     def open_folder(self, request, pk=None):
         project = self.get_object()
@@ -532,6 +555,13 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     ProjectLaunchPrompt.objects.create(project=project, content=prompt.content)
                 for link in source_project.agent_links.all():
                     ProjectAgentLink.objects.create(project=project, agent=link.agent, active=link.active)
+                for workspace in source_project.stage_workspaces.all():
+                    StageWorkspace.objects.create(
+                        project=project,
+                        stage=workspace.stage,
+                        notes=workspace.notes,
+                        completed_items=list(workspace.completed_items or []),
+                    )
         except Exception as exc:
             if destination and destination.is_dir():
                 shutil.rmtree(destination, ignore_errors=True)
@@ -1021,6 +1051,7 @@ def export_data_view(request):
     time_entries = TimeEntry.objects.filter(owner=user)
     docs = ProjectDoc.objects.filter(owner=user)
     presets = LauncherModelPreset.objects.filter(owner=user)
+    stage_workspaces = StageWorkspace.objects.filter(project__owner=user)
     from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer
     data = {
         "version": "1.0",
@@ -1030,6 +1061,7 @@ def export_data_view(request):
         "ideas": IdeaSerializer(ideas, many=True).data,
         "timeEntries": TimeEntrySerializer(time_entries, many=True).data,
         "docs": ProjectDocSerializer(docs, many=True).data,
+        "stageWorkspaces": StageWorkspaceSerializer(stage_workspaces, many=True).data,
         "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
         "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
     }
@@ -1050,6 +1082,7 @@ def reset_workspace_view(request):
             'ideas': Idea.objects.filter(owner=user).count(),
             'timeEntries': TimeEntry.objects.filter(owner=user).count(),
             'docs': len(doc_ids),
+            'stageWorkspaces': StageWorkspace.objects.filter(project__owner=user).count(),
             'modelPresets': LauncherModelPreset.objects.filter(owner=user).count(),
         }
 
@@ -1094,7 +1127,7 @@ def reset_workspace_view(request):
 def import_data_view(request):
     data = request.data
     user = request.user
-    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "modelPresets": 0, "settings": 0}
+    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "stageWorkspaces": 0, "modelPresets": 0, "settings": 0}
     project_id_map = {}
     milestone_id_map = {}
 
@@ -1202,6 +1235,33 @@ def import_data_view(request):
                     )
                     if old_milestone_id:
                         milestone_id_map[str(old_milestone_id)] = imported_milestone
+        # Stage workspaces (optional for compatibility with older exports)
+        raw_workspaces = data.get('stageWorkspaces', data.get('stage_workspaces', []))
+        if isinstance(raw_workspaces, list):
+            valid_stages = {value for value, _label in ProjectStage.choices}
+            for workspace_data in raw_workspaces:
+                if not isinstance(workspace_data, dict):
+                    continue
+                project_ref = workspace_data.get('project') or workspace_data.get('projectId') or workspace_data.get('project_id')
+                stage = workspace_data.get('stage')
+                project_obj = project_id_map.get(str(project_ref)) if project_ref else None
+                if not project_obj and project_ref:
+                    try:
+                        project_obj = Project.objects.get(id=project_ref, owner=user)
+                    except (Project.DoesNotExist, ValueError, TypeError):
+                        project_obj = Project.objects.filter(owner=user, title=project_ref).first()
+                if not project_obj or stage not in valid_stages:
+                    continue
+                completed = workspace_data.get('completedItems', workspace_data.get('completed_items', []))
+                if not isinstance(completed, list):
+                    completed = []
+                completed = [item for item in completed if isinstance(item, str) and item in checklist_ids(stage)]
+                StageWorkspace.objects.update_or_create(
+                    project=project_obj,
+                    stage=stage,
+                    defaults={'notes': workspace_data.get('notes', '') if isinstance(workspace_data.get('notes', ''), str) else '', 'completed_items': completed},
+                )
+                imported['stageWorkspaces'] += 1
         # Tasks
         if 'tasks' in data and isinstance(data['tasks'], list):
             for t in data['tasks']:

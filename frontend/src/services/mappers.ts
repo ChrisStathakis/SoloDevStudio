@@ -1,4 +1,4 @@
-import type { Project, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, MarketResearchResult, TechResearchResult } from '../types';
+import type { Project, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, StageWorkspace, MarketResearchResult, TechResearchResult } from '../types';
 
 // Backend snake_case -> Frontend camelCase
 
@@ -66,6 +66,18 @@ export function mapProjectFromApi(raw: any): Project {
     techResearch: raw.tech_research || undefined,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+  };
+}
+
+export function mapStageWorkspaceFromApi(raw: any, stage: Project['currentStage']): StageWorkspace {
+  return {
+    id: raw.id ? String(raw.id) : undefined,
+    projectId: raw.project_id ? String(raw.project_id) : undefined,
+    stage: raw.stage || stage,
+    notes: raw.notes || '',
+    completedItems: Array.isArray(raw.completed_items) ? raw.completed_items.filter((item: any) => typeof item === 'string') : [],
+    createdAt: raw.created_at || undefined,
+    updatedAt: raw.updated_at || undefined,
   };
 }
 

@@ -44,6 +44,10 @@ The Priority Matrix groups work into Do First, Schedule & Deep Work, Quick Wins 
 
 Use **Add Task** from Projects or quick add, then set the project, stage, category, priority quadrant, estimate, due date, tags, description, and optional subtasks. Mark a task complete when the work is finished; use **Focus** on a task to start an attached timer.
 
+## Stage Workspace
+
+Each project has a **Stage Workspace** tab immediately before Skills. It follows the project's current lifecycle stage and provides stage-specific guidance, a checklist, live task/checklist/time metrics, and a Markdown notes editor with Edit and Preview modes. Checklist changes save immediately; notes use **Save notes** and retain the draft if a save fails. Moving a project to another lifecycle stage opens that stage's workspace, while previous stage workspaces remain available when the project returns to them. Workspace notes are private planning context and are not included in coding-agent prompts.
+
 ## Ideas and sketches
 
 Ideas move through Spark, Evaluating, Validated, Converted, and Archived states. Capture a problem, solution, audience, monetization, MVP features, tags, notes, and optional market research.
