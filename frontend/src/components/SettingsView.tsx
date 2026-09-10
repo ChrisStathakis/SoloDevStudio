@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, unwrapPaginated } from '../services/api';
 import { mapLauncherModelPresetFromApi, mapProjectDocFromApi } from '../services/mappers';
 import type { LauncherModelPreset, ProjectDoc } from '../types';
@@ -34,6 +34,7 @@ import { DocEditor } from './DocEditor';
 import { FilterManager } from './FilterManager';
 import { PathPickerModal } from './PathPickerModal';
 import { IdeaCategoryManager } from './IdeaCategoryManager';
+import { useToast } from './Toaster';
 
 type SettingsSection = 'documents' | 'filters' | 'idea-categories' | 'models' | 'project-folder' | 'desktop' | 'data' | 'account';
 const UNCATEGORIZED_FILTER_ID = 'uncategorized';
@@ -48,6 +49,7 @@ const formatDate = (iso: string) => {
 
 export const SettingsView: React.FC = () => {
   const { projects, exportData, importData, resetDefaults, setCurrentView, refreshData } = useApp();
+  const { toast, confirm } = useToast();
   const { user, logout } = useAuth();
 
   const [section, setSection] = useState<SettingsSection>('documents');
@@ -171,7 +173,8 @@ export const SettingsView: React.FC = () => {
   };
 
   const resetProjectFolder = async () => {
-    if (!window.confirm('Reset project folder to the app default?')) return;
+    const ok = await confirm({ title: 'Reset project folder to the app default?', confirmLabel: 'Reset' });
+    if (!ok) return;
     setProjectFolderBusy(true);
     try {
       const res = await api.delete('/settings/project-folder/');
@@ -187,7 +190,13 @@ export const SettingsView: React.FC = () => {
   const applyGlobalDrive = async () => {
     const drive = globalDrive.trim().toUpperCase();
     if (!drive) return;
-    if (!window.confirm('Change the drive for all projects? This remaps each project folder, CMD directory, and server script path.')) return;
+    const ok = await confirm({
+      title: `Change the drive for all projects to ${drive}:?`,
+      description: 'This remaps each project folder, CMD directory, and server script path.',
+      confirmLabel: 'Change drive',
+      danger: true,
+    });
+    if (!ok) return;
     setGlobalDriveBusy(true);
     setGlobalDriveStatus(null);
     try {
@@ -221,8 +230,7 @@ export const SettingsView: React.FC = () => {
       return;
     }
     try {
-      const mode = newModelTool === 'codex' ? newModelMode : 'build';
-      await api.post('/launcher-model-presets/', { tool: newModelTool, model_id: newModelId.trim(), reasoning_effort: newModelReasoningEffort, mode, label: newModelLabel.trim(), enabled: true });
+      await api.post('/launcher-model-presets/', { tool: newModelTool, model_id: newModelId.trim(), reasoning_effort: newModelReasoningEffort, mode: newModelMode, label: newModelLabel.trim(), enabled: true });
       setNewModelId('');
       setNewModelLabel('');
       setModelPresetError(null);
@@ -239,7 +247,7 @@ export const SettingsView: React.FC = () => {
         tool: updates.tool ?? preset.tool,
         model_id: updates.modelId ?? preset.modelId,
         reasoning_effort: updates.reasoningEffort ?? preset.reasoningEffort,
-        mode: (updates.mode ?? preset.mode) === 'plan' && (updates.tool ?? preset.tool) !== 'codex' ? 'build' : (updates.mode ?? preset.mode),
+        mode: updates.mode ?? preset.mode,
         label: updates.label ?? preset.label,
         enabled: updates.enabled ?? preset.enabled,
       });
@@ -473,14 +481,17 @@ export const SettingsView: React.FC = () => {
               {filteredDocs.map(doc => {
                 const isOrphan = doc.projectIds.length === 0;
                 return (
-                  <button
+                  <div
                     key={doc.id}
-                    type="button"
-                    onClick={() => setOpenDocId(doc.id)}
                     className="group w-full text-left p-4 rounded-2xl bg-surface border border-line shadow-md hover:border-indigo-800/60 transition-all"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => setOpenDocId(doc.id)}
+                        aria-label={`Open skill ${doc.title}`}
+                        className="flex items-start gap-3 flex-1 min-w-0 text-left rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                      >
                         <div className="mt-0.5 p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 shrink-0">
                           <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                         </div>
@@ -542,32 +553,33 @@ export const SettingsView: React.FC = () => {
                             </p>
                           )}
                         </div>
-                      </div>
+                      </button>
 
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Delete ${doc.title}`}
-                        onClick={e => {
-                          e.stopPropagation();
-                          if (!window.confirm(`Delete skill "${doc.title}"? It will be removed from all linked projects.`)) return;
+                      <button
+                        type="button"
+                        aria-label={`Delete skill ${doc.title}`}
+                        title="Delete skill from all projects"
+                        onClick={() => void (async () => {
+                          const ok = await confirm({
+                            title: `Delete skill "${doc.title}"?`,
+                            description: 'It will be removed from all linked projects.',
+                            confirmLabel: 'Delete',
+                            danger: true,
+                          });
+                          if (!ok) return;
                           api.delete(`/docs/${doc.id}/`)
                             .then(() => handleDeleted(doc.id))
                             .catch(e2 => {
                               console.error('Failed to delete doc', e2);
                               setDocsError('Failed to delete skill.');
                             });
-                        }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') e.preventDefault();
-                        }}
-                        className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
-                        title="Delete skill from all projects"
+                        })()}
+                        className="p-2 rounded-lg text-content-faint hover:text-rose-400 focus-visible:opacity-100 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                       >
                         <Trash2 className="w-4 h-4" />
-                      </span>
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -585,15 +597,15 @@ export const SettingsView: React.FC = () => {
           <div className="p-5 rounded-2xl bg-surface border border-line space-y-3">
             <div>
               <h3 className="text-sm font-black text-content">Launch presets</h3>
-              <p className="text-xs text-content-faint mt-1">Save reusable OpenCode and Codex launch configurations with a model and reasoning effort.</p>
+              <p className="text-xs text-content-faint mt-1">Save reusable OpenCode and Codex launch configurations with a model, effort, and mode (build/plan).</p>
             </div>
             <div className="flex flex-wrap items-stretch gap-2">
-              <select value={newModelTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setNewModelTool(next); if (next === 'opencode') setNewModelMode('build'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
+              <select value={newModelTool} onChange={e => { setNewModelTool(e.target.value as 'opencode' | 'codex'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
                 <option value="opencode">OpenCode</option><option value="codex">Codex</option>
               </select>
               <input value={newModelId} onChange={e => setNewModelId(e.target.value)} placeholder={newModelTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
-              <select value={newModelReasoningEffort} onChange={e => setNewModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-32 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
-              {newModelTool === 'codex' && <select value={newModelMode} onChange={e => setNewModelMode(e.target.value as 'build' | 'plan')} className="w-full sm:w-28 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select>}
+              <select value={newModelReasoningEffort} onChange={e => setNewModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-32 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+              <select value={newModelMode} onChange={e => setNewModelMode(e.target.value as 'build' | 'plan')} className="w-full sm:w-28 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Mode"><option value="build">Build</option><option value="plan">Plan</option></select>
               <input value={newModelLabel} onChange={e => setNewModelLabel(e.target.value)} placeholder="Preset name" aria-label="Preset name" className="min-w-0 w-full sm:flex-1 sm:min-w-[10rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs text-content" />
               <button type="button" onClick={addModelPreset} disabled={!newModelId.trim() || !newModelLabel.trim()} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white disabled:opacity-40"><Plus className="w-3.5 h-3.5" />Add</button>
             </div>
@@ -607,10 +619,19 @@ export const SettingsView: React.FC = () => {
             {filteredModelPresets.length === 0 ? <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint">{modelPresets.length === 0 ? 'No launch presets yet.' : 'No presets match your filters.'}</div> : filteredModelPresets.map(preset => (
               <div key={preset.id} className="flex items-center gap-3 rounded-2xl bg-surface border border-line px-4 py-3">
                 <span className="w-20 text-[11px] font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300">{preset.tool}</span>
-                {editingPresetId === preset.id ? <div className="flex-1 min-w-0 flex flex-wrap gap-2"><input value={editingModelLabel} onChange={e => setEditingModelLabel(e.target.value)} placeholder="Name" aria-label="Preset name" className="min-w-0 w-full sm:w-32 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs text-content" /><input value={editingModelId} onChange={e => setEditingModelId(e.target.value)} className="min-w-0 flex-1 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-mono text-content" /><select value={editingModelReasoningEffort} onChange={e => setEditingModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-24 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>{preset.tool === 'codex' && <select value={editingModelMode} onChange={e => setEditingModelMode(e.target.value as 'build' | 'plan')} className="w-24 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select>}</div> : <span className="flex-1 min-w-0"><span className="block truncate text-sm font-black text-content">{preset.label}</span><span className="block truncate text-[11px] text-content-faint">{preset.tool} · {preset.modelId} · {preset.reasoningEffort}{preset.tool === 'codex' ? ` · ${preset.mode}` : ''}</span></span>}
+                {editingPresetId === preset.id ? <div className="flex-1 min-w-0 flex flex-wrap gap-2"><input value={editingModelLabel} onChange={e => setEditingModelLabel(e.target.value)} placeholder="Name" aria-label="Preset name" className="min-w-0 w-full sm:w-32 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs text-content" /><input value={editingModelId} onChange={e => setEditingModelId(e.target.value)} className="min-w-0 flex-1 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-mono text-content" /><select value={editingModelReasoningEffort} onChange={e => setEditingModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-24 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select><select value={editingModelMode} onChange={e => setEditingModelMode(e.target.value as 'build' | 'plan')} className="w-24 rounded-lg bg-surface-2 border border-line px-2 py-1 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select></div> : <span className="flex-1 min-w-0"><span className="block truncate text-sm font-black text-content">{preset.label}</span><span className="block truncate text-[11px] text-content-faint">{preset.tool} · {preset.modelId} · {preset.reasoningEffort} · {preset.mode}</span></span>}
                 <button type="button" onClick={() => updateModelPreset(preset, { enabled: !preset.enabled })} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-black ${preset.enabled ? 'border-emerald-500/30 text-emerald-700 dark:text-emerald-300' : 'border-line text-content-faint'}`}>{preset.enabled ? 'Enabled' : 'Disabled'}</button>
                 {editingPresetId === preset.id ? <><button type="button" onClick={async () => { await updateModelPreset(preset, { modelId: editingModelId.trim(), reasoningEffort: editingModelReasoningEffort, mode: editingModelMode, label: editingModelLabel.trim() }); setEditingPresetId(null); }} disabled={!editingModelId.trim() || !editingModelLabel.trim()} className="p-1.5 text-emerald-700 dark:text-emerald-300 disabled:opacity-40" title="Save launch preset"><Check className="w-4 h-4" /></button><button type="button" onClick={() => setEditingPresetId(null)} className="p-1.5 text-content-faint hover:text-content" title="Cancel editing">Cancel</button></> : <button type="button" onClick={() => { setEditingPresetId(preset.id); setEditingModelId(preset.modelId); setEditingModelReasoningEffort(preset.reasoningEffort); setEditingModelMode(preset.mode); setEditingModelLabel(preset.label); setModelPresetError(null); }} className="p-1.5 text-content-faint hover:text-content" title="Edit launch preset"><FileCog className="w-4 h-4" /></button>}
-                <button type="button" onClick={async () => { if (window.confirm(`Delete launch preset "${preset.label}"?`)) { await api.delete(`/launcher-model-presets/${preset.id}/`); await loadModelPresets(); } }} className="p-1.5 text-content-faint hover:text-rose-400" title={`Delete launch preset ${preset.label}`}><Trash2 className="w-4 h-4" /></button>
+                <button type="button" onClick={() => void (async () => {
+                  const ok = await confirm({ title: `Delete launch preset "${preset.label}"?`, confirmLabel: 'Delete', danger: true });
+                  if (!ok) return;
+                  try {
+                    await api.delete(`/launcher-model-presets/${preset.id}/`);
+                    await loadModelPresets();
+                  } catch {
+                    toast({ title: 'Could not delete preset', tone: 'error' });
+                  }
+                })()} className="p-2 text-content-faint hover:text-rose-400 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400" title={`Delete launch preset ${preset.label}`} aria-label={`Delete launch preset ${preset.label}`}><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
           </div>
@@ -749,8 +770,14 @@ export const SettingsView: React.FC = () => {
             <button
               type="button"
               disabled={isBusy}
-              onClick={async () => {
-                if (!window.confirm('Purge all workspace data? This deletes all projects, tasks, ideas, time entries, skills, launch presets, and the saved project folder. Your account and app preferences stay intact.')) return;
+              onClick={() => void (async () => {
+                const ok = await confirm({
+                  title: 'Purge all workspace data?',
+                  description: 'This deletes all projects, tasks, ideas, time entries, skills, launch presets, and the saved project folder. Your account and app preferences stay intact. This cannot be undone.',
+                  confirmLabel: 'Purge everything',
+                  danger: true,
+                });
+                if (!ok) return;
                 setIsBusy(true);
                 try {
                   await resetDefaults();
@@ -762,7 +789,7 @@ export const SettingsView: React.FC = () => {
                   setIsBusy(false);
                   setTimeout(() => setBackupStatus(null), 4000);
                 }
-              }}
+              })()}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/50 hover:border-rose-700 text-left transition-all disabled:opacity-40"
             >
               <RotateCcw className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />

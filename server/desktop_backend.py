@@ -40,7 +40,17 @@ def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ["SQLITE_PATH"] = str(db_path)
     os.environ["ALLOWED_HOSTS"] = "127.0.0.1,localhost"
-    os.environ["CORS_ALLOWED_ORIGINS"] = args.origin
+    # Preserve web dev origins alongside the desktop custom-scheme origin.
+    # Overwriting with only app://solodev blocks localhost frontends with
+    # "No 'Access-Control-Allow-Origin'" on preflight.
+    _web_origins = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174"
+    )
+    os.environ["CORS_ALLOWED_ORIGINS"] = ",".join(
+        dict.fromkeys([args.origin, *_web_origins.split(",")])
+    )
     os.environ.setdefault("DEBUG", "False")
 
     # Import Django only after runtime settings have been supplied.

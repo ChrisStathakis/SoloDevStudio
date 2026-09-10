@@ -219,7 +219,7 @@ class ProjectLaunchPromptTests(APITestCase):
         self.assertEqual(project.target_audience, 'Small teams')
 
 
-    def test_project_updates_reject_opencode_plan_mode(self):
+    def test_project_updates_accept_opencode_plan_mode(self):
         self.client.force_authenticate(self.user)
         project = Project.objects.create(
             owner=self.user,
@@ -232,8 +232,9 @@ class ProjectLaunchPromptTests(APITestCase):
             {'initialization_tool': 'opencode', 'initialization_mode': 'plan'},
             format='json',
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('initialization_mode', response.data)
+        self.assertEqual(response.status_code, 200)
+        project.refresh_from_db()
+        self.assertEqual(project.initialization_mode, 'plan')
 
     def test_conversion_rolls_back_when_prompt_creation_fails(self):
         self.client.force_authenticate(self.user)
@@ -367,6 +368,48 @@ class ProjectDuplicateTests(APITestCase):
             self.assertEqual(project.title, 'Original project')
             copied_readme = Path(copied.directory_path) / 'README.md'
             self.assertEqual(copied_readme.read_text(encoding='utf-8'), 'source project')
+
+
+class ProjectReorderTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='reorder-owner', email='reorder@example.com', password='test-password-123')
+        self.client.force_authenticate(self.user)
+
+    def _make_project(self, title, sort_order):
+        return Project.objects.create(
+            owner=self.user,
+            title=title,
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+            sort_order=sort_order,
+        )
+
+    def test_reorder_persists_manual_order(self):
+        first = self._make_project('First', 0)
+        second = self._make_project('Second', 1)
+        third = self._make_project('Third', 2)
+
+        response = self.client.post(
+            '/api/projects/reorder/',
+            {'ordered_ids': [str(third.pk), str(first.pk), str(second.pk)]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [str(p.pk) for p in Project.objects.filter(owner=self.user)],
+            [str(third.pk), str(first.pk), str(second.pk)],
+        )
+
+    def test_reorder_rejects_unknown_ids(self):
+        project = self._make_project('Only', 0)
+        response = self.client.post(
+            '/api/projects/reorder/',
+            {'ordered_ids': [str(project.pk), '00000000-0000-0000-0000-000000000000']},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        project.refresh_from_db()
+        self.assertEqual(project.sort_order, 0)
 
 
 class IdeaCategoryTests(APITestCase):
@@ -597,8 +640,8 @@ class LauncherModelPresetTests(APITestCase):
         self.assertEqual(opencode_same_name.status_code, 201)
 
         opencode_plan = self.client.post('/api/launcher-model-presets/', {**payload, 'tool': 'opencode', 'label': 'Open plan', 'mode': 'plan'}, format='json')
-        self.assertEqual(opencode_plan.status_code, 400)
-        self.assertIn('mode', opencode_plan.data)
+        self.assertEqual(opencode_plan.status_code, 201)
+        self.assertEqual(opencode_plan.data['mode'], 'plan')
 
     def test_presets_are_private_to_the_owner(self):
         preset = LauncherModelPreset.objects.create(owner=self.other_user, tool='codex', model_id='gpt-5.6-terra', reasoning_effort='medium', label='Other')

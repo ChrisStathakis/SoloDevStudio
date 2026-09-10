@@ -136,15 +136,17 @@ class Project(models.Model):
     initialization_reasoning_effort = models.CharField(max_length=10, choices=ReasoningEffort.choices, default=ReasoningEffort.MEDIUM)
     initialization_mode = models.CharField(max_length=10, choices=InitializationMode.choices, default=InitializationMode.BUILD)
     pinned = models.BooleanField(default=False)
+    sort_order = models.PositiveIntegerField(default=0)
     tech_research = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['sort_order', '-created_at']
         indexes = [
             models.Index(fields=['owner', 'current_stage']),
             models.Index(fields=['owner', 'pinned']),
+            models.Index(fields=['owner', 'sort_order']),
         ]
 
     def __str__(self):

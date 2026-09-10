@@ -78,10 +78,26 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOWED_ORIGINS = env_config(
+def _parse_origins(raw: str) -> list[str]:
+    # Strip whitespace, drop empties and trailing slashes so
+    # "http://localhost:3000 " or "http://localhost:3000/" still match.
+    seen: list[str] = []
+    for part in (raw or '').split(','):
+        origin = part.strip().rstrip('/')
+        if origin and origin not in seen:
+            seen.append(origin)
+    return seen
+
+
+CORS_ALLOWED_ORIGINS = _parse_origins(env_config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:5173,http://localhost:3000,http://localhost:5174,http://localhost:5174,http://127.0.0.1:5174,app://solodev'
-).split(',')
+    default='http://localhost:5173,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5174,http://127.0.0.1:5174,app://solodev',
+))
+# Dev convenience: allow any localhost/127.0.0.1 port (Vite/Express wrappers
+# pick dynamic ports). In production (DEBUG=False) the explicit allow-list
+# above is enforced. This fixes "No 'Access-Control-Allow-Origin'" when the
+# frontend runs on an origin missing from .env.
+CORS_ALLOW_ALL_ORIGINS = env_config('CORS_ALLOW_ALL_ORIGINS', default=DEBUG, cast=bool)
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept',

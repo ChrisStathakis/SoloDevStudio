@@ -126,7 +126,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             'target_deadline', 'start_date', 'actual_launch_date', 'color',
             'tech_stack', 'repo_url', 'live_url', 'figma_url', 'directory_path',
             'script_path', 'cmd_directory', 'port', 'python_env', 'drive', 'notes',
-            'initialization_tool', 'initialization_model', 'initialization_reasoning_effort', 'initialization_mode', 'pinned', 'tech_research', 'created_at', 'updated_at', 'milestones', 'launch_prompt'
+            'initialization_tool', 'initialization_model', 'initialization_reasoning_effort', 'initialization_mode', 'pinned', 'sort_order', 'tech_research', 'created_at', 'updated_at', 'milestones', 'launch_prompt'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -163,10 +163,8 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        tool = attrs.get('initialization_tool', getattr(self.instance, 'initialization_tool', InitializationTool.OPENCODE))
-        mode = attrs.get('initialization_mode', getattr(self.instance, 'initialization_mode', InitializationMode.BUILD))
-        if mode == InitializationMode.PLAN and tool != InitializationTool.CODEX:
-            raise serializers.ValidationError({'initialization_mode': 'Plan mode is only available for Codex.'})
+        # Plan mode is supported by both Codex (read-only sandbox + /plan)
+        # and OpenCode (--agent plan). No tool-specific restriction.
         return attrs
 
     def create(self, validated_data):
@@ -262,10 +260,7 @@ class LauncherModelPresetSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        tool = attrs.get('tool', self.instance.tool if self.instance else None)
-        mode = attrs.get('mode', self.instance.mode if self.instance else InitializationMode.BUILD)
-        if mode == InitializationMode.PLAN and tool != InitializationTool.CODEX:
-            raise serializers.ValidationError({'mode': 'Plan mode is only available for Codex.'})
+        # Plan mode is supported by both Codex and OpenCode (--agent plan).
         request = self.context.get('request')
         owner = getattr(request, 'user', None)
         if owner and getattr(owner, 'is_authenticated', False):

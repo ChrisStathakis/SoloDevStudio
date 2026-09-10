@@ -52,6 +52,9 @@
                             <li class="nav-item">
                                 <a href="operations.html" class="nav-link">Operations</a>
                             </li>
+                            <li class="nav-item">
+                                <a href="desktop-updates.html" class="nav-link">Desktop updates</a>
+                            </li>
                         </ul>
 
                     <ul class="nav navbar-nav ms-md-auto">
@@ -198,6 +201,11 @@
 <td>Content linked to many projects and optionally an agent filter.</td>
 </tr>
 <tr>
+<td>Stage workspaces</td>
+<td><code>/api/projects/{id}/stage-workspaces/{stage}/</code></td>
+<td>Owner-scoped stage notes and completed built-in checklist IDs.</td>
+</tr>
+<tr>
 <td>Agent filters</td>
 <td><code>/api/agent-filters/</code></td>
 <td>Name, generated slug, and order.</td>
@@ -219,6 +227,11 @@
 <td>POST</td>
 <td><code>/api/projects/{id}/advance-stage/</code></td>
 <td><code>{ "nextStage": "development" }</code>; returns the updated project.</td>
+</tr>
+<tr>
+<td>GET/PATCH</td>
+<td><code>/api/projects/{id}/stage-workspaces/{stage}/</code></td>
+<td>Reads or updates <code>{ "notes": "...", "completed_items": ["item-id"] }</code>; GET returns an empty workspace when none exists.</td>
 </tr>
 <tr>
 <td>POST</td>
@@ -278,6 +291,8 @@
 <li><code>GET /api/timeline/</code> returns launch, milestone, and task deadline items. Query with <code>search</code>, <code>type</code>, and <code>projectId</code> (or <code>project</code>).</li>
 <li><code>GET /api/export/</code> returns a versioned JSON snapshot.</li>
 <li><code>POST /api/import/</code> imports a snapshot and remaps IDs and relationships.</li>
+<li><code>POST /api/workspace/reset/</code> atomically removes the signed-in owner’s workspace records and saved project root. The response includes counts for <code>projects</code>, <code>tasks</code>, <code>ideas</code>, <code>timeEntries</code>, <code>docs</code>, <code>stageWorkspaces</code>, and <code>modelPresets</code>.</li>
+<li><code>/api/idea-categories/</code> supports authenticated list, create, rename, and delete operations for the shared Idea Canvas catalog. Its <code>name</code> is the value used by <code>/api/ideas/</code>; deletion returns <code>409</code> while any idea still uses the category.</li>
 <li><code>GET /api/filesystem/?path=&lt;directory&gt;</code> lists local drives or directory entries for the path picker. It is read-only.</li>
 </ul>
 <h2 id="terminal-endpoints">Terminal endpoints</h2>

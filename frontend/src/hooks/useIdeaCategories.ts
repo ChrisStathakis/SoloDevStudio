@@ -1,14 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrapPaginated } from '../services/api';
+import { ideaCategoriesKey } from '../services/queryClient';
 import type { IdeaCategory } from '../types';
-
-let cache: IdeaCategory[] | null = null;
-const listeners = new Set<(categories: IdeaCategory[]) => void>();
-
-function publish(categories: IdeaCategory[]) {
-  cache = categories;
-  listeners.forEach(listener => listener(categories));
-}
 
 function mapFromApi(category: any): IdeaCategory {
   return {
@@ -19,35 +12,19 @@ function mapFromApi(category: any): IdeaCategory {
   };
 }
 
+async function fetchCategories(): Promise<IdeaCategory[]> {
+  const response = await api.get('/idea-categories/');
+  return unwrapPaginated<any>(response.data).map(mapFromApi);
+}
+
 export function useIdeaCategories() {
-  const [categories, setCategories] = useState<IdeaCategory[]>(cache || []);
-  const [isLoading, setIsLoading] = useState(!cache);
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: ideaCategoriesKey, queryFn: fetchCategories });
 
-  const load = useCallback(async (force: boolean) => {
-    if (!force && cache) {
-      setCategories(cache);
-      setIsLoading(false);
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const response = await api.get('/idea-categories/');
-      const next = unwrapPaginated<any>(response.data).map(mapFromApi);
-      publish(next);
-    } catch (error) {
-      console.error('Failed to load idea categories', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const listener = (next: IdeaCategory[]) => setCategories(next);
-    listeners.add(listener);
-    return () => { listeners.delete(listener); };
-  }, []);
-
-  useEffect(() => { void load(false); }, [load]);
-  const refresh = useCallback(() => load(true), [load]);
-  return { categories, isLoading, refresh };
+  return {
+    categories: query.data ?? [],
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refresh: () => queryClient.invalidateQueries({ queryKey: ideaCategoriesKey }),
+  };
 }

@@ -52,6 +52,9 @@
                             <li class="nav-item">
                                 <a href="operations.html" class="nav-link">Operations</a>
                             </li>
+                            <li class="nav-item">
+                                <a href="desktop-updates.html" class="nav-link">Desktop updates</a>
+                            </li>
                         </ul>
 
                     <ul class="nav navbar-nav ms-md-auto">
@@ -164,7 +167,7 @@ npm run dev:vite
 </code></pre>
 <h2 id="build-the-windows-desktop-installer">Build the Windows desktop installer</h2>
 <p>For a self-contained native Windows app, install the desktop packaging dependency and JavaScript packages:</p>
-<pre><code class="language-powershell">py -m pip install -r server\requirements-desktop.txt
+<pre><code class="language-powershell">py -3.11 -m pip install -r server\requirements-desktop.txt
 npm install
 npm install --prefix frontend
 </code></pre>

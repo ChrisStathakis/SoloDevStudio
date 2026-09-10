@@ -16,7 +16,7 @@ Projects at **Live & Shipped** appear in a collapsed **Completed apps** section 
 
 The **Initial Prompt** tab stores the project's base prompt. Select **Preview prompt** to generate and inspect the complete initialization prompt before launching an agent. The preview includes the saved base prompt and the currently active project skills. It opens in a read-only dialog where the full text can be selected or copied; an error is shown if the preview cannot be generated.
 
-Use **Initialize** to choose a supported CLI, model, reasoning effort, and (for Codex) Build or Plan mode. The desktop app copies the selected project or task prompt as a fallback, opens the CLI in the configured project folder, and prepares the prompt in its composer for your review. Press Enter in the CLI to submit it. Codex Plan mode activates the CLI's read-only `/plan` workflow; OpenCode reasoning variants remain provider-specific.
+Use **Initialize** to choose a supported CLI, model, reasoning effort, and (for Codex) Build or Plan mode. The desktop app copies the selected project or task prompt as a fallback, opens the CLI in the configured project folder, waits for its composer to become ready, and then pastes the prompt for your review. Press Enter in the CLI to submit it. If Codex stops at its directory-trust question, press Enter in the console to confirm it yourself — the app never answers trust prompts for you, and the prompt pastes automatically once the composer opens. If the composer never becomes ready, paste manually from the clipboard with Ctrl+V. Codex Plan mode activates the CLI's read-only `/plan` workflow; OpenCode reasoning variants remain provider-specific.
 
 ### Local paths and consoles
 
@@ -31,6 +31,8 @@ Project configuration accepts a folder path, `.bat`/`.cmd` script path, CMD dire
 - Changing a saved CMD directory replaces only that project's live CMD session; a server/script console is left running.
 
 The terminal drawer shows only sessions for the selected project. Stopping an inactive tab does not tear down the active tab.
+
+Large pastes are sent in pieces with a progress readout in the console status bar. Ctrl+V, Ctrl+Shift+V, and right-click Paste all target the active console, even when it is not focused. Pasting a long agent-style prompt into a plain CMD console asks for confirmation first, since the shell would otherwise run it line-by-line.
 
 Folder, Explorer, CMD, script, virtual-environment, and drive actions require Windows. In a browser, you can still save project configuration and use the rest of the workspace, but local process and filesystem actions are unavailable.
 

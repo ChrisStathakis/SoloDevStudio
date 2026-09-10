@@ -1,40 +1,45 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { 
-  FolderKanban, 
-  CheckCircle2, 
-  Clock, 
-  ArrowRight, 
-  Play, 
-  Lightbulb, 
-  Flame, 
+import {
+  FolderKanban,
+  CheckCircle2,
+  Clock,
+  ArrowRight,
+  Play,
+  Lightbulb,
+  Flame,
   Sparkles,
   Layers,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   AlertCircle,
   Plus,
   History,
   Timer,
-  BarChart3
+  BarChart3,
+  GripVertical
 } from 'lucide-react';
 import { STAGE_CONFIG, ProjectStage } from '../types';
 import { api } from '../services/api';
 import { PageHeader, Button } from './ui';
 
 export const DashboardView: React.FC = () => {
-  const { 
-    projects, 
-    tasks, 
-    ideas, 
-    timeEntries, 
-    setCurrentView, 
-    setSelectedProjectId, 
+  const {
+    projects,
+    tasks,
+    ideas,
+    timeEntries,
+    setCurrentView,
+    setSelectedProjectId,
     toggleTaskCompletion,
     startTimer,
-    openQuickAdd 
+    openQuickAdd,
+    reorderProjects
   } = useApp();
 
   // Metrics calculations
+  // projects arrive pre-sorted by manual sort_order (AppContext); active pipeline respects that order.
   const activeProjects = projects.filter(p => p.currentStage !== 'live');
   const pendingTasks = tasks.filter(t => !t.completed);
   const urgentTasks = pendingTasks.filter(t => t.quadrant === 'q1_do');
@@ -67,6 +72,51 @@ export const DashboardView: React.FC = () => {
     return () => { mounted = false; };
   }, [projects.length, tasks.length, timeEntries.length]);
 
+  // Manual ordering (drag-and-drop, persisted via POST /projects/reorder/).
+  // The pipeline shows the top 4 of the manually ordered active list.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [isReordering, setIsReordering] = useState(false);
+  const visiblePipeline = activeProjects.slice(0, 4);
+
+  const persistNewOrder = async (newActiveIds: string[]) => {
+    // reorderProjects expects the full project order; append non-active (live)
+    // projects after the reordered actives so their relative order is kept.
+    const liveIds = projects.filter(p => p.currentStage === 'live').map(p => p.id);
+    setIsReordering(true);
+    try {
+      await reorderProjects([...newActiveIds, ...liveIds]);
+    } catch {
+      // AppContext rolls back + refetches on failure; keep UI quiet here.
+    } finally {
+      setIsReordering(false);
+    }
+  };
+
+  const moveActiveProject = (id: string, direction: -1 | 1) => {
+    const idx = activeProjects.findIndex(p => p.id === id);
+    const target = idx + direction;
+    if (idx < 0 || target < 0 || target >= activeProjects.length || isReordering) return;
+    const ids = activeProjects.map(p => p.id);
+    const [moved] = ids.splice(idx, 1);
+    ids.splice(target, 0, moved);
+    void persistNewOrder(ids);
+  };
+
+  const handlePipelineDrop = (targetId: string) => {
+    if (!dragId || dragId === targetId || isReordering) return;
+    const ids = activeProjects.map(p => p.id);
+    const from = ids.indexOf(dragId);
+    let to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const [moved] = ids.splice(from, 1);
+    to = ids.indexOf(targetId);
+    ids.splice(to, 0, moved);
+    setDragId(null);
+    setOverId(null);
+    void persistNewOrder(ids);
+  };
+
   return (
     <div className="space-y-8 pb-12 animate-in fade-in">
       {/* NEW: Overdue alert banner (server timeline groups) */}
@@ -75,9 +125,9 @@ export const DashboardView: React.FC = () => {
           <div className="flex items-center gap-2 font-bold">
             <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
             <span>{overdueCount} overdue {overdueCount === 1 ? 'item' : 'items'} need attention</span>
-            <span className="font-normal text-rose-700 dark:text-rose-300/70 hidden sm:inline">— launches, milestones or task deadlines past due</span>
+            <span className="font-normal text-rose-700 dark:text-rose-300/70 hidden sm:inline">� launches, milestones or task deadlines past due</span>
           </div>
-          <button type="button" onClick={() => setCurrentView('timeline')} className="px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black shrink-0">View Timeline →</button>
+          <button type="button" onClick={() => setCurrentView('timeline')} className="px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black shrink-0">View Timeline {' >'}</button>
         </div>
       )}
 
@@ -228,6 +278,11 @@ export const DashboardView: React.FC = () => {
               <h2 className="text-lg font-black text-slate-900 dark:text-white">
                 Project Pipeline
               </h2>
+              {activeProjects.length > 1 && (
+                <span className="text-[11px] font-mono text-content-faint dark:text-content-faint hidden sm:inline">
+                  drag to reorder{isReordering ? '… saving' : ''}
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -240,7 +295,13 @@ export const DashboardView: React.FC = () => {
           </div>
 
           <div className="space-y-4">
-            {projects.slice(0, 4).map(project => {
+            {activeProjects.length === 0 ? (
+              <div className="py-8 text-center space-y-3 rounded-2xl border border-dashed border-line">
+                <p className="text-sm font-bold text-content">No projects yet</p>
+                <p className="text-xs text-content-faint">Create your first project to see progress, stages, and focus time here.</p>
+                <button type="button" onClick={() => openQuickAdd('project')} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500">Create project</button>
+              </div>
+            ) : visiblePipeline.map((project, visibleIdx) => {
               const projTasks = tasks.filter(t => t.projectId === project.id);
               const projDone = projTasks.filter(t => t.completed).length;
               const progressPct = projTasks.length > 0 ? Math.round((projDone / projTasks.length) * 100) : 0;
@@ -256,13 +317,72 @@ export const DashboardView: React.FC = () => {
                 <div
                   key={project.id}
                   onClick={() => {
+                    if (dragId) return;
                     setSelectedProjectId(project.id);
                     setCurrentView('projects');
                   }}
-                  className="p-5 rounded-2xl bg-white dark:bg-surface border border-slate-200 dark:border-line/80 shadow-sm hover:border-indigo-500/40 hover:bg-slate-50 dark:hover:bg-surface-3 transition-all cursor-pointer group"
+                  onDragOver={(e) => {
+                    if (!dragId || dragId === project.id) return;
+                    e.preventDefault();
+                    setOverId(project.id);
+                  }}
+                  onDragLeave={() => {
+                    if (overId === project.id) setOverId(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handlePipelineDrop(project.id);
+                  }}
+                  className={`p-5 rounded-2xl bg-white dark:bg-surface border shadow-sm hover:border-indigo-500/40 hover:bg-slate-50 dark:hover:bg-surface-3 transition-all cursor-pointer group ${overId === project.id ? 'border-indigo-500 ring-2 ring-indigo-500/40' : 'border-slate-200 dark:border-line/80'} ${dragId === project.id ? 'opacity-50' : ''}`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Drag to reorder ${project.title}`}
+                        title="Drag to reorder"
+                        draggable
+                        onClick={(e) => e.stopPropagation()}
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', project.id);
+                          setDragId(project.id);
+                        }}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'ArrowUp') { e.preventDefault(); moveActiveProject(project.id, -1); }
+                          if (e.key === 'ArrowDown') { e.preventDefault(); moveActiveProject(project.id, 1); }
+                        }}
+                        className="p-1 -ml-1 rounded-lg text-content-faint hover:text-indigo-500 hover:bg-indigo-500/10 cursor-grab active:cursor-grabbing touch-none shrink-0"
+                      >
+                        <GripVertical className="w-4 h-4" />
+                      </span>
+                      <div className="flex flex-col shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          aria-label={`Move ${project.title} up`}
+                          title="Move up"
+                          disabled={visibleIdx === 0 && activeProjects.indexOf(project) === 0 || isReordering}
+                          onClick={() => moveActiveProject(project.id, -1)}
+                          className="p-0.5 rounded text-content-faint hover:text-indigo-500 hover:bg-indigo-500/10 disabled:opacity-30 disabled:pointer-events-none leading-none"
+                        >
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Move ${project.title} down`}
+                          title="Move down"
+                          disabled={activeProjects.indexOf(project) === activeProjects.length - 1 || isReordering}
+                          onClick={() => moveActiveProject(project.id, 1)}
+                          className="p-0.5 rounded text-content-faint hover:text-indigo-500 hover:bg-indigo-500/10 disabled:opacity-30 disabled:pointer-events-none leading-none"
+                        >
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                       <div
                         className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm ring-2 ring-slate-200 dark:ring-white/10"
                         style={{ backgroundColor: project.color || '#6366f1' }}
@@ -343,6 +463,15 @@ export const DashboardView: React.FC = () => {
                 </div>
               );
             })}
+            {activeProjects.length > visiblePipeline.length && (
+              <button
+                type="button"
+                onClick={() => setCurrentView('projects')}
+                className="w-full py-2.5 rounded-2xl border border-dashed border-line text-xs font-bold font-mono text-content-faint hover:text-indigo-500 hover:border-indigo-500/50 transition-colors"
+              >
+                +{activeProjects.length - visiblePipeline.length} more — reorder all in Projects
+              </button>
+            )}
           </div>
         </div>
 
@@ -363,7 +492,7 @@ export const DashboardView: React.FC = () => {
                 onClick={() => setCurrentView('matrix')}
                 className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 font-bold font-mono"
               >
-                Matrix →
+                Matrix {' >'}
               </button>
             </div>
 
@@ -435,7 +564,7 @@ export const DashboardView: React.FC = () => {
                 onClick={() => setCurrentView('timetracker')}
                 className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 font-bold font-mono"
               >
-                Tracker →
+                Tracker {' >'}
               </button>
             </div>
 
@@ -476,7 +605,7 @@ export const DashboardView: React.FC = () => {
                             />
                           )}
                           <span className="truncate">{proj?.title || 'General Solo Work'}</span>
-                          <span>•</span>
+                          <span>�</span>
                           <span className="font-mono text-content-faint dark:text-content-faint">{timeFormatted}</span>
                         </div>
                       </div>
@@ -518,7 +647,7 @@ export const DashboardView: React.FC = () => {
                   onClick={() => setCurrentView('ideas')}
                   className="text-xs text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 font-bold font-mono"
                 >
-                  Lab →
+                  Lab {' >'}
                 </button>
               </div>
 

@@ -44,10 +44,11 @@ interface AppContextType {
   ideas: Idea[];
   timeEntries: TimeEntry[];
   refreshData: () => Promise<void>;
-  addProject: (project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Project>;
+  addProject: (project: Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'sortOrder'>) => Promise<Project>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   duplicateProject: (id: string, title: string) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
+  reorderProjects: (orderedIds: string[]) => Promise<void>;
   advanceProjectStage: (id: string, nextStage: ProjectStage) => Promise<void>;
   addMilestone: (projectId: string, milestone: Omit<Milestone, 'id'>) => Promise<Milestone>;
   updateMilestone: (id: string, updates: Partial<Milestone>) => Promise<Milestone>;
@@ -67,6 +68,7 @@ interface AppContextType {
   convertIdeaToProject: (ideaId: string) => Promise<Project>;
   timeTracker: ActiveTimerState;
   startTimer: (mode: 'pomodoro' | 'stopwatch', projectId?: string, taskId?: string) => void;
+  setTimerTarget: (projectId?: string, taskId?: string) => void;
   pauseTimer: () => void;
   resumeTimer: () => void;
   stopTimer: (notes?: string) => Promise<void>;
@@ -105,9 +107,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [projects, setProjectsRaw] = useState<Project[]>([]);
   const sortProjects = (list: Project[]) =>
     [...list].sort((a, b) =>
-      a.pinned === b.pinned
-        ? new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-        : a.pinned ? -1 : 1
+      (a.sortOrder ?? 0) - (b.sortOrder ?? 0) ||
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
   const setProjects = (val: Project[] | ((prev: Project[]) => Project[])) =>
     setProjectsRaw(prev => {
@@ -233,7 +234,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [timeTracker.isRunning]);
 
   // Project handlers
-  const addProject = async (projectData: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> => {
+  const addProject = async (projectData: Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'sortOrder'>): Promise<Project> => {
     const payload = mapProjectToApi(projectData as any);
     // Ensure milestones sent without client-generated temp ids
     if (projectData.milestones) {
@@ -271,6 +272,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProjects(prev => prev.filter(p => p.id !== id));
     setTasks(prev => prev.filter(t => t.projectId !== id));
     if (selectedProjectId === id) setSelectedProjectId(null);
+  };
+
+  const reorderProjects = async (orderedIds: string[]) => {
+    // Optimistic update: assign sortOrder by position, untouched projects go last
+    // preserving their current relative order.
+    setProjectsRaw(prev => {
+      const order = new Map(orderedIds.map((id, idx) => [id, idx]));
+      const included = prev.filter(p => order.has(p.id)).sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+      const rest = prev.filter(p => !order.has(p.id));
+      const next = [...included, ...rest].map((p, idx) => ({ ...p, sortOrder: idx }));
+      return sortProjects(next);
+    });
+    try {
+      await api.post('/projects/reorder/', { ordered_ids: orderedIds });
+    } catch (e) {
+      console.error('Failed to reorder projects', e);
+      await fetchAll();
+      throw e;
+    }
   };
 
   const advanceProjectStage = async (id: string, nextStage: ProjectStage) => {
@@ -441,6 +461,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
   const pauseTimer = () => setTimeTracker(prev => ({ ...prev, isRunning: false }));
   const resumeTimer = () => setTimeTracker(prev => ({ ...prev, isRunning: true }));
+  const setTimerTarget = (projectId?: string, taskId?: string) => {
+    setTimeTracker(prev => ({
+      ...prev,
+      projectId: projectId || undefined,
+      // Clear task if it doesn't belong to the new project selection is handled by callers;
+      // when only project changes, drop task to avoid cross-project attribution.
+      taskId: projectId !== prev.projectId ? undefined : (taskId || prev.taskId),
+    }));
+  };
   const stopTimer = async (notes = '') => {
     const elapsed = timeTracker.secondsElapsed;
     const proj = projects.find(p => p.id === timeTracker.projectId);
@@ -518,12 +547,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const openQuickAdd = (tab: 'task' | 'project' | 'idea' | 'timer' = 'task', options?: { projectId?: string; taskId?: string }) => {
+  const openQuickAdd = useCallback((tab: 'task' | 'project' | 'idea' | 'timer' = 'task', options?: { projectId?: string; taskId?: string }) => {
     setQuickAddInitialTab(tab);
     setQuickAddProjectId(options?.projectId || null);
     setQuickAddTaskId(options?.taskId || null);
     setIsQuickAddOpen(true);
-  };
+  }, []);
 
   const exportData = async () => {
     const res = await api.get('/export/');
@@ -575,9 +604,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  return (
-    <AppContext.Provider
-      value={{
+  const contextValue = React.useMemo<AppContextType>(() => ({
         currentView,
         setCurrentView,
         selectedProjectId,
@@ -598,6 +625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateProject,
         duplicateProject,
         deleteProject,
+        reorderProjects,
         advanceProjectStage,
         addMilestone,
         updateMilestone,
@@ -617,6 +645,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         convertIdeaToProject,
         timeTracker,
         startTimer,
+        setTimerTarget,
         pauseTimer,
         resumeTimer,
         stopTimer,
@@ -632,8 +661,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         exportData,
         importData,
         resetDefaults,
-      }}
-    >
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [currentView, selectedProjectId, selectedSparkId, isDarkMode, searchQuery, isDataLoading, projects, tasks, ideas, timeEntries, timeTracker, isQuickAddOpen, quickAddInitialTab, quickAddProjectId, quickAddTaskId, openQuickAdd]);
+
+  return (
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );

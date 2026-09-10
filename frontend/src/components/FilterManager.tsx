@@ -4,6 +4,7 @@ import { mapProjectDocFromApi } from '../services/mappers';
 import type { AgentFilter, ProjectDoc } from '../types';
 import { useAgentFilters } from '../hooks/useAgentFilters';
 import { AgentFilterModal } from './AgentFilterModal';
+import { useToast } from './Toaster';
 import {
   Plus,
   Pencil,
@@ -23,6 +24,7 @@ export const FilterManager: React.FC = () => {
   const [editing, setEditing] = useState<AgentFilter | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { confirm } = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -69,10 +71,13 @@ export const FilterManager: React.FC = () => {
 
   const handleDelete = async (f: AgentFilter) => {
     const used = usageCount(f.id);
-    const msg = used > 0
-      ? `Delete filter "${f.name}"? ${used} skill${used > 1 ? 's are' : ' is'} using it and will become uncategorized.`
-      : `Delete filter "${f.name}"?`;
-    if (!window.confirm(msg)) return;
+    const ok = await confirm({
+      title: `Delete filter "${f.name}"?`,
+      description: used > 0 ? `${used} skill${used > 1 ? 's are' : ' is'} using it and will become uncategorized.` : undefined,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(f.id);
     setError(null);
     try {

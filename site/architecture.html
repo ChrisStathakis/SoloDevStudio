@@ -52,6 +52,9 @@
                             <li class="nav-item">
                                 <a href="operations.html" class="nav-link">Operations</a>
                             </li>
+                            <li class="nav-item">
+                                <a href="desktop-updates.html" class="nav-link">Desktop updates</a>
+                            </li>
                         </ul>
 
                     <ul class="nav navbar-nav ms-md-auto">
@@ -141,15 +144,15 @@
 <h2 id="backend-modules">Backend modules</h2>
 <ul>
 <li><code>server/config/</code> contains Django settings, URL inclusion, WSGI, and ASGI configuration.</li>
-<li><code>server/core/models.py</code> defines the owner-scoped domain: users, projects, milestones, tasks, subtasks, ideas, launch prompts, filters, project docs, and time entries.</li>
+<li><code>server/core/models.py</code> defines the owner-scoped domain: users, projects, milestones, tasks, subtasks, ideas, launch prompts, filters, project docs, stage workspaces, and time entries.</li>
 <li><code>server/core/serializers.py</code> validates request data and maps nested milestones, subtasks, milestone IDs, and nullable launch prompts.</li>
 <li><code>server/core/views.py</code> provides resource viewsets, project actions, idea conversion, dashboard/timeline aggregation, export/import, and filesystem browsing.</li>
 <li><code>server/core/terminal_views.py</code> exposes project terminal creation, listing, input, resize, output streaming, and deletion.</li>
 <li><code>server/core/services/terminal_manager.py</code> owns live PTY processes and enforces one live CMD and one live script session per owner/project/mode.</li>
 </ul>
 <h2 id="data-ownership-and-relationships">Data ownership and relationships</h2>
-<p>Every project, idea, task, time entry, and project document is filtered by the authenticated owner. A project owns milestones and tasks. Tasks own subtasks and may have a many-to-many relationship with milestones. <code>ProjectLaunchPrompt</code> is optional and one-to-one with a project; manually created and older projects may have no prompt.</p>
-<p>Idea conversion and its project, prompt, milestones, tasks, and status update run in one database transaction. Export/import preserves prompt content and milestone links while assigning new IDs to imported records.</p>
+<p>Every project, idea, task, time entry, and project document is filtered by the authenticated owner. A project owns milestones, tasks, and one optional <code>StageWorkspace</code> per lifecycle stage. Tasks own subtasks and may have a many-to-many relationship with milestones. <code>ProjectLaunchPrompt</code> is optional and one-to-one with a project; manually created and older projects may have no prompt. Stage workspace guidance is built into <code>server/core/stage_workspaces.py</code>; notes and checklist state are intentionally excluded from generated coding-agent prompts.</p>
+<p>Idea conversion and its project, prompt, milestones, tasks, and status update run in one database transaction. Export/import preserves prompt content, milestone links, and stage workspaces while assigning new IDs to imported records.</p>
 <h2 id="authentication-and-transport">Authentication and transport</h2>
 <p>The API uses JWT bearer authentication. The frontend sends <code>Authorization: Bearer &lt;access-token&gt;</code> and refreshes expired access tokens using the stored refresh token. CORS origins are configured from the backend environment. Terminal output is consumed with an authenticated NDJSON stream because it is long-lived rather than a normal JSON response.</p>
 <h2 id="frontend-server-and-research-endpoints">Frontend server and research endpoints</h2>

@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { Check, Loader2, Pencil, Plus, Tags, Trash2, X } from 'lucide-react';
 import { api } from '../services/api';
 import { useIdeaCategories } from '../hooks/useIdeaCategories';
+import { useToast } from './Toaster';
 
 export const IdeaCategoryManager: React.FC = () => {
   const { categories, isLoading, refresh } = useIdeaCategories();
+  const { confirm } = useToast();
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -44,7 +46,9 @@ export const IdeaCategoryManager: React.FC = () => {
   };
 
   const remove = async (id: string, name: string, ideaCount: number) => {
-    if (ideaCount > 0 || !window.confirm(`Delete category "${name}"?`)) return;
+    if (ideaCount > 0) return;
+    const ok = await confirm({ title: `Delete category "${name}"?`, confirmLabel: 'Delete', danger: true });
+    if (!ok) return;
     setBusyId(id);
     setError(null);
     try {

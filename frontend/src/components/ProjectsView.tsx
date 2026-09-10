@@ -14,9 +14,14 @@ import {
   Play, 
   Edit3, 
   Trash2, 
-  Pin, 
+  Pin,
   PinOff,
-  Filter, 
+  GripVertical,
+  Pencil,
+  ArrowUp,
+  ArrowDown,
+  RotateCcw,
+  Filter,
   CheckSquare, 
   AlertCircle,
   Bug,
@@ -50,7 +55,14 @@ import { TerminalDrawer, TerminalDrawerHandle } from './TerminalDrawer';
 import { PageHeader, Button } from './ui';
 import { MilestoneEditor } from './MilestoneEditor';
 import { ProjectEditor, ProjectDraft } from './ProjectEditor';
-import { buildInitializationCommand, CODEX_PLAN_COMMAND, formatBracketedPaste } from '../services/initialization';
+import { ProjectStageStepper } from './ProjectStageStepper';
+import { ProjectRuntimeErrors } from './ProjectRuntimeErrors';
+import { ProjectTasksTab } from './ProjectTasksTab';
+import { ProjectPromptTab } from './ProjectPromptTab';
+import { useToast } from './Toaster';
+import { useConsoleRowLayout, type ConsoleRowId } from '../hooks/useConsoleRowLayout';
+import { buildInitializationCommand, CODEX_PLAN_COMMAND, formatBracketedPaste, CODEX_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
+import { getDaysRemaining } from '../utils/dates';
 
 const recoverSavedProjectPrompt = (content: string) => {
   const marker = content.match(/(?:^|\r?\n)## Active project skills(?:\r?\n|$)/);
@@ -76,11 +88,11 @@ const mapInitializationSettings = (raw: any): InitializationSettings => ({
 });
 
 export const ProjectsView: React.FC = () => {
-  const { 
-    projects, 
-    tasks, 
-    timeEntries, 
-    selectedProjectId, 
+  const {
+    projects,
+    tasks,
+    timeEntries,
+    selectedProjectId,
     setSelectedProjectId,
     advanceProjectStage,
     addMilestone,
@@ -96,12 +108,15 @@ export const ProjectsView: React.FC = () => {
     updateSubtask,
     deleteSubtask,
     deleteTask,
+    addTask,
     startTimer,
     openQuickAdd,
     setCurrentView,
     searchQuery,
-    refreshData
+    refreshData,
+    reorderProjects
   } = useApp();
+  const { toast, confirm } = useToast();
 
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
@@ -136,7 +151,21 @@ export const ProjectsView: React.FC = () => {
   const [pythonEnvDraft, setPythonEnvDraft] = useState<string>('');
   const [isRunningScript, setIsRunningScript] = useState<boolean>(false);
   const [isOpeningCmd, setIsOpeningCmd] = useState<boolean>(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  const setFieldError = (field: string, msg: string) => setActionErrors(prev => ({ ...prev, [field]: msg }));
+  const clearFieldError = (field: string) => setActionErrors(prev => {
+    if (!(field in prev)) return prev;
+    const next = { ...prev };
+    delete next[field];
+    return next;
+  });
+  const clearAllActionErrors = () => setActionErrors({});
+  // Back-compat helper: legacy single-channel callers map to the folder channel
+  const setFolderError = (msg: string | null) => {
+    if (msg === null) clearFieldError('folder');
+    else setFieldError('folder', msg);
+  };
+  const folderError = actionErrors.folder ?? null;
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [promptCopyError, setPromptCopyError] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState('');
@@ -481,14 +510,34 @@ export const ProjectsView: React.FC = () => {
         }
         const session = await drawer.create('cmd', { forceNew: true });
         const initialRevision = await drawer.waitForOutputIdle(session.id);
+        const appName = tool === 'codex' ? 'Codex' : 'OpenCode';
+        const readyPatterns = tool === 'codex' ? CODEX_READY_PATTERNS : OPENCODE_READY_PATTERNS;
+        setInitializationStatus(`Starting ${appName} — watching for its composer…`);
         await drawer.sendInput(`${buildInitializationCommand({ tool, model: normalizedModel, reasoningEffort, mode })}\r`, session.id);
-        const applicationRevision = await drawer.waitForOutputIdle(session.id, { afterRevision: initialRevision });
+        // The app may stop at an interactive trust gate first. Never
+        // auto-accept it: a prompt dumped into stdin too early is exactly
+        // what made Codex abort with "timed out discarding buffered
+        // terminal input", spilling the prompt into the shell.
+        const marker = await drawer.waitForOutputMarker(session.id, {
+          afterRevision: initialRevision,
+          ready: readyPatterns,
+          blocked: tool === 'codex' ? CODEX_TRUST_PATTERNS : [],
+          timeoutMs: 90000,
+        });
+        if (marker === 'blocked') {
+          setInitializationStatus(`${appName} is asking for trust — press Enter in the console, then the prompt pastes automatically.`);
+          await drawer.waitForOutputMarker(session.id, {
+            ready: readyPatterns,
+            timeoutMs: 180000,
+          });
+        }
         if (tool === 'codex' && mode === 'plan') {
           await drawer.sendInput(`${CODEX_PLAN_COMMAND}\r`, session.id);
-          await drawer.waitForOutputIdle(session.id, { afterRevision: applicationRevision });
+          await drawer.waitForOutputMarker(session.id, { ready: readyPatterns, timeoutMs: 60000 });
         }
-        await drawer.sendInput(formatBracketedPaste(prompt), session.id);
-        setInitializationStatus(`${tool === 'codex' ? 'Codex' : 'OpenCode'} is ready with ${normalizedModel}${tool === 'codex' ? ` (${reasoningEffort}, ${mode})` : ''}. The prompt is prepared in the composer; review it and press Enter.`);
+        setInitializationStatus(`Pasting the prompt into ${appName}…`);
+        await drawer.sendPastedText(formatBracketedPaste(prompt), session.id);
+        setInitializationStatus(`${appName} is ready with ${normalizedModel} (${reasoningEffort}, ${mode}). The prompt is prepared in the composer; review it and press Enter.`);
       } catch (error: any) {
         const detail = error?.response?.data?.error || 'Set a CMD folder for this project to open its console.';
         setIsLaunchDialogOpen(true);
@@ -505,7 +554,12 @@ export const ProjectsView: React.FC = () => {
       setPromptCopyError('npm is not available in the project terminal. Install Node.js/npm first.');
       return;
     }
-    if (!window.confirm(`Install ${toolAvailability.tool === 'codex' ? 'Codex' : 'OpenCode'} in the project terminal?`)) return;
+    const ok = await confirm({
+      title: `Install ${toolAvailability.tool === 'codex' ? 'Codex' : 'OpenCode'} in the project terminal?`,
+      description: `Runs: ${toolAvailability.install_command}`,
+      confirmLabel: 'Install',
+    });
+    if (!ok) return;
     setIsInstallingTool(true);
     try {
       const drawer = terminalDrawerRef.current;
@@ -548,7 +602,7 @@ export const ProjectsView: React.FC = () => {
       await refreshData();
       setInitializationStatus('Project initialization defaults saved.');
     } catch (error: any) {
-      setPromptCopyError(error?.response?.data?.model_id || 'Unable to save initialization defaults.');
+      setPromptCopyError(error?.response?.data?.model_id?.[0] || error?.response?.data?.initialization_mode?.[0] || error?.response?.data?.mode?.[0] || error?.response?.data?.detail || 'Unable to save initialization defaults.');
     } finally {
       setIsSavingInitializationSettings(false);
     }
@@ -582,13 +636,44 @@ export const ProjectsView: React.FC = () => {
     ? projects.filter(p => p.currentStage === 'live' && matchesProjectFilters(p))
     : [];
 
-  const getDaysRemaining = (targetDate: string) => {
-    const target = new Date(targetDate);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    target.setHours(0, 0, 0, 0);
-    const diff = Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    return diff;
+  // Manual ordering (shared with the homepage pipeline, persisted via POST /projects/reorder/).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [isReordering, setIsReordering] = useState(false);
+  const persistProjectOrder = async (newActiveIds: string[]) => {
+    const liveIds = projects.filter(p => p.currentStage === 'live').map(p => p.id);
+    setIsReordering(true);
+    try {
+      await reorderProjects([...newActiveIds, ...liveIds]);
+    } catch {
+      toast({ title: 'Could not save the new order', tone: 'error' });
+    } finally {
+      setIsReordering(false);
+    }
+  };
+  const dropProjectOn = (targetId: string) => {
+    if (!dragId || dragId === targetId || isReordering) return;
+    // Map the drop position within the filtered view back onto the full active order.
+    const fullIds = activeProjects.map(p => p.id);
+    const from = fullIds.indexOf(dragId);
+    let to = fullIds.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const [moved] = fullIds.splice(from, 1);
+    to = fullIds.indexOf(targetId);
+    fullIds.splice(to, 0, moved);
+    setDragId(null);
+    setOverId(null);
+    void persistProjectOrder(fullIds);
+  };
+  const handleTogglePin = async (project: Project) => {
+    if (project.pinned) {
+      await updateProject(project.id, { pinned: false });
+      return;
+    }
+    // Pinning moves the project to the top of the manual order.
+    await updateProject(project.id, { pinned: true });
+    const ids = [project.id, ...activeProjects.filter(p => p.id !== project.id).map(p => p.id)];
+    await persistProjectOrder(ids);
   };
 
   const renderProjectCard = (project: Project) => {
@@ -660,11 +745,18 @@ export const ProjectsView: React.FC = () => {
   };
 
   const handleDeleteMilestone = async (milestone: Project['milestones'][number]) => {
-    if (!confirm(`Delete milestone "${milestone.title}"? Linked tasks will remain.`)) return;
+    const ok = await confirm({
+      title: `Delete milestone "${milestone.title}"?`,
+      description: 'Linked tasks will remain.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteMilestone(milestone.id);
+      clearFieldError('milestone');
     } catch (e: any) {
-      showActionError(e?.response?.data?.detail || e?.message || 'Failed to delete milestone.');
+      showActionError(e?.response?.data?.detail || e?.message || 'Failed to delete milestone.', 'milestone');
     }
   };
 
@@ -682,7 +774,6 @@ export const ProjectsView: React.FC = () => {
     } catch (e: any) {
       const msg = e?.response?.data?.error || 'Failed to open folder.';
       setFolderError(msg);
-      window.setTimeout(() => setFolderError(null), 4000);
     } finally {
       setIsOpeningFolder(false);
     }
@@ -709,8 +800,8 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
-  const showActionError = (msg: string) => {
-    setFolderError(msg);
+  const showActionError = (msg: string, field = 'general') => {
+    setFieldError(field, msg);
   };
 
   const handleRunScript = async () => {
@@ -721,13 +812,13 @@ export const ProjectsView: React.FC = () => {
       return;
     }
     setIsRunningScript(true);
-    setFolderError(null);
+    clearFieldError('script');
     try {
       const drawer = terminalDrawerRef.current;
       if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
       await drawer.create('script');
     } catch (e: any) {
-      showActionError(e?.response?.data?.error || 'Failed to run script.');
+      showActionError(e?.response?.data?.error || e?.message || 'Failed to run script.', 'script');
     } finally {
       setIsRunningScript(false);
     }
@@ -741,13 +832,13 @@ export const ProjectsView: React.FC = () => {
       return;
     }
     setIsOpeningCmd(true);
-    setFolderError(null);
+    clearFieldError('cmd');
     try {
       const drawer = terminalDrawerRef.current;
       if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
       await drawer.create('cmd');
     } catch (e: any) {
-      showActionError(e?.response?.data?.error || 'Failed to open cmd.');
+      showActionError(e?.response?.data?.error || e?.message || 'Failed to open cmd.', 'cmd');
     } finally {
       setIsOpeningCmd(false);
     }
@@ -756,7 +847,7 @@ export const ProjectsView: React.FC = () => {
   const handleMinimizeCmd = () => {
     const drawer = terminalDrawerRef.current;
     if (!drawer) {
-      showActionError('Terminal console is still loading. Please try again in a moment.');
+      showActionError('Terminal console is still loading. Please try again in a moment.', 'terminal');
       return;
     }
     drawer.minimize();
@@ -767,7 +858,7 @@ export const ProjectsView: React.FC = () => {
     if (isSavingScriptPath) return;
     const path = scriptPathDraft.trim();
     setIsSavingScriptPath(true);
-    setFolderError(null);
+    clearFieldError('script');
     try {
       await updateProject(activeProject.id, { scriptPath: path });
       setScriptPathDraft(path);
@@ -778,7 +869,7 @@ export const ProjectsView: React.FC = () => {
         || responseData?.detail
         || (typeof responseData === 'string' ? responseData : responseData ? JSON.stringify(responseData) : null)
         || e?.message;
-      setFolderError(detail ? `Failed to save script path: ${detail}` : 'Failed to save script path.');
+      setFieldError('script', detail ? `Failed to save script path: ${detail}` : 'Failed to save script path.');
     } finally {
       setIsSavingScriptPath(false);
     }
@@ -788,9 +879,9 @@ export const ProjectsView: React.FC = () => {
     if (!activeProject) return;
     try {
       await updateProject(activeProject.id, { port: portDraft.trim() });
-      setFolderError(null);
+      clearFieldError('port');
     } catch {
-      showActionError('Failed to save port / run args.');
+      showActionError('Failed to save port / run args.', 'port');
     } finally {
       setIsEditingPort(false);
     }
@@ -805,26 +896,26 @@ export const ProjectsView: React.FC = () => {
     if (field === 'directoryPath') {
       setDirPathDraft(path);
       setIsEditingDirPath(true);
-      setFolderError(null);
+      clearFieldError('folder');
       return;
     }
     if (field === 'scriptPath') {
       setScriptPathDraft(path);
       setIsEditingScriptPath(true);
-      setFolderError(null);
+      clearFieldError('script');
       return;
     }
     if (field === 'cmdDirectory') {
       setCmdDirDraft(path);
       setIsEditingCmdDir(true);
-      setFolderError(null);
+      clearFieldError('cmd');
       return;
     }
     try {
       await updateProject(activeProject.id, { [field]: path });
-      setFolderError(null);
+      clearFieldError(field === 'pythonEnv' ? 'pythonEnv' : 'general');
     } catch {
-      showActionError(`Failed to save ${field}.`);
+      showActionError(`Failed to save ${field}.`, field === 'pythonEnv' ? 'pythonEnv' : 'general');
     }
   };
 
@@ -832,17 +923,17 @@ export const ProjectsView: React.FC = () => {
       if (!activeProject) return;
       try {
         await updateProject(activeProject.id, { cmdDirectory: cmdDirDraft.trim() });
-        setFolderError(null);
+        clearFieldError('cmd');
         try {
           const drawer = terminalDrawerRef.current;
           if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
           await drawer.restartIfRunning('cmd');
         } catch (e: any) {
           const detail = e?.response?.data?.error || e?.message;
-          showActionError(detail ? `CMD directory saved, but console restart failed: ${detail}` : 'CMD directory saved, but the console could not be restarted.');
+          showActionError(detail ? `CMD directory saved, but console restart failed: ${detail}` : 'CMD directory saved, but the console could not be restarted.', 'cmd');
         }
       } catch {
-        showActionError('Failed to save CMD directory.');
+        showActionError('Failed to save CMD directory.', 'cmd');
       } finally {
         setIsEditingCmdDir(false);
       }
@@ -852,9 +943,9 @@ export const ProjectsView: React.FC = () => {
       if (!activeProject) return;
       try {
         await updateProject(activeProject.id, { pythonEnv: pythonEnvDraft.trim() });
-        setFolderError(null);
+        clearFieldError('pythonEnv');
       } catch {
-        showActionError('Failed to save Python environment.');
+        showActionError('Failed to save Python environment.', 'pythonEnv');
       } finally {
         setIsEditingPythonEnv(false);
       }
@@ -864,11 +955,443 @@ export const ProjectsView: React.FC = () => {
       if (!activeProject) return;
       try {
         await updateProject(activeProject.id, { drive });
-        setFolderError(null);
+        clearFieldError('drive');
       } catch {
-        showActionError('Failed to update drive.');
+        showActionError('Failed to update drive.', 'drive');
       }
     };
+
+  // Console / path row layout: per-project order + custom labels (move + rename).
+  const consoleLayout = useConsoleRowLayout(activeProject?.id ?? null);
+  const [dragRowId, setDragRowId] = useState<ConsoleRowId | null>(null);
+  const [overRowId, setOverRowId] = useState<ConsoleRowId | null>(null);
+  const [renamingRowId, setRenamingRowId] = useState<ConsoleRowId | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  // Reset drag/rename UI when switching projects.
+  useEffect(() => {
+    setDragRowId(null);
+    setOverRowId(null);
+    setRenamingRowId(null);
+    setRenameDraft('');
+  }, [activeProject?.id]);
+  const startRenameRow = (id: ConsoleRowId) => {
+    setRenamingRowId(id);
+    setRenameDraft(consoleLayout.displayLabel(id));
+  };
+  const saveRenameRow = () => {
+    if (!renamingRowId) return;
+    consoleLayout.rename(renamingRowId, renameDraft);
+    setRenamingRowId(null);
+    setRenameDraft('');
+  };
+  const dropRowOn = (targetId: ConsoleRowId) => {
+    if (!dragRowId || dragRowId === targetId) return;
+    consoleLayout.moveTo(dragRowId, targetId);
+    setDragRowId(null);
+    setOverRowId(null);
+  };
+  // Body of each console/path row (value editors). Returns null when the row
+  // has no value and is not being edited — same visibility as before.
+  const renderConsoleRowBody = (rowId: ConsoleRowId): React.ReactNode => {
+    if (!activeProject) return null;
+    switch (rowId) {
+      case 'folder':
+        if (isEditingDirPath) {
+          return (
+            <form
+              className="flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleSaveDirPath();
+              }}
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <input
+                type="text"
+                autoFocus
+                value={dirPathDraft}
+                onChange={e => setDirPathDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') setIsEditingDirPath(false);
+                }}
+                placeholder="e.g. D:\projects\my-app"
+                className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={isSavingDirPath}
+                className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all"
+              >
+                {isSavingDirPath ? 'Saving…' : 'Save Path'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingDirPath(false)}
+                disabled={isSavingDirPath}
+                className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerField('directoryPath')}
+                disabled={isSavingDirPath}
+                className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-indigo-300 text-xs font-black transition-colors"
+                title="Browse for folder"
+              >
+                Browse
+              </button>
+            </form>
+          );
+        }
+        if (!activeProject.directoryPath) return null;
+        return (
+          <div className="flex items-center gap-2">
+            <FolderOpen className="w-3.5 h-3.5 text-content-faint shrink-0" />
+            <span
+              className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
+              title={activeProject.directoryPath}
+            >
+              {activeProject.directoryPath}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setDirPathDraft(activeProject.directoryPath || '');
+                setIsEditingDirPath(true);
+              }}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setPickerField('directoryPath')}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+            >
+              Browse
+            </button>
+          </div>
+        );
+      case 'script':
+        if (isEditingScriptPath) {
+          return (
+            <form
+              className="flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleSaveScriptPath();
+              }}
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <input
+                type="text"
+                autoFocus
+                value={scriptPathDraft}
+                onChange={e => setScriptPathDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape' && !isSavingScriptPath) setIsEditingScriptPath(false);
+                }}
+                placeholder="e.g. D:\projects\my-app\start-server.bat"
+                className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-emerald-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={isSavingScriptPath}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all"
+              >
+                {isSavingScriptPath ? 'Saving…' : 'Save Path'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingScriptPath(false)}
+                disabled={isSavingScriptPath}
+                className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerField('scriptPath')}
+                disabled={isSavingScriptPath}
+                className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-emerald-300 text-xs font-black transition-colors"
+                title="Browse for script (.bat/.cmd)"
+              >
+                Browse
+              </button>
+            </form>
+          );
+        }
+        if (!activeProject.scriptPath) return null;
+        return (
+          <div className="flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-content-faint shrink-0" />
+            <span
+              className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
+              title={activeProject.scriptPath}
+            >
+              {activeProject.scriptPath}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setScriptPathDraft(activeProject.scriptPath || '');
+                setIsEditingScriptPath(true);
+              }}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-emerald-400 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setPickerField('scriptPath')}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-emerald-400 transition-colors shrink-0"
+            >
+              Browse
+            </button>
+          </div>
+        );
+      case 'port':
+        if (isEditingPort) {
+          return (
+            <div className="flex flex-wrap items-center gap-2">
+              <Zap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <input
+                type="text"
+                autoFocus
+                value={portDraft}
+                onChange={e => setPortDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleSavePort();
+                  if (e.key === 'Escape') setIsEditingPort(false);
+                }}
+                placeholder="e.g. 8001 or --port 8001 (blank = none)"
+                className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-emerald-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
+              />
+              <button
+                type="button"
+                onClick={handleSavePort}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingPort(false)}
+                className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-content-faint shrink-0" />
+            <span
+              className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
+              title={activeProject.port || 'No port / run args set'}
+            >
+              {activeProject.port ? `Port / Args: ${activeProject.port}` : 'No port / run args set'}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setPortDraft(activeProject.port || '');
+                setIsEditingPort(true);
+              }}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-emerald-400 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+          </div>
+        );
+      case 'cmd':
+        if (isEditingCmdDir) {
+          return (
+            <div className="flex flex-wrap items-center gap-2">
+              <Terminal className="w-3.5 h-3.5 text-content-faint shrink-0" />
+              <input
+                type="text"
+                autoFocus
+                value={cmdDirDraft}
+                onChange={e => setCmdDirDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleSaveCmdDir();
+                  if (e.key === 'Escape') setIsEditingCmdDir(false);
+                }}
+                placeholder="e.g. D:\projects\my-app"
+                className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
+              />
+              <button
+                type="button"
+                onClick={handleSaveCmdDir}
+                className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all"
+              >
+                Save Path
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingCmdDir(false)}
+                className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerField('cmdDirectory')}
+                className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-indigo-300 text-xs font-black transition-colors"
+                title="Browse for folder"
+              >
+                Browse
+              </button>
+            </div>
+          );
+        }
+        if (!activeProject.cmdDirectory) return null;
+        return (
+          <div className="flex items-center gap-2">
+            <Terminal className="w-3.5 h-3.5 text-content-faint shrink-0" />
+            <span
+              className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
+              title={activeProject.cmdDirectory}
+            >
+              {activeProject.cmdDirectory}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setCmdDirDraft(activeProject.cmdDirectory || '');
+                setIsEditingCmdDir(true);
+              }}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setPickerField('cmdDirectory')}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+            >
+              Browse
+            </button>
+          </div>
+        );
+      case 'pythonEnv':
+        if (isEditingPythonEnv) {
+          return (
+            <div className="flex flex-wrap items-center gap-2">
+              <Boxes className="w-3.5 h-3.5 text-content-faint shrink-0" />
+              <input
+                type="text"
+                autoFocus
+                value={pythonEnvDraft}
+                onChange={e => setPythonEnvDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleSavePythonEnv();
+                  if (e.key === 'Escape') setIsEditingPythonEnv(false);
+                }}
+                placeholder="e.g. D:\envs\my-venv"
+                className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
+              />
+              <button
+                type="button"
+                onClick={handleSavePythonEnv}
+                className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all"
+              >
+                Save Path
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingPythonEnv(false)}
+                className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
+                title="Cancel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPickerField('pythonEnv')}
+                className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-indigo-300 text-xs font-black transition-colors"
+                title="Browse for virtualenv folder"
+              >
+                Browse
+              </button>
+            </div>
+          );
+        }
+        if (!activeProject.pythonEnv) {
+          return (
+            <button
+              type="button"
+              onClick={() => {
+                setPythonEnvDraft('');
+                setIsEditingPythonEnv(true);
+              }}
+              className="flex items-center gap-2 text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors"
+            >
+              <Boxes className="w-3.5 h-3.5" />
+              Set Python Environment
+            </button>
+          );
+        }
+        return (
+          <div className="flex items-center gap-2">
+            <Boxes className="w-3.5 h-3.5 text-content-faint shrink-0" />
+            <span
+              className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
+              title={activeProject.pythonEnv}
+            >
+              {activeProject.pythonEnv}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setPythonEnvDraft(activeProject.pythonEnv || '');
+                setIsEditingPythonEnv(true);
+              }}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setPickerField('pythonEnv')}
+              className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+            >
+              Browse
+            </button>
+          </div>
+        );
+      case 'drive':
+        return (
+          <div className="flex items-center gap-2">
+            <HardDrive className="w-3.5 h-3.5 text-content-faint shrink-0" />
+            <span className="text-[13px] font-mono text-content-faint">Drive:</span>
+            <select
+              value={activeProject.drive || ''}
+              onChange={(e) => handleChangeDrive(e.target.value)}
+              className="px-2 py-1 bg-surface-2 border border-line focus:border-indigo-500 rounded-lg text-xs font-mono text-content outline-none transition-colors"
+              title="Select the drive letter for this project's paths (e.g. when moving to another PC via USB)"
+            >
+              <option value="">Select drive</option>
+              {['C', 'D', 'E', 'F', 'G', 'H'].map((d) => (
+                <option key={d} value={d}>{d}:/</option>
+              ))}
+            </select>
+            <span className="text-[11px] text-content-faint">
+              remaps CMD / script / folder paths
+            </span>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in">
@@ -977,7 +1500,7 @@ export const ProjectsView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => updateProject(activeProject.id, { pinned: !activeProject.pinned })}
+                onClick={() => void handleTogglePin(activeProject)}
                 className="p-2 text-content-faint hover:text-content rounded-xl bg-surface-2 border border-line hover:border-line-strong transition-colors"
                 title={activeProject.pinned ? 'Unpin' : 'Pin to top'}
               >
@@ -986,13 +1509,24 @@ export const ProjectsView: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => {
-                  if (confirm(`Delete project "${activeProject.title}" and its tasks?`)) {
-                    deleteProject(activeProject.id);
+                onClick={() => void (async () => {
+                  const ok = await confirm({
+                    title: `Delete project "${activeProject.title}"?`,
+                    description: 'The project, its tasks, and milestones will be removed. This cannot be undone.',
+                    confirmLabel: 'Delete project',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                  try {
+                    await deleteProject(activeProject.id);
+                    toast({ title: `Deleted "${activeProject.title}"`, tone: 'success' });
+                  } catch {
+                    toast({ title: 'Could not delete project', tone: 'error' });
                   }
-                }}
+                })()}
                 className="p-2 text-rose-600 dark:text-rose-400 hover:text-rose-300 rounded-xl bg-surface-2 border border-line hover:border-rose-800 transition-colors"
                 title="Delete Project"
+                aria-label={`Delete project ${activeProject.title}`}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -1138,389 +1672,124 @@ export const ProjectsView: React.FC = () => {
               </div>
             </div>
 
-            {/* Project Folder Path */}
-            {folderError && (
-              <div className="flex items-start justify-between gap-3 px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300" role="alert">
-                <span>{folderError}</span>
-                <button type="button" onClick={() => setFolderError(null)} className="shrink-0 text-rose-700 dark:text-rose-300 hover:text-content" aria-label="Dismiss error">×</button>
-              </div>
-            )}
-            {isEditingDirPath ? (
-              <form
-                className="flex flex-wrap items-center gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void handleSaveDirPath();
-                }}
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                <input
-                  type="text"
-                  autoFocus
-                  value={dirPathDraft}
-                  onChange={e => setDirPathDraft(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Escape') setIsEditingDirPath(false);
-                  }}
-                  placeholder="e.g. D:\projects\my-app"
-                  className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
-                />
-                <button
-                  type="submit"
-                  disabled={isSavingDirPath}
-                  className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all"
-                >
-                  {isSavingDirPath ? 'Saving…' : 'Save Path'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingDirPath(false)}
-                  disabled={isSavingDirPath}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
-                  title="Cancel"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('directoryPath')}
-                  disabled={isSavingDirPath}
-                  className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-indigo-300 text-xs font-black transition-colors"
-                  title="Browse for folder"
-                >
-                  Browse
-                </button>
-              </form>
-            ) : activeProject.directoryPath ? (
-              <div className="flex items-center gap-2 -mt-4">
-                <FolderOpen className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <span
-                  className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
-                  title={activeProject.directoryPath}
-                >
-                  {activeProject.directoryPath}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDirPathDraft(activeProject.directoryPath || '');
-                    setIsEditingDirPath(true);
-                  }}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('directoryPath')}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
-                >
-                  Browse
-                </button>
-              </div>
-            ) : null}
-
-            {/* Server Script (.bat) Path */}
-            {isEditingScriptPath ? (
-              <form
-                className="flex flex-wrap items-center gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void handleSaveScriptPath();
-                }}
-              >
-                <Zap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <input
-                  type="text"
-                  autoFocus
-                  value={scriptPathDraft}
-                  onChange={e => setScriptPathDraft(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Escape' && !isSavingScriptPath) setIsEditingScriptPath(false);
-                  }}
-                  placeholder="e.g. D:\projects\my-app\start-server.bat"
-                  className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-emerald-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
-                />
-                <button
-                  type="submit"
-                  disabled={isSavingScriptPath}
-                  className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all"
-                >
-                  {isSavingScriptPath ? 'Saving…' : 'Save Path'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingScriptPath(false)}
-                  disabled={isSavingScriptPath}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
-                  title="Cancel"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('scriptPath')}
-                  disabled={isSavingScriptPath}
-                  className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-emerald-300 text-xs font-black transition-colors"
-                  title="Browse for script (.bat/.cmd)"
-                >
-                  Browse
-                </button>
-              </form>
-            ) : activeProject.scriptPath ? (
-              <div className="flex items-center gap-2 -mt-4">
-                <Zap className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <span
-                  className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
-                  title={activeProject.scriptPath}
-                >
-                  {activeProject.scriptPath}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setScriptPathDraft(activeProject.scriptPath || '');
-                    setIsEditingScriptPath(true);
-                  }}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-emerald-400 transition-colors shrink-0"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('scriptPath')}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-emerald-400 transition-colors shrink-0"
-                >
-                  Browse
-                </button>
-              </div>
-            ) : null}
-
-            {/* Port / Run Args */}
-            {isEditingPort ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Zap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <input
-                  type="text"
-                  autoFocus
-                  value={portDraft}
-                  onChange={e => setPortDraft(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') handleSavePort();
-                    if (e.key === 'Escape') setIsEditingPort(false);
-                  }}
-                  placeholder="e.g. 8001 or --port 8001 (blank = none)"
-                  className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-emerald-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
-                />
-                <button
-                  type="button"
-                  onClick={handleSavePort}
-                  className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all"
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingPort(false)}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
-                  title="Cancel"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 -mt-4">
-                <Zap className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <span
-                  className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
-                  title={activeProject.port || 'No port / run args set'}
-                >
-                  {activeProject.port ? `Port / Args: ${activeProject.port}` : 'No port / run args set'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPortDraft(activeProject.port || '');
-                    setIsEditingPort(true);
-                  }}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-emerald-400 transition-colors shrink-0"
-                >
-                  Edit
-                </button>
-              </div>
-            )}
-
-            {/* CMD Directory */}
-            {isEditingCmdDir ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Terminal className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <input
-                  type="text"
-                  autoFocus
-                  value={cmdDirDraft}
-                  onChange={e => setCmdDirDraft(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') handleSaveCmdDir();
-                    if (e.key === 'Escape') setIsEditingCmdDir(false);
-                  }}
-                  placeholder="e.g. D:\projects\my-app"
-                  className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveCmdDir}
-                  className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all"
-                >
-                  Save Path
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingCmdDir(false)}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
-                  title="Cancel"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('cmdDirectory')}
-                  className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-indigo-300 text-xs font-black transition-colors"
-                  title="Browse for folder"
-                >
-                  Browse
-                </button>
-              </div>
-            ) : activeProject.cmdDirectory ? (
-              <div className="flex items-center gap-2 -mt-4">
-                <Terminal className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <span
-                  className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
-                  title={activeProject.cmdDirectory}
-                >
-                  {activeProject.cmdDirectory}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCmdDirDraft(activeProject.cmdDirectory || '');
-                    setIsEditingCmdDir(true);
-                  }}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('cmdDirectory')}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
-                >
-                  Browse
-                </button>
-              </div>
-            ) : null}
-
-            {/* Python Environment */}
-            {isEditingPythonEnv ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Boxes className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <input
-                  type="text"
-                  autoFocus
-                  value={pythonEnvDraft}
-                  onChange={e => setPythonEnvDraft(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') handleSavePythonEnv();
-                    if (e.key === 'Escape') setIsEditingPythonEnv(false);
-                  }}
-                  placeholder="e.g. D:\envs\my-venv"
-                  className="flex-1 min-w-[220px] px-3 py-2 bg-surface-2 border border-line focus:border-indigo-500 rounded-xl text-xs font-mono text-content placeholder-slate-600 outline-none transition-colors"
-                />
-                <button
-                  type="button"
-                  onClick={handleSavePythonEnv}
-                  className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all"
-                >
-                  Save Path
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingPythonEnv(false)}
-                  className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
-                  title="Cancel"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('pythonEnv')}
-                  className="px-3 py-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-indigo-300 text-xs font-black transition-colors"
-                  title="Browse for virtualenv folder"
-                >
-                  Browse
-                </button>
-              </div>
-            ) : activeProject.pythonEnv ? (
-              <div className="flex items-center gap-2 -mt-4">
-                <Boxes className="w-3.5 h-3.5 text-content-faint shrink-0" />
-                <span
-                  className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
-                  title={activeProject.pythonEnv}
-                >
-                  {activeProject.pythonEnv}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPythonEnvDraft(activeProject.pythonEnv || '');
-                    setIsEditingPythonEnv(true);
-                  }}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickerField('pythonEnv')}
-                  className="text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
-                >
-                  Browse
-                </button>
-              </div>
-            ) : (
+                        {/* Project runtime errors - per field, persistent until dismissed */}
+            <ProjectRuntimeErrors errors={actionErrors} onDismiss={clearFieldError} onDismissAll={clearAllActionErrors} />
+            {/* Console / path rows — order + labels are customizable per project (move + rename). */}
+            <div className="flex items-center justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  setPythonEnvDraft('');
-                  setIsEditingPythonEnv(true);
-                }}
-                className="flex items-center gap-2 -mt-4 text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors"
+                onClick={consoleLayout.reset}
+                className="flex items-center gap-1 text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors"
+                title="Reset row order and names to defaults"
               >
-                <Boxes className="w-3.5 h-3.5" />
-                Set Python Environment
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset rows
               </button>
-            )}
-
-            {/* Drive (remaps all project folder paths when the USB drive letter changes) */}
-            <div className="flex items-center gap-2 -mt-4">
-              <HardDrive className="w-3.5 h-3.5 text-content-faint shrink-0" />
-              <span className="text-[13px] font-mono text-content-faint">Drive:</span>
-              <select
-                value={activeProject.drive || ''}
-                onChange={(e) => handleChangeDrive(e.target.value)}
-                className="px-2 py-1 bg-surface-2 border border-line focus:border-indigo-500 rounded-lg text-xs font-mono text-content outline-none transition-colors"
-                title="Select the drive letter for this project's paths (e.g. when moving to another PC via USB)"
-              >
-                <option value="">Select drive</option>
-                {['C', 'D', 'E', 'F', 'G', 'H'].map((d) => (
-                  <option key={d} value={d}>{d}:/</option>
-                ))}
-              </select>
-              <span className="text-[11px] text-content-faint">
-                remaps CMD / script / folder paths
-              </span>
             </div>
+            {consoleLayout.order.map((rowId, idx) => {
+              const body = renderConsoleRowBody(rowId);
+              if (!body) return null;
+              const label = consoleLayout.displayLabel(rowId);
+              const isRenaming = renamingRowId === rowId;
+              const isDragOver = overRowId === rowId && dragRowId !== rowId;
+              return (
+                <div
+                  key={rowId}
+                  draggable={renamingRowId !== rowId}
+                  onDragStart={() => setDragRowId(rowId)}
+                  onDragEnd={() => { setDragRowId(null); setOverRowId(null); }}
+                  onDragOver={(e) => { e.preventDefault(); setOverRowId(rowId); }}
+                  onDrop={() => dropRowOn(rowId)}
+                  className={`group/row flex items-start gap-2 rounded-xl border px-2 py-1.5 transition-colors ${isDragOver ? 'border-indigo-500 bg-indigo-500/5' : 'border-transparent hover:border-line hover:bg-surface-2/50'} ${dragRowId === rowId ? 'opacity-50' : ''}`}
+                >
+                  <span
+                    className="mt-1 cursor-grab active:cursor-grabbing text-content-faint hover:text-content shrink-0"
+                    title="Drag to reorder"
+                  >
+                    <GripVertical className="w-4 h-4" />
+                  </span>
+                  <div className="flex flex-col gap-1 min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      {isRenaming ? (
+                        <span className="flex items-center gap-1.5 flex-1 min-w-0">
+                          <input
+                            type="text"
+                            autoFocus
+                            value={renameDraft}
+                            maxLength={60}
+                            onChange={e => setRenameDraft(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') saveRenameRow();
+                              if (e.key === 'Escape') { setRenamingRowId(null); setRenameDraft(''); }
+                            }}
+                            aria-label={`Rename ${label} row`}
+                            placeholder="Row name"
+                            className="min-w-0 flex-1 px-2 py-0.5 bg-surface-2 border border-indigo-500 rounded-lg text-[12px] font-black uppercase tracking-wider text-content outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={saveRenameRow}
+                            className="p-1 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+                            title="Save name"
+                            aria-label={`Save name for ${label} row`}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setRenamingRowId(null); setRenameDraft(''); }}
+                            className="p-1 rounded-lg text-content-faint hover:text-content transition-colors"
+                            title="Cancel rename"
+                            aria-label={`Cancel rename for ${label} row`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-[12px] font-black uppercase tracking-wider text-content-faint truncate" title={label}>
+                            {label}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => startRenameRow(rowId)}
+                            className="p-0.5 rounded text-slate-600 hover:text-indigo-400 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
+                            title={`Rename ${label}`}
+                            aria-label={`Rename ${label} row`}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                      <span className="flex-1" />
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => consoleLayout.move(rowId, 'up')}
+                        className="p-0.5 rounded text-content-faint hover:text-indigo-400 disabled:opacity-20 transition-all shrink-0"
+                        title={`Move ${label} up`}
+                        aria-label={`Move ${label} up`}
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === consoleLayout.order.length - 1}
+                        onClick={() => consoleLayout.move(rowId, 'down')}
+                        className="p-0.5 rounded text-content-faint hover:text-indigo-400 disabled:opacity-20 transition-all shrink-0"
+                        title={`Move ${label} down`}
+                        aria-label={`Move ${label} down`}
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    {body}
+                  </div>
+                </div>
+              );
+            })}
 
-            {pickerField && activeProject && (
+{pickerField && activeProject && (
               <PathPickerModal
                 mode={pickerField === 'scriptPath' ? 'file' : 'folder'}
                 fileFilter={pickerField === 'scriptPath' ? ['.bat', '.cmd'] : undefined}
@@ -1558,44 +1827,22 @@ export const ProjectsView: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
-                {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(stg => {
-                  const cfg = STAGE_CONFIG[stg];
-                  const isCurrent = activeProject.currentStage === stg;
-                  const isCompleted = cfg.order < STAGE_CONFIG[activeProject.currentStage].order;
-
-                  return (
-                    <button
-                      key={stg}
-                      type="button"
-                      onClick={() => advanceProjectStage(activeProject.id, stg)}
-                      className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden ${
-                        isCurrent
-                          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 ring-1 ring-indigo-500 shadow-md'
-                          : isCompleted
-                          ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 hover:border-emerald-700'
-                          : 'border-line bg-surface-2 hover:bg-surface-3 text-content-faint'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[12px] font-mono font-bold uppercase text-content-faint">
-                          Stage {cfg.order}
-                        </span>
-                        {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
-                        {isCurrent && <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />}
-                      </div>
-
-                      <div className={`text-xs font-black ${isCurrent ? 'text-content' : ''}`}>
-                        {cfg.label}
-                      </div>
-
-                      <p className="text-[12px] text-content-faint line-clamp-2 mt-1 leading-tight">
-                        {cfg.description}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
+              <ProjectStageStepper project={activeProject} onAdvance={(stg) => void (async () => {
+                const isBackward = STAGE_CONFIG[stg].order < STAGE_CONFIG[activeProject.currentStage].order;
+                if (isBackward) {
+                  const ok = await confirm({
+                    title: `Move back to ${STAGE_CONFIG[stg].label}?`,
+                    description: `Progress in later stages is kept, but focus for "${activeProject.title}" shifts back.`,
+                    confirmLabel: 'Move back',
+                  });
+                  if (!ok) return;
+                }
+                try {
+                  await advanceProjectStage(activeProject.id, stg);
+                } catch {
+                  toast({ title: 'Could not change stage', tone: 'error' });
+                }
+              })()} />
             </div>
 
             {/* Target Deadline & Tech Stack */}
@@ -1790,253 +2037,37 @@ export const ProjectsView: React.FC = () => {
 
             {/* TAB: TASKS */}
             {activeDetailTab === 'tasks' && (
-              <div className="space-y-4">
-                {taskPromptError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{taskPromptError}</p>}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={taskFilterStage}
-                      onChange={e => setTaskFilterStage(e.target.value)}
-                      className="px-3.5 py-1.5 text-xs bg-surface-2 border border-line rounded-xl text-content-muted font-bold outline-none"
-                    >
-                      <option value="all">All Stages</option>
-                      {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(s => (
-                        <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={taskFilterCategory}
-                      onChange={e => setTaskFilterCategory(e.target.value)}
-                      className="px-3.5 py-1.5 text-xs bg-surface-2 border border-line rounded-xl text-content-muted font-bold outline-none"
-                      title="Filter by task category"
-                    >
-                      <option value="all">All Categories</option>
-                      <option value="bug">🐛 Bugs</option>
-                      <option value="feature">✦ Features</option>
-                      <option value="chore">🔧 Chores</option>
-                      <option value="improvement">⬆ Improvements</option>
-                      <option value="general">• General</option>
-                    </select>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => openQuickAdd('task', { projectId: activeProject.id })}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-sm"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Task</span>
-                  </button>
-                </div>
-
-                {/* Tasks List */}
-                <div className="space-y-3">
-                  {tasks
-                    .filter(t => t.projectId === activeProject.id)
-                    .filter(t => taskFilterStage === 'all' || t.stage === taskFilterStage)
-                    .filter(t => taskFilterCategory === 'all' || (t as any).category === taskFilterCategory)
-                    .sort((a, b) => Number(a.completed) - Number(b.completed))
-                    .map(task => {
-                      const qConfig = QUADRANT_CONFIG[task.quadrant];
-                      const subtaskInput = newSubtaskTitle[task.id] || '';
-
-                      return (
-                        <div
-                          key={task.id}
-                          className={`p-4 rounded-2xl bg-surface border transition-all ${
-                            task.completed
-                              ? 'border-line/80 opacity-60 bg-surface-2'
-                              : 'border-line shadow-md hover:border-line-strong'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-3 flex-1 min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => toggleTaskCompletion(task.id)}
-                                className="mt-1 p-0.5 text-content-faint hover:text-emerald-400 transition-colors shrink-0"
-                              >
-                                {task.completed ? (
-                                  <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                                ) : (
-                                  <div className="w-5 h-5 rounded-lg border-2 border-line-strong hover:border-indigo-500 transition-colors bg-surface-2" />
-                                )}
-                              </button>
-
-                              <div className="flex-1 min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className={`text-sm font-black ${
-                                    task.completed ? 'line-through text-content-faint' : 'text-content'
-                                  }`}>
-                                    {task.title}
-                                  </span>
-
-                                  <span className={`text-[12px] font-bold px-2 py-0.5 rounded-md border ${qConfig.badgeClass}`}>
-                                    {qConfig.tag} - {qConfig.title}
-                                  </span>
-
-                                  <span className="text-[12px] font-mono px-2 py-0.5 rounded-md bg-surface-3 text-content-faint font-bold">
-                                    {STAGE_CONFIG[task.stage]?.label}
-                                  </span>
-
-                                  {(() => { const cat = (task as any).category as TaskCategory || 'feature'; const cfg = TASK_CATEGORY_CONFIG[cat]; return (
-                                    <span className={`text-[12px] font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${cfg.badgeClass}`} title={cfg.label}>
-                                      {cat === 'bug' ? <Bug className="w-3 h-3" /> : <span>{cfg.icon}</span>}
-                                      <span>{cfg.label}</span>
-                                    </span>
-                                  ); })()}
-
-                                  {task.milestoneIds?.map(milestoneId => {
-                                    const milestone = activeProject.milestones.find(item => item.id === milestoneId);
-                                    return milestone ? (
-                                      <span key={milestone.id} className="text-[11px] font-bold px-2 py-0.5 rounded-md border border-purple-500/25 bg-purple-500/10 text-purple-700 dark:text-purple-300" title="Linked milestone">
-                                        {milestone.title}
-                                      </span>
-                                    ) : null;
-                                  })}
-                                </div>
-
-                                {task.description && (
-                                  <p className="text-xs text-content-faint mt-1">
-                                    {task.description}
-                                  </p>
-                                )}
-
-                                {/* Subtasks checklist */}
-                                {task.subtasks.length > 0 && (
-                                  <div className="mt-3 space-y-1.5 pl-2.5 border-l-2 border-line">
-                                    {task.subtasks.map(st => (
-                                      <div
-                                        key={st.id}
-                                        className="flex items-center gap-2 text-xs text-content-muted group"
-                                      >
-                                        <button type="button" onClick={() => toggleSubtask(task.id, st.id)} aria-label={st.completed ? 'Mark subtask incomplete' : 'Mark subtask complete'} className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[12px] ${
-                                          st.completed ? 'bg-emerald-500 text-white' : 'border border-line-strong group-hover:border-indigo-500'
-                                        }`}>
-                                          {st.completed && '✓'}
-                                        </button>
-                                        {editingSubtask?.taskId === task.id && editingSubtask.subtaskId === st.id ? (
-                                          <input autoFocus value={editingSubtask.title} onChange={e => setEditingSubtask({ ...editingSubtask, title: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } if (e.key === 'Escape') setEditingSubtask(null); }} onBlur={async () => { const title = editingSubtask.title.trim(); if (title && title !== st.title) await updateSubtask(task.id, st.id, { title }); setEditingSubtask(null); }} className="min-w-0 flex-1 px-2 py-0.5 rounded border border-indigo-500 bg-surface-2 text-content outline-none" />
-                                        ) : (
-                                          <button type="button" onClick={() => setEditingSubtask({ taskId: task.id, subtaskId: st.id, title: st.title })} className={`text-left flex-1 ${st.completed ? 'line-through text-content-faint' : ''}`}>{st.title}</button>
-                                        )}
-                                        <button type="button" onClick={() => { if (confirm(`Delete subtask "${st.title}"?`)) void deleteSubtask(task.id, st.id); }} className="p-1 text-content-faint hover:text-rose-400 opacity-0 group-hover:opacity-100" aria-label="Delete subtask"><Trash2 className="w-3 h-3" /></button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-
-                                {/* Add subtask inline */}
-                                <div className="mt-2.5 flex items-center gap-2 max-w-sm">
-                                  <input
-                                    type="text"
-                                    placeholder="+ Add checklist step..."
-                                    value={subtaskInput}
-                                    onChange={e =>
-                                      setNewSubtaskTitle({ ...newSubtaskTitle, [task.id]: e.target.value })
-                                    }
-                                    onKeyDown={e => {
-                                      if (e.key === 'Enter') {
-                                        addSubtask(task.id, subtaskInput);
-                                        setNewSubtaskTitle({ ...newSubtaskTitle, [task.id]: '' });
-                                      }
-                                    }}
-                                    className="px-3 py-1 text-xs bg-surface-2 border border-line rounded-xl text-content placeholder-slate-500 outline-none flex-1 focus:border-indigo-500"
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Task Action Bar */}
-                            <div className="flex items-center gap-2 shrink-0">
-                              <button type="button" onClick={() => openQuickAdd('task', { taskId: task.id })} className="p-1.5 text-content-faint hover:text-indigo-300 rounded-lg transition-colors" title="Edit task" aria-label="Edit task">
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              <select
-                                value={(task as any).category || 'feature'}
-                                onChange={e => updateTask(task.id, { category: e.target.value as TaskCategory } as any)}
-                                className="px-2 py-1 text-[13px] bg-surface-2 border border-line rounded-lg text-content-muted font-bold outline-none"
-                                title="Change task category"
-                              >
-                                <option value="feature">Feature</option>
-                                <option value="bug">Bug</option>
-                                <option value="chore">Chore</option>
-                                <option value="improvement">Improvement</option>
-                                <option value="general">General</option>
-                              </select>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  startTimer('pomodoro', activeProject.id, task.id);
-                                  setCurrentView('timetracker');
-                                }}
-                                className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/20 text-xs font-bold transition-all"
-                                title="Start Focus timer on this task"
-                              >
-                                <Play className="w-3 h-3" />
-                                <span className="hidden sm:inline">Focus</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => useTaskPromptForLaunch(task.id)}
-                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${taskPromptStatus[task.id] === 'selected' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-700 dark:text-emerald-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
-                                title="Use this task prompt for one launch without changing the saved project prompt"
-                              >
-                                {taskPromptStatus[task.id] === 'selected' ? <Check className="w-3 h-3" /> : <Clipboard className="w-3 h-3" />}
-                                <span className="hidden sm:inline">{taskPromptStatus[task.id] === 'selected' ? 'Selected' : 'Use for launch'}</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => void addTaskToPrompt(task.id)}
-                                disabled={addingTaskPromptId === task.id}
-                                className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all disabled:cursor-wait disabled:opacity-60 ${addedTaskPromptId === task.id ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-700 dark:text-emerald-300' : 'bg-surface-2 border-line text-content-faint hover:text-indigo-300'}`}
-                                title="Add this task snapshot to the saved project prompt"
-                              >
-                                {addingTaskPromptId === task.id ? <span className="text-[11px]">…</span> : addedTaskPromptId === task.id ? <Check className="w-3 h-3" /> : <ClipboardPlus className="w-3 h-3" />}
-                                <span className="hidden sm:inline">{addedTaskPromptId === task.id ? 'Added' : 'Add to prompt'}</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => { if (confirm(`Delete task "${task.title}" and its subtasks?`)) void deleteTask(task.id); }}
-                                className="p-1.5 text-content-faint hover:text-rose-400 rounded-lg transition-colors"
-                                aria-label="Delete task"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Footer Meta */}
-                          <div className="mt-3 pt-2.5 border-t border-line/80 flex flex-wrap items-center justify-between gap-2 text-[13px] text-content-faint font-mono">
-                            <div className="flex items-center gap-3">
-                              {task.dueDate && (
-                                <span className="flex items-center gap-1 text-content-faint">
-                                  <Calendar className="w-3 h-3 text-content-faint" />
-                                  <span>Due: {task.dueDate}</span>
-                                </span>
-                              )}
-                              <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                                <Clock className="w-3 h-3" />
-                                <span>{task.timeSpentMinutes || 0}m spent (est. {task.estimatedMinutes || 60}m)</span>
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-1">
-                              {task.tags.map(t => (
-                                <span key={t} className="px-2 py-0.5 rounded-md bg-surface-2 border border-line text-[12px] text-content-muted">
-                                  #{t}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
+              <ProjectTasksTab
+                project={activeProject}
+                tasks={tasks}
+                taskFilterStage={taskFilterStage}
+                setTaskFilterStage={setTaskFilterStage}
+                taskFilterCategory={taskFilterCategory}
+                setTaskFilterCategory={setTaskFilterCategory}
+                newSubtaskTitle={newSubtaskTitle}
+                setNewSubtaskTitle={setNewSubtaskTitle}
+                editingSubtask={editingSubtask}
+                setEditingSubtask={setEditingSubtask}
+                taskPromptError={taskPromptError}
+                taskPromptStatus={taskPromptStatus}
+                addingTaskPromptId={addingTaskPromptId}
+                addedTaskPromptId={addedTaskPromptId}
+                toggleTaskCompletion={toggleTaskCompletion}
+                toggleSubtask={toggleSubtask}
+                addSubtask={addSubtask}
+                updateSubtask={updateSubtask}
+                deleteSubtask={deleteSubtask}
+                updateTask={updateTask}
+                deleteTask={deleteTask}
+                addTask={addTask}
+                startTimer={startTimer}
+                openQuickAdd={openQuickAdd}
+                setCurrentView={setCurrentView}
+                useTaskPromptForLaunch={useTaskPromptForLaunch}
+                addTaskToPrompt={addTaskToPrompt}
+                toast={toast}
+                confirm={confirm}
+              />
             )}
 
             {/* TAB: MILESTONES */}
@@ -2176,185 +2207,61 @@ export const ProjectsView: React.FC = () => {
 
             {/* TAB: PROMPT */}
             {activeDetailTab === 'prompt' && (
-              <div className="space-y-4">
-                <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-4">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div>
-                      <h3 className="text-xs font-black text-content uppercase tracking-[0.2em] font-mono">Prompt</h3>
-                      <p className="text-xs text-content-faint mt-1">Edit the saved project brief separately from initialization.</p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap justify-end">
-                      {!isEditingPrompt && (
-                        <button
-                          type="button"
-                          onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(true); setPromptSaveError(null); }}
-                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong text-xs font-black transition-all"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          Edit prompt
-                        </button>
-                      )}
-                      {!isEditingPrompt && hasGeneratedSkillContext && (
-                        <button
-                          type="button"
-                          onClick={preparePromptCleanup}
-                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/15 text-xs font-black transition-all"
-                          title="Remove generated linked-skill sections from the saved prompt draft for review"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          Clean generated skill context
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => void openPromptPreview()}
-                        disabled={!activeProject.initialPrompt || isEditingPrompt || isLoadingPromptPreview}
-                        title={isEditingPrompt ? 'Save the prompt before previewing initialization' : 'Preview the full initialization prompt'}
-                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content hover:border-line-strong text-xs font-black transition-all disabled:opacity-40"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        {isLoadingPromptPreview ? 'Loading preview…' : 'Preview prompt'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { const tool = activeProject.initializationTool || 'opencode'; setLaunchTool(tool); setLaunchModel(activeProject.initializationModel || ''); setLaunchReasoningEffort(activeProject.initializationReasoningEffort || 'medium'); setLaunchMode(activeProject.initializationMode || 'build'); setToolAvailability(null); setPromptSource('project'); setSelectedPromptTaskId(''); setIsLaunchDialogOpen(true); setPromptCopyError(null); void checkToolAvailability(tool); }}
-                        disabled={!activeProject.initialPrompt || isEditingPrompt}
-                        title={isEditingPrompt ? 'Save the prompt before starting initialization' : 'Choose a tool and model, then open the project console'}
-                        className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-black transition-all disabled:opacity-40 ${
-                          copiedPrompt
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
-                            : 'bg-indigo-500/10 border-indigo-500/25 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/20'
-                        }`}
-                      >
-                        {copiedPrompt ? <Check className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                        {copiedPrompt ? 'Prompt prepared' : 'Start initialization'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-line bg-surface-2/50 p-4 space-y-3">
-                    <div>
-                      <h4 className="text-xs font-black text-content">Initialization defaults</h4>
-                      <p className="text-[11px] text-content-faint mt-0.5">Choose the CLI and model used by default. Start initialization can override these once.</p>
-                    </div>
-                    <div className="flex flex-wrap items-stretch gap-2">
-                      <select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); if (next === 'opencode') setLaunchMode('build'); }} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content">
-                        <option value="opencode">OpenCode</option><option value="codex">Codex</option>
-                      </select>
-                      <input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface border border-line px-3 py-2 text-xs font-mono text-content" />
-                      <select value="" onChange={e => applyLauncherPreset(e.target.value)} className="w-full sm:w-40 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Saved model preset">
-                        <option value="">Use preset…</option>
-                        {modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}
-                      </select>
-                      {launchTool === 'codex' && <select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort">
-                        <option value="low">Low effort</option><option value="medium">Medium effort</option><option value="high">High effort</option>
-                      </select>}
-                      {launchTool === 'codex' && <select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="w-full sm:w-28 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Initialization mode"><option value="build">Build</option><option value="plan">Plan</option></select>}
-                      <button type="button" onClick={saveInitializationSettings} disabled={!launchModel.trim() || isSavingInitializationSettings} className="w-full sm:w-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-black text-content-muted hover:text-content disabled:opacity-40">{isSavingInitializationSettings ? 'Saving…' : 'Save default'}</button>
-                    </div>
-                    <datalist id="project-model-presets">{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.modelId}>{p.label}</option>)}</datalist>
-                    {modelPresets.filter(p => p.enabled).length === 0 && <p className="text-[11px] text-amber-700 dark:text-amber-300">No enabled presets for this tool. Type a model ID, then save it as the project default or <button type="button" onClick={() => setCurrentView('settings')} className="underline hover:text-amber-200">manage presets in Settings → Launch Presets</button>.</p>}
-                  </div>
-                  {promptCopyError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{promptCopyError}</p>}
-                  {initializationStatus && <p className="text-xs text-emerald-700 dark:text-emerald-300" role="status">{initializationStatus}</p>}
-                  {promptSaveError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{promptSaveError}</p>}
-                  {isEditingPrompt ? (
-                    <>
-                      <textarea
-                        value={promptDraft}
-                        onChange={e => setPromptDraft(e.target.value)}
-                        rows={18}
-                        autoFocus
-                        className="w-full resize-y min-h-[20rem] rounded-2xl bg-surface-inverse border border-line focus:border-indigo-500 p-4 text-xs leading-relaxed text-slate-100 font-mono outline-none placeholder:text-slate-500"
-                        placeholder="Write the initial project prompt..."
-                      />
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={handleClearInitialPrompt}
-                          disabled={!promptDraft || isSavingPrompt}
-                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 hover:bg-rose-500/10 text-xs font-black disabled:opacity-40"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          Clear text
-                        </button>
-                        <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => { setPromptDraft(activeProject.initialPrompt || ''); setIsEditingPrompt(false); }} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line text-content-muted hover:text-content text-xs font-black">
-                            Cancel
-                          </button>
-                          <button type="button" onClick={handleSaveInitialPrompt} disabled={!promptDraft.trim() || isSavingPrompt} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black disabled:opacity-40">
-                            <Check className="w-3.5 h-3.5" />
-                            {isSavingPrompt ? 'Saving…' : 'Save prompt'}
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  ) : activeProject.initialPrompt ? (
-                    <pre className="whitespace-pre-wrap select-text max-h-[32rem] overflow-auto rounded-2xl bg-surface-inverse border border-line p-4 text-xs leading-relaxed text-slate-100 font-mono">
-                      {activeProject.initialPrompt}
-                    </pre>
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint font-mono">
-                      This project has no saved prompt. Use Edit prompt to create one.
-                    </div>
-                  )}
-                </div>
-                {isLaunchDialogOpen && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Choose initialization model">
-                    <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-5 shadow-2xl space-y-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div><h3 className="text-base font-black text-content">Initialize with…</h3><p className="text-xs text-content-faint mt-1">The prompt will be copied and prepared in the selected CLI composer for your review.</p></div>
-                        <button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="p-1.5 text-content-faint hover:text-content" aria-label="Close"><X className="w-4 h-4" /></button>
-                      </div>
-                      <label className="block text-xs font-black text-content">Prompt source<select value={promptSource} onChange={e => { const next = e.target.value as 'project' | 'task'; setPromptSource(next); if (next === 'project') setSelectedPromptTaskId(''); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="project">Full project initialization</option><option value="task">Task prompt</option></select></label>
-                      {promptSource === 'task' && (() => {
-                        const openTasks = tasks.filter(t => t.projectId === activeProject.id && !t.completed);
-                        return <label className="block text-xs font-black text-content">Open task<select value={selectedPromptTaskId} onChange={e => setSelectedPromptTaskId(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose a task…</option>{openTasks.map(task => <option key={task.id} value={task.id}>{task.title}{task.subtasks.length ? ` (${task.subtasks.length} steps)` : ''}</option>)}</select>{openTasks.length === 0 && <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-300">There are no open tasks in this project.</span>}</label>;
-                      })()}
-                      <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); setLaunchReasoningEffort('medium'); if (next === 'opencode') setLaunchMode('build'); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
-                      <label className="block text-xs font-black text-content">Model<input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" /></label>
-                      <label className="block text-xs font-black text-content">Saved preset<select value="" onChange={e => applyLauncherPreset(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose…</option>{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}</select></label>
-                      {launchTool === 'codex' && <label className="block text-xs font-black text-content">Reasoning effort<select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>}
-                      {launchTool === 'codex' && <label className="block text-xs font-black text-content">Mode<select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select></label>}
-                      {launchTool === 'opencode' && <p className="text-[11px] text-content-faint">OpenCode supports Build only here. Reasoning variants are provider-specific; strict read-only Plan mode is available with Codex.</p>}
-                      {isCheckingTool && <p className="text-xs text-content-faint">Checking whether {launchTool === 'codex' ? 'Codex' : 'OpenCode'} is installed…</p>}
-                      {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-700 dark:text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-700 dark:text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-700 dark:text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-700 dark:text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
-                      <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel, launchReasoningEffort, launchMode)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Prepare in terminal</button></div>
-                    </div>
-                  </div>
-                )}
-                {isPromptPreviewOpen && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Initialization prompt preview">
-                    <div className="flex w-full max-w-4xl max-h-[calc(100vh-2rem)] flex-col rounded-3xl border border-line bg-surface p-5 shadow-2xl">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-base font-black text-content">Initialization prompt preview</h3>
-                          <p className="text-xs text-content-faint mt-1">This is the generated full-project prompt used by the default initialization flow.</p>
-                          {!isLoadingPromptPreview && !promptPreviewError && previewedPrompt && (
-                            <p className="text-[11px] text-content-muted mt-1 font-mono">{previewedLineCount.toLocaleString()} lines · {previewedSkillCount} active {previewedSkillCount === 1 ? 'skill' : 'skills'}</p>
-                          )}
-                        </div>
-                        <button type="button" onClick={() => setIsPromptPreviewOpen(false)} className="p-1.5 text-content-faint hover:text-content" aria-label="Close preview"><X className="w-4 h-4" /></button>
-                      </div>
-                      <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl border border-line bg-surface-inverse p-4">
-                        {isLoadingPromptPreview ? (
-                          <p className="text-xs text-slate-300">Generating preview…</p>
-                        ) : promptPreviewError ? (
-                          <p className="text-xs text-rose-300" role="alert">{promptPreviewError}</p>
-                        ) : (
-                          <pre className="whitespace-pre-wrap select-text text-xs leading-relaxed text-slate-100 font-mono">{previewedPrompt}</pre>
-                        )}
-                      </div>
-                      <div className="mt-4 flex items-center justify-end gap-2">
-                        <button type="button" onClick={() => setIsPromptPreviewOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Close</button>
-                        <button type="button" onClick={() => void copyPreviewedPrompt()} disabled={!previewedPrompt} className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">
-                          {copiedPreviewPrompt ? <Check className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
-                          {copiedPreviewPrompt ? 'Copied' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <ProjectPromptTab
+                project={activeProject}
+                tasks={tasks}
+                isEditingPrompt={isEditingPrompt}
+                promptDraft={promptDraft}
+                promptSaveError={promptSaveError}
+                promptCopyError={promptCopyError}
+                initializationStatus={initializationStatus}
+                copiedPrompt={copiedPrompt}
+                hasGeneratedSkillContext={hasGeneratedSkillContext}
+                launchTool={launchTool}
+                launchModel={launchModel}
+                launchReasoningEffort={launchReasoningEffort}
+                launchMode={launchMode}
+                modelPresets={modelPresets}
+                isSavingInitializationSettings={isSavingInitializationSettings}
+                isLaunchDialogOpen={isLaunchDialogOpen}
+                promptSource={promptSource}
+                selectedPromptTaskId={selectedPromptTaskId}
+                toolAvailability={toolAvailability}
+                isCheckingTool={isCheckingTool}
+                isInstallingTool={isInstallingTool}
+                isLoadingPromptPreview={isLoadingPromptPreview}
+                isPromptPreviewOpen={isPromptPreviewOpen}
+                previewedPrompt={previewedPrompt}
+                previewedLineCount={previewedLineCount}
+                previewedSkillCount={previewedSkillCount}
+                promptPreviewError={promptPreviewError}
+                copiedPreviewPrompt={copiedPreviewPrompt}
+                isSavingPrompt={isSavingPrompt}
+                setPromptDraft={setPromptDraft}
+                setIsEditingPrompt={setIsEditingPrompt}
+                setPromptSaveError={setPromptSaveError}
+                setLaunchTool={setLaunchTool}
+                setLaunchModel={setLaunchModel}
+                setLaunchReasoningEffort={setLaunchReasoningEffort}
+                setLaunchMode={setLaunchMode}
+                setIsLaunchDialogOpen={setIsLaunchDialogOpen}
+                setPromptSource={setPromptSource}
+                setSelectedPromptTaskId={setSelectedPromptTaskId}
+                setToolAvailability={setToolAvailability}
+                setIsPromptPreviewOpen={setIsPromptPreviewOpen}
+                setInitializationStatus={setInitializationStatus}
+                setCurrentView={setCurrentView}
+                preparePromptCleanup={preparePromptCleanup}
+                openPromptPreview={openPromptPreview}
+                applyLauncherPreset={applyLauncherPreset}
+                saveInitializationSettings={saveInitializationSettings}
+                handleClearInitialPrompt={handleClearInitialPrompt}
+                handleSaveInitialPrompt={handleSaveInitialPrompt}
+                checkToolAvailability={checkToolAvailability}
+                installSelectedTool={installSelectedTool}
+                handleStartInitialization={handleStartInitialization}
+                copyPreviewedPrompt={copyPreviewedPrompt}
+              />
             )}
           </div>
         </div>
@@ -2362,8 +2269,56 @@ export const ProjectsView: React.FC = () => {
         /* PROJECTS GRID VIEW */
         <div className="space-y-8">
           {activeProjects.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {activeProjects.map(renderProjectCard)}
+            <div className="space-y-3">
+              {activeProjects.length > 1 && (
+                <p className="text-[11px] font-mono text-content-faint">
+                  Drag cards to reorder{isReordering ? '… saving' : ''} — same order as the homepage pipeline.
+                </p>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {activeProjects.map(project => (
+                  <div
+                    key={project.id}
+                    className={`relative rounded-3xl transition-all ${overId === project.id ? 'ring-2 ring-indigo-500/60 -translate-y-0.5' : ''} ${dragId === project.id ? 'opacity-50' : ''}`}
+                    onDragOver={(e) => {
+                      if (!dragId || dragId === project.id) return;
+                      e.preventDefault();
+                      setOverId(project.id);
+                    }}
+                    onDragLeave={() => {
+                      if (overId === project.id) setOverId(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      dropProjectOn(project.id);
+                    }}
+                  >
+                    {renderProjectCard(project)}
+                    {activeProjects.length > 1 && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Drag to reorder ${project.title}`}
+                        title="Drag to reorder"
+                        draggable
+                        onClick={(e) => e.stopPropagation()}
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', project.id);
+                          setDragId(project.id);
+                        }}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverId(null);
+                        }}
+                        className="absolute -top-2.5 left-1/2 -translate-x-1/2 p-1.5 rounded-full bg-surface-2 border border-line text-content-faint hover:text-indigo-400 hover:border-indigo-500/60 cursor-grab active:cursor-grabbing touch-none shadow-md"
+                      >
+                        <GripVertical className="w-3.5 h-3.5" />
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           ) : selectedStageFilter !== 'live' ? (
             <div className="rounded-3xl border border-dashed border-line bg-surface/50 px-6 py-12 text-center">

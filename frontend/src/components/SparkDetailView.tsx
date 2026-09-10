@@ -15,9 +15,12 @@ import {
   Download,
 } from 'lucide-react';
 import { Idea, IdeaStatus, SketchObject } from '../types';
-import { SketchCanvas } from './SketchCanvas';
 import { downloadPdf } from '../services/pdfDownload';
 import { useIdeaCategories } from '../hooks/useIdeaCategories';
+import { useToast } from './Toaster';
+import { clearSketchDraft } from './sketchDraft';
+
+const SketchCanvas = React.lazy(() => import('./SketchCanvas').then(m => ({ default: m.SketchCanvas })) );
 
 const STATUS_FLOW: { value: IdeaStatus; label: string }[] = [
   { value: 'spark', label: 'Raw Spark' },
@@ -35,6 +38,7 @@ const labelCls =
 export const SparkDetailView: React.FC = () => {
   const {
     ideas,
+    addIdea,
     updateIdea,
     deleteIdea,
     convertIdeaToProject,
@@ -46,6 +50,7 @@ export const SparkDetailView: React.FC = () => {
 
   const idea = ideas.find(i => i.id === selectedSparkId) || null;
   const { categories } = useIdeaCategories();
+  const { toast, confirm } = useToast();
 
   const [title, setTitle] = useState('');
   const [tagline, setTagline] = useState('');
@@ -130,8 +135,34 @@ export const SparkDetailView: React.FC = () => {
     setSketchModal(false);
   };
 
-  const handleDelete = () => {
-    if (confirm(`Delete spark "${idea.title}"?`)) deleteIdea(idea.id);
+  const handleDelete = async () => {
+    const ok = await confirm({
+      title: `Delete spark "${idea.title}"?`,
+      description: 'The spark will be removed. You can undo right after.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const { id, createdAt, updatedAt, ...snapshot } = idea;
+    void id; void createdAt; void updatedAt;
+    try {
+      await deleteIdea(idea.id);
+      setSelectedSparkId(null);
+      toast({
+        title: `Deleted "${idea.title}"`,
+        tone: 'success',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            void addIdea(snapshot)
+              .then(() => toast({ title: 'Spark restored', tone: 'success' }))
+              .catch(() => toast({ title: 'Could not restore spark', tone: 'error' }));
+          },
+        },
+      });
+    } catch {
+      toast({ title: 'Could not delete spark', tone: 'error' });
+    }
   };
 
   const handleExportPdf = async () => {
@@ -339,7 +370,7 @@ export const SparkDetailView: React.FC = () => {
             <img src={idea.sketchDataUrl} alt="Idea sketch" className="max-h-72 w-full object-contain rounded-xl" />
             <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
               <button type="button" onClick={() => setSketchModal(true)} className="px-3.5 py-1.5 rounded-xl bg-white text-black text-xs font-bold">Edit Sketch</button>
-              <button type="button" onClick={() => commit({ sketchDataUrl: '' })} className="px-3.5 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold">Remove</button>
+              <button type="button" onClick={() => { clearSketchDraft(idea.id); void commit({ sketchDataUrl: '', sketchObjects: [] }); }} className="px-3.5 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold">Remove</button>
             </div>
           </div>
         ) : (
@@ -419,9 +450,11 @@ export const SparkDetailView: React.FC = () => {
 
       {/* Sketch modal */}
       {sketchModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-in fade-in" role="dialog" aria-modal="true" aria-label="Spark sketch canvas">
           <div className="w-full max-w-4xl max-h-[95vh] overflow-y-auto">
+            <React.Suspense fallback={<div className="p-8 text-center text-sm text-content-faint" role="status">Loading sketch canvas…</div>}>
             <SketchCanvas
+              key={idea.id}
               initialDataUrl={idea.sketchDataUrl}
               initialObjects={idea.sketchObjects}
               seed={idea}
@@ -429,6 +462,7 @@ export const SparkDetailView: React.FC = () => {
               onSave={handleSaveSketch}
               onClose={() => setSketchModal(false)}
             />
+            </React.Suspense>
           </div>
         </div>
       )}

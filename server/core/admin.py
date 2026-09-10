@@ -9,7 +9,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ('title', 'owner', 'category', 'current_stage', 'pinned', 'target_deadline', 'created_at')
+    list_display = ('title', 'owner', 'category', 'current_stage', 'pinned', 'sort_order', 'target_deadline', 'created_at')
     list_filter = ('current_stage', 'category', 'pinned')
     search_fields = ('title', 'tagline', 'description')
     raw_id_fields = ('owner',)

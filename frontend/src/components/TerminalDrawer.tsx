@@ -12,6 +12,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Zap, Terminal as TerminalIcon, X, Square, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { api, authedFetch } from '../services/api';
+import { scanOutputMarkers } from '../services/initialization';
+import { notifyTerminalsChanged, TERMINAL_OPEN_EVENT } from '../hooks/useLiveTerminals';
+import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, splitInputChunks } from '../services/terminalInput';
 
 export type TerminalMode = 'cmd' | 'script';
 
@@ -29,11 +32,22 @@ export interface TerminalSessionDto {
   reused?: boolean;
 }
 
+export interface OutputMarkerWait {
+  afterRevision?: number;
+  ready: RegExp[];
+  blocked?: RegExp[];
+  timeoutMs?: number;
+}
+
+export type OutputMarkerResult = 'ready' | 'blocked';
+
 export interface TerminalDrawerHandle {
   create: (mode: TerminalMode, options?: { forceNew?: boolean }) => Promise<TerminalSessionDto>;
   restartIfRunning: (mode: TerminalMode) => Promise<TerminalSessionDto | null>;
   sendInput: (data: string, sessionId?: string) => Promise<void>;
+  sendPastedText: (data: string, sessionId?: string) => Promise<void>;
   waitForOutputIdle: (sessionId: string, options?: { afterRevision?: number; quietMs?: number; timeoutMs?: number }) => Promise<number>;
+  waitForOutputMarker: (sessionId: string, options: OutputMarkerWait) => Promise<OutputMarkerResult>;
   minimize: () => void;
 }
 
@@ -64,6 +78,11 @@ const TERMINAL_QUERY_RESPONSE_RE = /\x1b\[[?>=][0-9;]*c/g;
 const ANSI_SEQUENCE_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
 const CMD_PROMPT_RE = /(?:^|\r?\n)(?:\([^\r\n)]*\)\s*)?[A-Za-z]:\\[^\r\n>]*>\s*$/;
 
+// Paste tuning: large clipboard drops are split into sequential chunks so the
+// ConPTY echo and the HTTP output stream stay fluid instead of one giant blob.
+const PASTE_CHUNK_CHARS = 8192;
+const PASTE_CHUNK_GAP_MS = 30;
+const PASTE_CONFIRM_CHARS = 200 * 1024;
 function removeTerminalQueryResponses(data: string): string {
   return data.replace(TERMINAL_QUERY_RESPONSE_RE, '');
 }
@@ -118,14 +137,30 @@ interface TerminalRuntime {
   dataSub: IDisposable | null;
   abort: AbortController | null;
   pumpStopped: boolean;
-  inputTimer: number | null;
-  pendingInput: string[];
   inputReady: boolean;
   lastCols: number;
   lastRows: number;
   resizeTimer: number | null;
   outputRevision: number;
   lastOutputAt: number;
+  outputTail: string;
+}
+
+interface InputQueueItem {
+  data: string;
+  chunked: boolean;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+interface InputQueue {
+  pending: string[];
+  timer: number | null;
+  items: InputQueueItem[];
+  processing: boolean;
+  cancelled: boolean;
+  abort: AbortController;
+  activePasteEndPending: boolean;
 }
 
 /**
@@ -145,6 +180,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const [connState, setConnState] = useState<'idle' | 'connecting' | 'live' | 'error'>('idle');
     const [terminalReady, setTerminalReady] = useState(false);
     const [terminalError, setTerminalError] = useState<string | null>(null);
+    const [pasteProgress, setPasteProgress] = useState<{ sent: number; total: number } | null>(null);
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
     const connStateRef = useRef<'idle' | 'connecting' | 'live' | 'error'>('idle');
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
@@ -155,19 +192,26 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       dataSub: null,
       abort: null,
       pumpStopped: true,
-      inputTimer: null,
-      pendingInput: [],
       inputReady: false,
       lastCols: 0,
       lastRows: 0,
       resizeTimer: null,
       outputRevision: 0,
       lastOutputAt: 0,
+      outputTail: '',
     });
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const dragStateRef = useRef<{ startY: number; startH: number } | null>(null);
+    // Bumped to cancel an in-flight chunked paste (tab switch / close / new paste).
+    const pasteSeqRef = useRef(0);
+    const inputQueuesRef = useRef<Map<string, InputQueue>>(new Map());
+    const pasteDispatchRef = useRef(false);
     const latestHeightRef = useRef<number>(heightPx);
+    const projectIdRef = useRef<string | null>(projectId);
+    // Set by a live-consoles pill click that navigates here. The navigation
+    // lands after the click, so the [projectId] effect below consumes it.
+    const pendingOpenRef = useRef<string | null>(null);
 
     useEffect(() => {
       sessionsRef.current = sessions;
@@ -182,11 +226,36 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       if (!open || !activeId) setConnState('idle');
     }, [open, activeId]);
     useEffect(() => {
+      projectIdRef.current = projectId;
+      // A pill click (requestTerminalOpen) navigates here and explicitly asks
+      // for the console. Honor it; any other visit keeps the drawer closed.
+      if (projectId && pendingOpenRef.current === projectId) {
+        pendingOpenRef.current = null;
+        persistMinimizedForProject(projectId, false);
+        setOpen(true);
+        return;
+      }
       // Visiting a project should not expose a console automatically. Opening
       // CMD, running a script, or using the floating terminal control is the
       // explicit user action that expands this drawer.
       setOpen(false);
     }, [projectId]);
+    useEffect(() => {
+      const onRequestOpen = (e: Event) => {
+        const target = (e as CustomEvent<{ projectId?: string }>).detail?.projectId ?? null;
+        if (!target) return;
+        if (target === projectIdRef.current) {
+          persistMinimizedForProject(target, false);
+          setOpen(true);
+        } else {
+          // Navigation to that project hasn't landed yet; the [projectId]
+          // effect above opens the drawer on arrival.
+          pendingOpenRef.current = target;
+        }
+      };
+      window.addEventListener(TERMINAL_OPEN_EVENT, onRequestOpen);
+      return () => window.removeEventListener(TERMINAL_OPEN_EVENT, onRequestOpen);
+    }, []);
     useEffect(() => {
       connStateRef.current = connState;
     }, [connState]);
@@ -241,30 +310,169 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       );
     }, []);
 
-    const flushInput = useCallback((sessionId: string) => {
-      const rt = runtimeRef.current;
-      if (!rt.pendingInput.length) return;
-      const data = rt.pendingInput.join('');
-      rt.pendingInput = [];
-      if (rt.inputTimer !== null) {
-        window.clearTimeout(rt.inputTimer);
-        rt.inputTimer = null;
-      }
-      api.post(`/terminals/${sessionId}/input/`, { data }).catch(() => {
-        /* stream will surface any real failure */
-      });
+    const getInputQueue = useCallback((sessionId: string): InputQueue => {
+      const existing = inputQueuesRef.current.get(sessionId);
+      if (existing) return existing;
+      const queue: InputQueue = {
+        pending: [],
+        timer: null,
+        items: [],
+        processing: false,
+        cancelled: false,
+        abort: new AbortController(),
+        activePasteEndPending: false,
+      };
+      inputQueuesRef.current.set(sessionId, queue);
+      return queue;
     }, []);
 
-    const queueInput = useCallback(
-      (sessionId: string, data: string) => {
-        const rt = runtimeRef.current;
-        rt.pendingInput.push(data);
-        if (rt.inputTimer === null) {
-          rt.inputTimer = window.setTimeout(() => flushInput(sessionId), 50);
+    const reportInputFailure = useCallback((error: unknown) => {
+      if (error instanceof Error && error.name === 'CanceledError') return;
+      setTerminalError('The terminal input could not be delivered. The paste was stopped; retry it if needed.');
+    }, []);
+
+    const runInputQueue = useCallback(async (sessionId: string, queue: InputQueue): Promise<void> => {
+      if (queue.processing) return;
+      queue.processing = true;
+      try {
+        while (!queue.cancelled && queue.items.length) {
+          const item = queue.items.shift()!;
+          const chunks = item.chunked ? splitInputChunks(item.data, PASTE_CHUNK_CHARS) : [item.data];
+          queue.activePasteEndPending = item.chunked && item.data.includes(BRACKETED_PASTE_START);
+          try {
+            for (let index = 0; index < chunks.length; index += 1) {
+              if (queue.cancelled) throw new DOMException('Input queue cancelled.', 'AbortError');
+              await api.post('/terminals/' + sessionId + '/input/', { data: chunks[index] }, { signal: queue.abort.signal });
+              if (item.chunked && chunks[index].includes(BRACKETED_PASTE_END)) queue.activePasteEndPending = false;
+              if (item.chunked && index + 1 < chunks.length) await sleep(PASTE_CHUNK_GAP_MS, queue.abort.signal);
+            }
+            item.resolve();
+          } catch (error) {
+            item.reject(error);
+            throw error;
+          } finally {
+            queue.activePasteEndPending = false;
+          }
         }
-      },
-      [flushInput]
-    );
+      } catch (error) {
+        if (!queue.cancelled) {
+          while (queue.items.length) queue.items.shift()!.reject(error);
+          reportInputFailure(error);
+        }
+      } finally {
+        queue.processing = false;
+        if (!queue.cancelled && queue.items.length) void runInputQueue(sessionId, queue);
+      }
+    }, [reportInputFailure]);
+
+    const enqueueInput = useCallback((sessionId: string, data: string, chunked: boolean): Promise<void> => {
+      if (!data) return Promise.resolve();
+      const queue = getInputQueue(sessionId);
+      if (queue.cancelled) return Promise.reject(new Error('Input queue cancelled.'));
+      return new Promise<void>((resolve, reject) => {
+        queue.items.push({ data, chunked, resolve, reject });
+        void runInputQueue(sessionId, queue);
+      });
+    }, [getInputQueue, runInputQueue]);
+
+    const flushInput = useCallback((sessionId: string): Promise<void> => {
+      const queue = inputQueuesRef.current.get(sessionId);
+      if (!queue || !queue.pending.length) return Promise.resolve();
+      const data = queue.pending.join('');
+      queue.pending = [];
+      if (queue.timer !== null) {
+        window.clearTimeout(queue.timer);
+        queue.timer = null;
+      }
+      return enqueueInput(sessionId, data, false).catch(error => {
+        reportInputFailure(error);
+        throw error;
+      });
+    }, [enqueueInput, reportInputFailure]);
+
+    const queueInput = useCallback((sessionId: string, data: string) => {
+      const queue = getInputQueue(sessionId);
+      if (queue.cancelled) return;
+      queue.pending.push(data);
+      if (queue.timer === null) {
+        queue.timer = window.setTimeout(() => {
+          queue.timer = null;
+          void flushInput(sessionId).catch(() => undefined);
+        }, 50);
+      }
+    }, [flushInput, getInputQueue]);
+
+    const sendPastedChunks = useCallback(async (sessionId: string, text: string): Promise<void> => {
+      const token = ++pasteSeqRef.current;
+      await flushInput(sessionId);
+      if (token !== pasteSeqRef.current || activeIdRef.current !== sessionId) throw new Error('Paste cancelled.');
+      const total = text.length;
+      setPasteProgress({ sent: 0, total });
+      try {
+        await enqueueInput(sessionId, text, true);
+        setPasteProgress({ sent: total, total });
+      } finally {
+        if (token === pasteSeqRef.current) setPasteProgress(null);
+      }
+    }, [enqueueInput, flushInput]);
+
+    const sendPastedText = useCallback(async (data: string, sessionId?: string): Promise<void> => {
+      const targetId = sessionId || activeIdRef.current;
+      if (!targetId) throw new Error('No active terminal session.');
+      if (!data) return;
+      await sendPastedChunks(targetId, data);
+    }, [sendPastedChunks]);
+
+    const handlePasteText = useCallback((rawText: string) => {
+      const sessionId = activeIdRef.current;
+      const rt = runtimeRef.current;
+      if (!sessionId || !rt.term || !rt.inputReady) return;
+      if (!rawText) return;
+      if (rawText.length > PASTE_CONFIRM_CHARS) {
+        const kb = Math.round(rawText.length / 1024);
+        if (!window.confirm('Paste ' + kb + ' KB into the console? Very large pastes take a while to echo back.')) return;
+      }
+      // xterm performs the correct CR/LF conversion and adds bracketed-paste
+      // markers only when the running application has enabled mode 2004.
+      pasteDispatchRef.current = true;
+      try {
+        rt.term.paste(rawText);
+      } finally {
+        pasteDispatchRef.current = false;
+      }
+    }, []);
+
+    const copyTerminalSelection = useCallback(async (): Promise<boolean> => {
+      const sel = runtimeRef.current.term?.getSelection() || '';
+      if (!sel) return false;
+      try {
+        await navigator.clipboard.writeText(sel);
+        return true;
+      } catch {
+        setTerminalError('Unable to copy — the browser blocked clipboard access.');
+        return false;
+      }
+    }, []);
+
+    // Used when Ctrl+V (etc.) is pressed while focus is outside the terminal:
+    // focusing alone would not deliver the clipboard, so read it explicitly.
+    const pasteFromClipboard = useCallback(async (): Promise<void> => {
+      const rt = runtimeRef.current;
+      if (!activeIdRef.current || !rt.term) return;
+      try {
+        rt.term.focus();
+      } catch {
+        /* focus is best-effort */
+      }
+      let text = '';
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        setTerminalError('Clipboard read was denied — click inside the console, then press Ctrl+V again.');
+        return;
+      }
+      if (text) handlePasteText(text);
+    }, [handlePasteText]);
 
     const syncBackendSize = useCallback(async (sessionId: string, cols: number, rows: number, force = false) => {
       const rt = runtimeRef.current;
@@ -275,6 +483,20 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       rt.lastRows = rows;
     }, []);
 
+    const cancelInputQueue = useCallback((sessionId: string) => {
+      const queue = inputQueuesRef.current.get(sessionId);
+      if (!queue) return;
+      if (queue.timer !== null) window.clearTimeout(queue.timer);
+      queue.cancelled = true;
+      queue.abort.abort();
+      const cancellation = new DOMException('Input queue cancelled.', 'AbortError');
+      while (queue.items.length) queue.items.shift()!.reject(cancellation);
+      queue.pending = [];
+      if (queue.activePasteEndPending) {
+        void api.post('/terminals/' + sessionId + '/input/', { data: BRACKETED_PASTE_END }).catch(() => undefined);
+      }
+      inputQueuesRef.current.delete(sessionId);
+    }, []);
     const teardownRuntime = useCallback(() => {
       const rt = runtimeRef.current;
       rt.pumpStopped = true;
@@ -282,14 +504,11 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         rt.abort.abort();
         rt.abort = null;
       }
-      if (rt.inputTimer !== null) {
-        window.clearTimeout(rt.inputTimer);
-        rt.inputTimer = null;
-      }
-      // Input is batched briefly for efficiency. A queued partial command from
-      // the previous tab must never be delivered to the next console after a
-      // tab switch, drawer close, or navigation away from Projects.
-      rt.pendingInput = [];
+      if (activeIdRef.current) cancelInputQueue(activeIdRef.current);
+      // Cancel any in-flight chunked paste for the same reason.
+      pasteSeqRef.current += 1;
+      setPasteProgress(null);
+      setCtxMenu(null);
       rt.inputReady = false;
       setTerminalReady(false);
       if (rt.resizeTimer !== null) {
@@ -309,8 +528,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       rt.lastRows = 0;
       rt.outputRevision = 0;
       rt.lastOutputAt = 0;
+      rt.outputTail = '';
       setActiveSize(null);
-    }, []);
+    }, [cancelInputQueue]);
 
     useEffect(() => {
       if (!open || !activeId || !containerRef.current) {
@@ -359,15 +579,29 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         event.preventDefault();
         event.stopPropagation();
         const text = event.clipboardData?.getData('text/plain') || '';
-        if (text) queueInput(activeId, text);
+        if (text) handlePasteText(text);
       };
       container.addEventListener('paste', onPaste, true);
+
+      const onContextMenu = (event: MouseEvent) => {
+        event.preventDefault();
+        setCtxMenu({ x: event.clientX, y: event.clientY });
+      };
+      container.addEventListener('contextmenu', onContextMenu);
 
       const attachInput = () => {
         if (session?.alive === false || rt.dataSub || !rt.inputReady) return;
         rt.dataSub = term.onData(data => {
           const userData = removeTerminalQueryResponses(data);
-          if (userData) queueInput(activeId, userData);
+          if (!userData) return;
+          if (pasteDispatchRef.current) {
+            void sendPastedChunks(activeId, userData).catch(error => {
+              if (error instanceof Error && error.message === 'Paste cancelled.') return;
+              reportInputFailure(error);
+            });
+          } else {
+            queueInput(activeId, userData);
+          }
         });
       };
 
@@ -518,7 +752,13 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               const output = evt.d;
               rt.outputRevision += 1;
               rt.lastOutputAt = Date.now();
-              term.write(output, () => handleInitialOutputRendered(output));
+              rt.outputTail = `${rt.outputTail}${output}`.slice(-8192);
+              await new Promise<void>(resolve => {
+                term.write(output, () => {
+                  handleInitialOutputRendered(output);
+                  resolve();
+                });
+              });
               if (connStateRef.current !== 'live') setConnState('live');
             }
             if (evt.e === true) {
@@ -597,6 +837,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         ro.disconnect();
         container.removeEventListener('mousedown', onMouseDown);
         container.removeEventListener('paste', onPaste, true);
+        container.removeEventListener('contextmenu', onContextMenu);
         teardownRuntime();
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -608,6 +849,40 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       },
       [teardownRuntime]
     );
+
+    // Paste/copy shortcuts while the drawer is open. A native `paste` event
+    // only reaches the terminal when it is focused, so Ctrl+V pressed
+    // elsewhere did nothing. Intercept it here (unless the user is typing in
+    // a real field) and paste via the clipboard API instead.
+    useEffect(() => {
+      if (!open) return;
+      const onKeyDown = (e: KeyboardEvent) => {
+        const key = e.key ?? '';
+        const isPaste =
+          ((e.ctrlKey || e.metaKey) && key.toLowerCase() === 'v') ||
+          (e.shiftKey && !e.ctrlKey && !e.metaKey && key === 'Insert');
+        const isCopy = e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'Insert';
+        if (!isPaste && !isCopy) return;
+        const t = e.target as HTMLElement | null;
+        const inXterm = !!t?.classList?.contains('xterm-helper-textarea');
+        const tag = t?.tagName;
+        const inEditable =
+          !inXterm && !!t && (tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable);
+        if (inEditable) return;
+        const rt = runtimeRef.current;
+        if (!rt.term || activeIdRef.current == null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (isCopy) {
+          void copyTerminalSelection();
+        } else {
+          setCtxMenu(null);
+          void pasteFromClipboard();
+        }
+      };
+      window.addEventListener('keydown', onKeyDown, true);
+      return () => window.removeEventListener('keydown', onKeyDown, true);
+    }, [open, pasteFromClipboard, copyTerminalSelection]);
 
     // ---------- imperative API ----------
 
@@ -627,6 +902,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           setActiveId(dto.id);
           persistMinimizedForProject(projectId, false);
           setOpen(true);
+          notifyTerminalsChanged();
           return dto;
         } catch (error: any) {
           const message = error?.response?.data?.error || error?.message || 'Unable to create the terminal console.';
@@ -653,17 +929,18 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         setActiveId(dto.id);
         persistMinimizedForProject(projectId, false);
         setOpen(true);
+        notifyTerminalsChanged();
         return dto;
       },
       [activeId, projectId, teardownRuntime]
     );
 
     const sendInput = useCallback(async (data: string, sessionId?: string): Promise<void> => {
-      const targetId = sessionId || activeId;
+      const targetId = sessionId || activeIdRef.current;
       if (!targetId) throw new Error('No active terminal session.');
-      await api.post(`/terminals/${targetId}/input/`, { data });
-    }, [activeId]);
-
+      await flushInput(targetId);
+      await enqueueInput(targetId, data, false);
+    }, [enqueueInput, flushInput]);
     const waitForOutputIdle = useCallback(
       (sessionId: string, options?: { afterRevision?: number; quietMs?: number; timeoutMs?: number }): Promise<number> => {
         const quietMs = Math.max(100, options?.quietMs ?? 450);
@@ -692,12 +969,55 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       []
     );
 
+    // Agent-launch handshake: resolve when the streamed output shows the
+    // application is ready for input ('ready'), or when it is stopped at an
+    // interactive gate such as a trust prompt ('blocked'). Only output
+    // produced after `afterRevision` is scanned, so earlier shell banners
+    // cannot false-positive the match.
+    const waitForOutputMarker = useCallback(
+      (sessionId: string, options: OutputMarkerWait): Promise<OutputMarkerResult> => {
+        const timeoutMs = Math.max(2000, options.timeoutMs ?? 60000);
+        const ready = options.ready;
+        const blocked = options.blocked ?? [];
+        const baseline = options.afterRevision;
+        const startedAt = Date.now();
+        return new Promise((resolve, reject) => {
+          const timer = window.setInterval(() => {
+            const runtime = runtimeRef.current;
+            if (activeIdRef.current !== sessionId) {
+              window.clearInterval(timer);
+              reject(new Error('The active console changed.'));
+              return;
+            }
+            const session = sessionsRef.current.find(item => item.id === sessionId);
+            if (!session || session.alive === false) {
+              window.clearInterval(timer);
+              reject(new Error('The console session ended.'));
+              return;
+            }
+            const tail = baseline === undefined || runtime.outputRevision > baseline ? runtime.outputTail : '';
+            const found = scanOutputMarkers(tail, ready, blocked);
+            if (found) {
+              window.clearInterval(timer);
+              resolve(found);
+              return;
+            }
+            if (Date.now() - startedAt >= timeoutMs) {
+              window.clearInterval(timer);
+              reject(new Error('Timed out waiting for the console application to become ready.'));
+            }
+          }, 100);
+        });
+      },
+      []
+    );
+
     const minimize = useCallback(() => {
       persistMinimizedForProject(projectId, true);
       setOpen(false);
     }, [projectId]);
 
-    useImperativeHandle(ref, () => ({ create, restartIfRunning, sendInput, waitForOutputIdle, minimize }), [create, restartIfRunning, sendInput, waitForOutputIdle, minimize]);
+    useImperativeHandle(ref, () => ({ create, restartIfRunning, sendInput, sendPastedText, waitForOutputIdle, waitForOutputMarker, minimize }), [create, restartIfRunning, sendInput, sendPastedText, waitForOutputIdle, waitForOutputMarker, minimize]);
 
     // ---------- resize dragging ----------
 
@@ -747,13 +1067,14 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       setSessions(remaining);
       if (activeId === sessionId) {
         if (remaining.length > 0) {
-          setActiveId(remaining[remaining - 1].id);
+          setActiveId(remaining[remaining.length - 1].id);
         } else {
           setActiveId(null);
           setOpen(false);
         }
       }
       api.delete(`/terminals/${sessionId}/`).catch(() => {});
+      notifyTerminalsChanged();
     };
 
     const stopSession = useCallback(
@@ -765,6 +1086,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         }
         markExited(sessionId, null);
         api.delete(`/terminals/${sessionId}/`).catch(() => {});
+        notifyTerminalsChanged();
       },
       [activeId]
     );
@@ -795,19 +1117,77 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           </button>
         )}
 
+        {ctxMenu && open && (
+          <>
+            <button
+              type="button"
+              aria-label="Close terminal menu"
+              className="fixed inset-0 z-[60] cursor-default bg-transparent"
+              onClick={() => setCtxMenu(null)}
+              onContextMenu={e => {
+                e.preventDefault();
+                setCtxMenu(null);
+              }}
+            />
+            <div
+              role="menu"
+              className="fixed z-[61] min-w-[160px] rounded-xl border border-line bg-slate-900 py-1 shadow-2xl"
+              style={{
+                left: Math.min(ctxMenu.x, window.innerWidth - 180),
+                top: Math.min(ctxMenu.y, window.innerHeight - 110),
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void pasteFromClipboard();
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-xs font-mono text-content hover:bg-indigo-500/20 hover:text-white"
+              >
+                Paste <span className="ml-auto text-[10px] text-content-faint">Ctrl+V</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setCtxMenu(null);
+                  void copyTerminalSelection();
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-xs font-mono text-content hover:bg-indigo-500/20 hover:text-white"
+              >
+                Copy selection <span className="ml-auto text-[10px] text-content-faint">Ctrl+Ins</span>
+              </button>
+            </div>
+          </>
+        )}
+
         <div
-          className={`fixed left-0 right-0 bottom-0 z-40 flex flex-col bg-slate-950/95 backdrop-blur-md border-t border-x border-line shadow-[0_-16px_48px_rgba(0,0,0,0.55)] transition-transform duration-200 ${
+          role="dialog"
+          aria-modal="false"
+          aria-label="Terminal drawer"
+          className={`fixed left-0 right-0 bottom-0 z-50 flex flex-col bg-slate-950/95 backdrop-blur-md border-t border-x border-line shadow-[0_-16px_48px_rgba(0,0,0,0.55)] transition-transform duration-200 pb-[env(safe-area-inset-bottom)] ${
             open ? 'translate-y-0' : 'translate-y-full pointer-events-none'
           }`}
           style={{ height: `${effectiveHeight}px` }}
-          aria-hidden={!open}
         >
           {/* Drag handle */}
           <div
+            role="slider"
+            tabIndex={0}
+            aria-label="Resize terminal drawer"
+            aria-valuemin={160}
+            aria-valuemax={800}
+            aria-valuenow={Math.round(effectiveHeight)}
             onPointerDown={onHandlePointerDown}
             onDoubleClick={resetHeight}
+            onKeyDown={e => {
+              if (e.key === 'ArrowUp') { e.preventDefault(); onHandlePointerDown; }
+              if (e.key === 'Escape' && open) { e.stopPropagation(); }
+            }}
             title={fullscreen ? 'Exit fullscreen' : 'Drag to resize • double-click to reset'}
-            className={`group h-2 w-full shrink-0 cursor-row-resize flex items-center justify-center select-none touch-none ${
+            className={`group h-3 w-full shrink-0 cursor-row-resize flex items-center justify-center select-none touch-none focus-visible:outline-none focus-visible:bg-indigo-500/20 ${
               fullscreen ? '' : 'hover:bg-indigo-500/20'
             }`}
           >
@@ -819,14 +1199,18 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           </div>
 
           {/* Tab strip */}
-          <div className="flex items-stretch gap-1 px-3 pt-1 pb-0 overflow-x-auto scrollbar-none shrink-0 border-b border-line/70">
+          <div className="flex items-stretch gap-1 px-3 pt-1 pb-0 overflow-x-auto scrollbar-none shrink-0 border-b border-line/70" role="tablist" aria-label="Terminal sessions">
             {sessions.map(s => {
               const isActive = s.id === activeId;
               const Icon = s.mode === 'script' ? Zap : TerminalIcon;
               return (
                 <div
                   key={s.id}
+                  role="tab"
+                  tabIndex={0}
+                  aria-selected={isActive}
                   onClick={() => setActiveId(s.id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveId(s.id); } }}
                   title={`${s.projectTitle} — ${s.title}${
                     s.alive ? '' : s.exitCode != null ? ` (exited ${s.exitCode})` : ' (exited)'
                   }`}
@@ -882,7 +1266,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                       closeTab(s.id);
                     }}
                     title={s.alive ? 'Stop & close terminal' : 'Close terminal'}
-                    className="ml-1 p-0.5 rounded-md text-content-faint opacity-0 group-hover:opacity-100 hover:text-rose-300 transition-all"
+                    aria-label={`Close terminal ${s.projectTitle} ${s.title}`}
+                    className="ml-1 p-1 rounded-md text-content-faint hover:text-rose-300 hover:bg-rose-500/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 transition-all"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -951,6 +1336,11 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
 
           {/* Status bar */}
           <div className="flex items-center justify-between px-3 py-1 border-t border-line/70 text-[11px] font-mono text-content-faint shrink-0">
+              {pasteProgress && (
+                <span className="text-sky-300 shrink-0 mr-2">
+                  {`Pasting ${Math.round(pasteProgress.sent / 1024)} / ${Math.max(1, Math.round(pasteProgress.total / 1024))} KB...`}
+                </span>
+              )}
               <span className="truncate">{activeSession?.cwd || '\u00a0'}</span>
               <span className="flex items-center gap-3 shrink-0 ml-4">
                 {activeSession?.alive && (

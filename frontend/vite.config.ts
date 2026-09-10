@@ -26,6 +26,18 @@ export default defineConfig(({mode}) => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            vendor: ['react', 'react-dom', 'axios', '@tanstack/react-query'],
+            xterm: ['@xterm/xterm', '@xterm/addon-fit'],
+            markdown: ['marked', 'dompurify'],
+          },
+        },
+      },
+    },
     server: {
       port: 5174,
       strictPort: true,

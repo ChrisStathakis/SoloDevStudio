@@ -18,9 +18,12 @@ import {
   Layers
 } from 'lucide-react';
 import { Idea, IdeaStatus, SketchObject } from '../types';
-import { SketchCanvas } from './SketchCanvas';
 import { SparkDetailView } from './SparkDetailView';
 import { PageHeader, Button } from './ui';
+import { useToast } from './Toaster';
+import { clearSketchDraft } from './sketchDraft';
+
+const SketchCanvas = React.lazy(() => import('./SketchCanvas').then(m => ({ default: m.SketchCanvas })) );
 
 export const IdeasView: React.FC = () => {
   const { 
@@ -36,10 +39,40 @@ export const IdeasView: React.FC = () => {
     selectedSparkId,
     setSelectedSparkId
   } = useApp();
+  const { toast, confirm } = useToast();
 
   if (selectedSparkId) {
     return <SparkDetailView />;
   }
+
+  const handleDeleteIdea = async (idea: Idea) => {
+    const ok = await confirm({
+      title: `Delete idea "${idea.title}"?`,
+      description: 'The spark will be removed. You can undo right after.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const { id, createdAt, updatedAt, ...snapshot } = idea;
+    void id; void createdAt; void updatedAt;
+    try {
+      await deleteIdea(idea.id);
+      toast({
+        title: `Deleted "${idea.title}"`,
+        tone: 'success',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            void addIdea(snapshot)
+              .then(() => toast({ title: 'Idea restored', tone: 'success' }))
+              .catch(() => toast({ title: 'Could not restore idea', tone: 'error' }));
+          },
+        },
+      });
+    } catch {
+      toast({ title: 'Could not delete idea', tone: 'error' });
+    }
+  };
 
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
   const [editingIdeaId, setEditingIdeaId] = useState<string | null>(null);
@@ -51,12 +84,18 @@ export const IdeasView: React.FC = () => {
 
   const filteredIdeas = ideas.filter(idea => {
     const matchesStatus = selectedStatusFilter === 'all' || idea.status === selectedStatusFilter;
-    const matchesSearch = !searchQuery ||
-      idea.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      idea.tagline.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      idea.problem.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      idea.solution.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      idea.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
+    const q = searchQuery.trim().toLowerCase();
+    const matchesSearch = !q ||
+      idea.title.toLowerCase().includes(q) ||
+      idea.tagline.toLowerCase().includes(q) ||
+      idea.problem.toLowerCase().includes(q) ||
+      idea.solution.toLowerCase().includes(q) ||
+      idea.category.toLowerCase().includes(q) ||
+      (idea.notes || '').toLowerCase().includes(q) ||
+      (idea.targetAudience || '').toLowerCase().includes(q) ||
+      (idea.monetization || '').toLowerCase().includes(q) ||
+      (idea.mvpFeatures || []).some(f => f.toLowerCase().includes(q)) ||
+      idea.tags.some(t => t.toLowerCase().includes(q));
     return matchesStatus && matchesSearch;
   });
 
@@ -142,8 +181,8 @@ export const IdeasView: React.FC = () => {
       />
 
       {/* Filter Tabs */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-        {['all', 'spark', 'evaluating', 'validated', 'converted'].map(statusKey => {
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" role="tablist" aria-label="Filter ideas by status">
+        {['all', 'spark', 'evaluating', 'validated', 'converted', 'archived'].map(statusKey => {
           const isSelected = selectedStatusFilter === statusKey;
           const count = statusKey === 'all' 
             ? ideas.length 
@@ -153,6 +192,8 @@ export const IdeasView: React.FC = () => {
             <button
               key={statusKey}
               type="button"
+              role="tab"
+              aria-selected={isSelected}
               onClick={() => setSelectedStatusFilter(statusKey)}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
                 isSelected
@@ -198,13 +239,13 @@ export const IdeasView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      aria-label={`Delete idea ${idea.title}`}
+                      title="Delete idea"
                       onClick={e => {
                         e.stopPropagation();
-                        if (confirm(`Delete idea "${idea.title}"?`)) {
-                          deleteIdea(idea.id);
-                        }
+                        void handleDeleteIdea(idea);
                       }}
-                      className="p-1 text-content-faint hover:text-rose-400 rounded transition-colors"
+                      className="p-2 text-content-faint hover:text-rose-400 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -269,7 +310,10 @@ export const IdeasView: React.FC = () => {
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateIdea(idea.id, { sketchDataUrl: undefined })}
+                          onClick={() => {
+                            clearSketchDraft(idea.id);
+                            void updateIdea(idea.id, { sketchDataUrl: undefined, sketchObjects: [] });
+                          }}
                           className="px-3.5 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold shadow-md hover:bg-rose-500"
                         >
                           Remove
@@ -402,9 +446,11 @@ export const IdeasView: React.FC = () => {
 
       {/* SKETCH CANVAS MODAL */}
       {sketchModalIdeaId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-in fade-in" role="dialog" aria-modal="true" aria-label="Idea sketch canvas">
           <div className="w-full max-w-4xl max-h-[95vh] overflow-y-auto">
+            <React.Suspense fallback={<div className="p-8 text-center text-sm text-content-faint" role="status">Loading sketch canvas…</div>}>
             <SketchCanvas
+              key={sketchModalIdeaId}
               initialDataUrl={ideas.find(i => i.id === sketchModalIdeaId)?.sketchDataUrl}
               initialObjects={ideas.find(i => i.id === sketchModalIdeaId)?.sketchObjects}
               seed={ideas.find(i => i.id === sketchModalIdeaId)}
@@ -412,6 +458,7 @@ export const IdeasView: React.FC = () => {
               onSave={handleSaveSketch}
               onClose={() => setSketchModalIdeaId(null)}
             />
+            </React.Suspense>
           </div>
         </div>
       )}

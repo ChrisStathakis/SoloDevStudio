@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   X, 
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { ProjectStage, PriorityQuadrant, AppCategory, IdeaStatus, TaskCategory } from '../types';
 import { useIdeaCategories } from '../hooks/useIdeaCategories';
+import { Dialog } from './ui';
 
 export const QuickAddModal: React.FC = () => {
   const {
@@ -48,6 +49,8 @@ export const QuickAddModal: React.FC = () => {
   const [taskEstimateMins, setTaskEstimateMins] = useState('60');
   const [taskTags, setTaskTags] = useState('');
   const [taskMilestoneIds, setTaskMilestoneIds] = useState<string[]>([]);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [isSavingTask, setIsSavingTask] = useState(false);
 
   // Project form state
   const [projTitle, setProjTitle] = useState('');
@@ -82,30 +85,92 @@ export const QuickAddModal: React.FC = () => {
   const [timerProjectId, setTimerProjectId] = useState('');
   const [timerMode, setTimerMode] = useState<'pomodoro' | 'stopwatch'>('pomodoro');
 
+  // Stable close handler: an inline closure would give Dialog a new onClose
+  // identity on every render (belt & braces alongside the Dialog ref fix).
+  const handleClose = useCallback(() => setIsQuickAddOpen(false), [setIsQuickAddOpen]);
+
+  // Initialize tab + form defaults only on the closed -> open transition.
+  // Previously this effect re-ran on every projects/tasks identity change
+  // (e.g. background refetch) and forced setActiveTab(quickAddInitialTab),
+  // kicking the user back to the Task tab mid-typing.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (isQuickAddOpen) {
-      setActiveTab(quickAddInitialTab);
-      if (quickAddTaskId) {
-        const task = tasks.find(item => item.id === quickAddTaskId);
-        if (task) {
-          setTaskTitle(task.title);
-          setTaskDesc(task.description || '');
-          setTaskProjectId(task.projectId);
-          setTaskStage(task.stage);
-          setTaskQuadrant(task.quadrant);
-          setTaskCategory(task.category || 'feature');
-          setTaskDueDate(task.dueDate || '');
-          setTaskEstimateMins(String(task.estimatedMinutes || 60));
-          setTaskTags(task.tags.join(', '));
-          setTaskMilestoneIds(task.milestoneIds || []);
-        }
-      }
-      if (projects.length > 0 && !quickAddTaskId) {
-        setTaskProjectId(quickAddProjectId || taskProjectId || projects[0].id);
-        if (!timerProjectId) setTimerProjectId(projects[0].id);
-      }
+    if (!isQuickAddOpen) {
+      wasOpenRef.current = false;
+      return;
     }
-  }, [isQuickAddOpen, quickAddInitialTab, projects, tasks, quickAddProjectId, quickAddTaskId, taskProjectId, timerProjectId]);
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+    setActiveTab(quickAddInitialTab);
+    setTaskError(null);
+    if (quickAddTaskId) {
+      const task = tasks.find(item => item.id === quickAddTaskId);
+      if (task) {
+        setTaskTitle(task.title);
+        setTaskDesc(task.description || '');
+        setTaskProjectId(task.projectId);
+        setTaskStage(task.stage);
+        setTaskQuadrant(task.quadrant);
+        setTaskCategory(task.category || 'feature');
+        setTaskDueDate(task.dueDate || '');
+        setTaskEstimateMins(String(task.estimatedMinutes || 60));
+        setTaskTags(task.tags.join(', '));
+        setTaskMilestoneIds(task.milestoneIds || []);
+      }
+    } else {
+      // Create mode: start from a clean form so stale milestones/tags from a
+      // previous project can't leak into this one (backend rejects milestones
+      // that don't belong to the task project, which previously surfaced as a
+      // silent "Save does nothing" failure).
+      setTaskTitle('');
+      setTaskDesc('');
+      setTaskStage('development');
+      setTaskQuadrant('q1_do');
+      setTaskCategory('feature');
+      setTaskDueDate('');
+      setTaskEstimateMins('60');
+      setTaskTags('');
+      setTaskMilestoneIds([]);
+    }
+    // Defer project-id defaults: read latest projects via functional access
+    // without depending on the arrays (avoids re-running on refetch).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isQuickAddOpen, quickAddInitialTab, quickAddTaskId]);
+
+  // Apply project-id defaults once, separately, when the project list first
+  // becomes available while the modal is open (does not touch activeTab).
+  const defaultsAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!isQuickAddOpen) {
+      defaultsAppliedRef.current = false;
+      return;
+    }
+    if (defaultsAppliedRef.current || projects.length === 0 || quickAddTaskId) return;
+    defaultsAppliedRef.current = true;
+    // An explicit quickAddProjectId (e.g. "Add Task" inside a project) must
+    // always win over stale state from a previously opened modal. The old
+    // `current || quickAddProjectId` kept the previous project, so tasks were
+    // saved to the wrong project or rejected for foreign milestones.
+    if (quickAddProjectId) {
+      setTaskProjectId(quickAddProjectId);
+    } else {
+      setTaskProjectId(current => current && projects.some(p => p.id === current) ? current : projects[0].id);
+    }
+    setTimerProjectId(current => current && projects.some(p => p.id === current) ? current : projects[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isQuickAddOpen, projects, quickAddTaskId, quickAddProjectId]);
+
+  // Focus the active tab's first field on tab switch only (mount of the new
+  // form). Typing never remounts, so focus is never stolen mid-typing.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isQuickAddOpen) return;
+    const t = window.setTimeout(() => {
+      const el = panelRef.current?.querySelector('[data-autofocus="true"]') as HTMLElement | null;
+      el?.focus();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [activeTab, isQuickAddOpen]);
 
   useEffect(() => {
     const project = projects.find(p => p.id === taskProjectId);
@@ -116,10 +181,24 @@ export const QuickAddModal: React.FC = () => {
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!taskTitle.trim()) return;
+    if (!taskTitle.trim() || isSavingTask) return;
+    const resolvedProjectId = taskProjectId || quickAddProjectId || projects[0]?.id;
+    if (!resolvedProjectId) {
+      setTaskError('No project available. Create a project first, then add tasks to it.');
+      return;
+    }
+    setTaskError(null);
+    setIsSavingTask(true);
     try {
+      // Filter milestones at submit time: the project dropdown can change after
+      // the sync effect runs, and the backend rejects milestones that belong to
+      // a different project. Sending stale ids previously failed silently.
+      const owningProject = projects.find(p => p.id === resolvedProjectId);
+      const validMilestoneIds = owningProject
+        ? taskMilestoneIds.filter(id => owningProject.milestones.some(m => m.id === id))
+        : [];
       const taskData = {
-        projectId: taskProjectId || (projects[0]?.id ?? 'default'),
+        projectId: resolvedProjectId,
         title: taskTitle.trim(),
         description: taskDesc.trim() || undefined,
         stage: taskStage,
@@ -130,7 +209,7 @@ export const QuickAddModal: React.FC = () => {
         estimatedMinutes: parseInt(taskEstimateMins) || 60,
         ...(quickAddTaskId ? {} : { subtasks: [] }),
         tags: taskTags.split(',').map(t => t.trim()).filter(Boolean),
-        milestoneIds: taskMilestoneIds,
+        milestoneIds: validMilestoneIds,
       } as any;
       if (quickAddTaskId) {
         await updateTask(quickAddTaskId, taskData);
@@ -139,9 +218,22 @@ export const QuickAddModal: React.FC = () => {
       }
       setTaskTitle('');
       setTaskDesc('');
+      setTaskTags('');
+      setTaskDueDate('');
+      setTaskMilestoneIds([]);
+      setTaskError(null);
       setIsQuickAddOpen(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Create task failed', err);
+      const detail = err?.response?.data?.milestones?.[0]
+        || err?.response?.data?.detail
+        || err?.response?.data?.error
+        || (typeof err?.response?.data === 'string' ? err.response.data : null)
+        || err?.message
+        || 'Could not save the task. Please try again.';
+      setTaskError(String(detail));
+    } finally {
+      setIsSavingTask(false);
     }
   };
 
@@ -218,15 +310,15 @@ export const QuickAddModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
-      <div className="bg-surface rounded-3xl shadow-2xl border border-line w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
-        
+    <Dialog label="Quick add" onClose={handleClose} className="max-w-xl">
         {/* Modal Header & Tabs */}
         <div className="p-4 bg-surface-2 dark:bg-surface-inverse border-b border-line flex items-center justify-between">
-          <div className="flex items-center gap-1.5 bg-surface-3 p-1 rounded-2xl border border-line/80">
+          <div className="flex items-center gap-1.5 bg-surface-3 p-1 rounded-2xl border border-line/80" role="tablist" aria-label="Quick add type">
             <button
               type="button"
               id="tab-quick-task"
+              role="tab"
+              aria-selected={activeTab === 'task'}
               onClick={() => setActiveTab('task')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'task'
@@ -241,6 +333,8 @@ export const QuickAddModal: React.FC = () => {
             <button
               type="button"
               id="tab-quick-project"
+              role="tab"
+              aria-selected={activeTab === 'project'}
               onClick={() => setActiveTab('project')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'project'
@@ -255,6 +349,8 @@ export const QuickAddModal: React.FC = () => {
             <button
               type="button"
               id="tab-quick-idea"
+              role="tab"
+              aria-selected={activeTab === 'idea'}
               onClick={() => setActiveTab('idea')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'idea'
@@ -269,6 +365,8 @@ export const QuickAddModal: React.FC = () => {
             <button
               type="button"
               id="tab-quick-timer"
+              role="tab"
+              aria-selected={activeTab === 'timer'}
               onClick={() => setActiveTab('timer')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
                 activeTab === 'timer'
@@ -283,19 +381,25 @@ export const QuickAddModal: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setIsQuickAddOpen(false)}
-            className="p-1.5 text-content-faint hover:text-content rounded-xl hover:bg-slate-800 transition-colors"
+            aria-label="Close quick add"
+            onClick={handleClose}
+            className="p-1.5 text-content-faint hover:text-content rounded-xl hover:bg-surface-3 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tab Contents */}
-        <div className="p-6 overflow-y-auto">
+        <div ref={panelRef} className="p-6 overflow-y-auto">
           
           {/* TASK FORM */}
           {activeTab === 'task' && (
             <form onSubmit={handleCreateTask} className="space-y-4">
+              {taskError && (
+                <p className="px-3.5 py-2 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs font-bold text-rose-700 dark:text-rose-300" role="alert">
+                  {taskError}
+                </p>
+              )}
               <div>
                 <label className="block text-xs font-black uppercase tracking-wider text-content-muted mb-1.5 font-mono">
                   Task Title *
@@ -303,7 +407,7 @@ export const QuickAddModal: React.FC = () => {
                 <input
                   type="text"
                   required
-                  autoFocus
+                  data-autofocus="true"
                   placeholder="e.g. Implement Web Worker AST tokenizer"
                   value={taskTitle}
                   onChange={e => setTaskTitle(e.target.value)}
@@ -444,16 +548,17 @@ export const QuickAddModal: React.FC = () => {
               <div className="pt-3 flex justify-end gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
+                  onClick={handleClose}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-surface-3 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black tracking-wide shadow-md transition-all"
+                  disabled={isSavingTask}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-wait text-white text-xs font-black tracking-wide shadow-md transition-all"
                 >
-                  {quickAddTaskId ? 'Save Changes' : 'Create Task'}
+                  {isSavingTask ? 'Saving…' : quickAddTaskId ? 'Save Changes' : 'Create Task'}
                 </button>
               </div>
             </form>
@@ -469,7 +574,7 @@ export const QuickAddModal: React.FC = () => {
                 <input
                   type="text"
                   required
-                  autoFocus
+                  data-autofocus="true"
                   placeholder="e.g. SnippetForge - Fast code snippet manager"
                   value={projTitle}
                   onChange={e => setProjTitle(e.target.value)}
@@ -587,8 +692,8 @@ export const QuickAddModal: React.FC = () => {
               <div className="pt-3 flex justify-end gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
+                  onClick={handleClose}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-surface-3 transition-colors"
                 >
                   Cancel
                 </button>
@@ -612,7 +717,7 @@ export const QuickAddModal: React.FC = () => {
                 <input
                   type="text"
                   required
-                  autoFocus
+                  data-autofocus="true"
                   placeholder="e.g. MarkdownToSlides - Instant deck maker"
                   value={ideaTitle}
                   onChange={e => setIdeaTitle(e.target.value)}
@@ -667,8 +772,8 @@ export const QuickAddModal: React.FC = () => {
               <div className="pt-3 flex justify-end gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
+                  onClick={handleClose}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-surface-3 transition-colors"
                 >
                   Cancel
                 </button>
@@ -735,8 +840,8 @@ export const QuickAddModal: React.FC = () => {
               <div className="pt-3 flex justify-end gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setIsQuickAddOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-slate-800 transition-colors"
+                  onClick={handleClose}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-content-faint hover:text-content hover:bg-surface-3 transition-colors"
                 >
                   Cancel
                 </button>
@@ -752,7 +857,6 @@ export const QuickAddModal: React.FC = () => {
           )}
 
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 };

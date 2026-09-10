@@ -297,13 +297,46 @@ class ProjectViewSet(viewsets.ModelViewSet):
     filterset_class = ProjectFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['title', 'tagline', 'description', 'problem', 'solution', 'target_audience', 'monetization', 'notes']
-    ordering_fields = ['created_at', 'target_deadline', 'start_date', 'updated_at']
+    ordering_fields = ['created_at', 'target_deadline', 'start_date', 'updated_at', 'sort_order']
 
     def get_queryset(self):
         return Project.objects.filter(owner=self.request.user).prefetch_related('milestones', 'stage_workspaces')
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        last = Project.objects.filter(owner=self.request.user).order_by('-sort_order').first()
+        next_order = (last.sort_order + 1) if last is not None else 0
+        serializer.save(owner=self.request.user, sort_order=next_order)
+
+    @action(detail=False, methods=['post'], url_path='reorder')
+    def reorder(self, request):
+        ordered_ids = request.data.get('ordered_ids')
+        if not isinstance(ordered_ids, list) or not ordered_ids:
+            return Response({'ordered_ids': 'Provide a non-empty list of project IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            parsed_ids = [str(x) for x in ordered_ids]
+        except Exception:
+            return Response({'ordered_ids': 'Invalid project IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+        owned = set(
+            str(pid) for pid in Project.objects.filter(owner=request.user).values_list('id', flat=True)
+        )
+        unknown = [pid for pid in parsed_ids if pid not in owned]
+        if unknown:
+            return Response({'ordered_ids': 'Some projects were not found.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(set(parsed_ids)) != len(parsed_ids):
+            return Response({'ordered_ids': 'Duplicate project IDs are not allowed.'}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            for index, pid in enumerate(parsed_ids):
+                Project.objects.filter(id=pid, owner=request.user).update(sort_order=index)
+            # Projects not included keep their relative order after the reordered ones.
+            remaining = (
+                Project.objects.filter(owner=request.user)
+                .exclude(id__in=parsed_ids)
+                .order_by('sort_order', '-created_at')
+            )
+            offset = len(parsed_ids)
+            for extra_index, project in enumerate(remaining):
+                Project.objects.filter(id=project.id).update(sort_order=offset + extra_index)
+        return Response({'success': True, 'ordered_ids': parsed_ids})
 
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, pk=None):
@@ -365,8 +398,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 return Response({'tool': 'Tool must be opencode or codex.'}, status=400)
             if mode not in InitializationMode.values:
                 return Response({'mode': 'Mode must be build or plan.'}, status=400)
-            if mode == InitializationMode.PLAN and tool != InitializationTool.CODEX:
-                return Response({'mode': 'Plan mode is only available for Codex.'}, status=400)
             if not isinstance(model_id, str):
                 return Response({'model_id': 'Model ID must be a string.'}, status=400)
             if reasoning_effort not in ReasoningEffort.values:
@@ -502,8 +533,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 project_values = {
                     field.name: getattr(source_project, field.name)
                     for field in Project._meta.concrete_fields
-                    if field.name not in {'id', 'owner', 'title', 'created_at', 'updated_at', 'directory_path', 'cmd_directory', 'script_path', 'python_env', 'port', 'drive'}
+                    if field.name not in {'id', 'owner', 'title', 'created_at', 'updated_at', 'directory_path', 'cmd_directory', 'script_path', 'python_env', 'port', 'drive', 'sort_order'}
                 }
+                last_order = Project.objects.filter(owner=request.user).order_by('-sort_order').first()
                 project = Project.objects.create(
                     owner=request.user,
                     title=title,
@@ -513,6 +545,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     python_env='',
                     port='',
                     drive=destination_drive,
+                    sort_order=(last_order.sort_order + 1) if last_order is not None else 0,
                     **project_values,
                 )
                 milestone_map = {}
@@ -902,6 +935,7 @@ class IdeaViewSet(viewsets.ModelViewSet):
             return Response({'error': f'Unable to create project folder: {exc}'}, status=500)
         try:
             with transaction.atomic():
+                last_order = Project.objects.filter(owner=request.user).order_by('-sort_order').first()
                 project = Project.objects.create(
                     owner=request.user,
                     title=idea.title,
@@ -921,6 +955,7 @@ class IdeaViewSet(viewsets.ModelViewSet):
                     tech_stack=tech_stack,
                     notes=notes,
                     pinned=True,
+                    sort_order=(last_order.sort_order + 1) if last_order is not None else 0,
                     directory_path=folder_path,
                     cmd_directory=folder_path,
                     script_path='',
@@ -1131,18 +1166,6 @@ def import_data_view(request):
     project_id_map = {}
     milestone_id_map = {}
 
-    # Reject impossible mode/tool combinations before mutating any imported data.
-    for project_data in data.get('projects', []) if isinstance(data.get('projects'), list) else []:
-        imported_tool = project_data.get('initializationTool', project_data.get('initialization_tool', InitializationTool.OPENCODE))
-        imported_mode = project_data.get('initializationMode', project_data.get('initialization_mode', InitializationMode.BUILD))
-        if imported_mode == InitializationMode.PLAN and imported_tool != InitializationTool.CODEX:
-            return Response({'initialization_mode': 'Plan mode is only available for Codex.'}, status=400)
-    for preset_data in data.get('modelPresets', []) if isinstance(data.get('modelPresets'), list) else []:
-        imported_tool = preset_data.get('tool')
-        imported_mode = preset_data.get('mode', InitializationMode.BUILD)
-        if imported_mode == InitializationMode.PLAN and imported_tool != InitializationTool.CODEX:
-            return Response({'mode': 'Plan mode is only available for Codex.'}, status=400)
-
     with transaction.atomic():
         settings_data = data.get('settings') if isinstance(data.get('settings'), dict) else {}
         if 'potentialProjectsRoot' in settings_data or 'potential_projects_root' in settings_data:
@@ -1196,6 +1219,7 @@ def import_data_view(request):
                     'pythonEnv': 'python_env', 'python_env': 'python_env',
                     'port': 'port', 'drive': 'drive',
                     'notes': 'notes', 'pinned': 'pinned',
+                    'sortOrder': 'sort_order', 'sort_order': 'sort_order',
                     'initializationTool': 'initialization_tool', 'initialization_tool': 'initialization_tool',
                     'initializationModel': 'initialization_model', 'initialization_model': 'initialization_model',
                     'initializationReasoningEffort': 'initialization_reasoning_effort', 'initialization_reasoning_effort': 'initialization_reasoning_effort',

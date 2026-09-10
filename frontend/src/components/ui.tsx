@@ -73,3 +73,58 @@ export function EmptyState({ title, description, action }: { title: string; desc
     </div>
   );
 }
+
+export function Dialog({
+  label,
+  onClose,
+  children,
+  className = '',
+}: {
+  label: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  // onClose is stored in a ref so parent re-renders (e.g. every keystroke in a
+  // form field, which creates a new inline closure) don't re-run this effect.
+  // Previously the [onClose] dep re-scheduled "focus first on open" per render,
+  // yanking focus out of the field being typed in and onto the first tab button.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current();
+      if (e.key === 'Tab' && panelRef.current) {
+        const nodes = panelRef.current.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        const focusables = (Array.from(nodes) as HTMLElement[]).filter(el => !el.hasAttribute('disabled'));
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    // Focus first focusable on open only (once per mount)
+    const t = window.setTimeout(() => {
+      const preferred = panelRef.current?.querySelector('[data-autofocus="true"]') as HTMLElement | null;
+      const first = preferred ?? (panelRef.current?.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])') as HTMLElement | null);
+      first?.focus();
+    }, 0);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      window.clearTimeout(t);
+    };
+  }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={label} className={`bg-surface rounded-3xl shadow-2xl border border-line w-full overflow-hidden flex flex-col max-h-[90vh] ${className}`}>
+        {children}
+      </div>
+    </div>
+  );
+}

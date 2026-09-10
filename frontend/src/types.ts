@@ -109,6 +109,7 @@ export interface Project {
   initializationReasoningEffort?: 'low' | 'medium' | 'high';
   initializationMode?: 'build' | 'plan';
   pinned: boolean;
+  sortOrder: number;
   milestones: Milestone[];
   techResearch?: TechResearchResult;
   createdAt: string;
@@ -213,6 +214,8 @@ export type SketchObjectType =
 
 export type SketchArrowhead = 'none' | 'start' | 'end' | 'both';
 
+export type SketchRoute = 'straight' | 'curve' | 'elbow';
+
 export interface SketchBinding {
   objectId: string;
 }
@@ -234,6 +237,11 @@ export interface SketchObject {
   endBinding?: SketchBinding | null;
   fill?: boolean; // rect/ellipse/diamond: fill shape with color
   dash?: boolean; // dashed stroke for shapes/arrows/lines
+  groupId?: string | null; // shared id for grouped objects (moved/selected together)
+  locked?: boolean; // locked objects can't be selected, moved, or edited
+  route?: SketchRoute; // arrow/line: straight (default), curve, or elbow
+  label?: string; // arrow/line: optional midpoint label
+  waypoints?: number[]; // elbow route: intermediate corners [x1,y1,x2,y2,...]
 }
 
 export interface AgentFilter {

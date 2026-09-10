@@ -15,6 +15,20 @@ const EFFECTIVE_PORT = Number.isFinite(CLI_PORT) ? CLI_PORT : PORT;
 
 app.use(express.json());
 
+// Django backend origin for /api proxy (same-origin bypass, no CORS needed).
+// VITE_API_URL may be "http://localhost:8001/api" or "/api".
+function getDjangoOrigin(): string {
+  const raw = process.env.VITE_API_URL || process.env.BACKEND_URL || "http://localhost:8001";
+  try {
+    if (raw.startsWith("/")) return "http://localhost:8001";
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "http://localhost:8001";
+  }
+}
+const DJANGO_ORIGIN = getDjangoOrigin();
+
 // Quiet favicon 404 log spam and serve 204 if file missing
 app.get("/favicon.ico", (_req, res) => {
   const icoPath = path.join(process.cwd(), "public", "favicon.ico");
@@ -266,6 +280,56 @@ Return ONLY valid JSON.`;
     return res.status(500).json({
       error: error?.message || "Failed to analyze tech stack.",
     });
+  }
+});
+
+// Proxy all other /api/* to Django (same-origin for browser, no CORS preflight).
+// Local Express routes above (/api/health, /api/market-research,
+// /api/tech-stack-research) run first and are never proxied.
+app.use("/api", async (req, res, next) => {
+  // Let local handlers serve their exact paths.
+  if (req.method === "GET" && req.path === "/health") return next();
+  if (
+    req.method === "POST" &&
+    (req.path === "/market-research" || req.path === "/tech-stack-research")
+  )
+    return next();
+  try {
+    const target = DJANGO_ORIGIN + req.originalUrl;
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v == null) continue;
+      const key = k.toLowerCase();
+      if (key === "host" || key === "connection" || key === "content-length") continue;
+      headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
+    }
+    const init: RequestInit = { method: req.method, headers };
+    if (req.method !== "GET" && req.method !== "HEAD" && req.body !== undefined) {
+      if (typeof req.body === "string" || Buffer.isBuffer(req.body)) {
+        (init as any).body = req.body;
+      } else if (Object.keys(req.body).length > 0) {
+        if (!headers["content-type"] && !(headers as any)["Content-Type"]) {
+          headers["content-type"] = "application/json";
+        }
+        (init as any).body = JSON.stringify(req.body);
+      }
+    }
+    const upstream = await fetch(target, init);
+    res.status(upstream.status);
+    upstream.headers.forEach((value, key) => {
+      const k = key.toLowerCase();
+      if (["content-encoding", "content-length", "transfer-encoding", "connection"].includes(k)) return;
+      res.setHeader(key, value);
+    });
+    if (upstream.body) {
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.send(buf);
+    } else {
+      res.end();
+    }
+  } catch (err: any) {
+    console.error(`[api-proxy] ${req.method} ${req.originalUrl} -> ${DJANGO_ORIGIN} failed:`, err?.message || err);
+    res.status(502).json({ detail: `Backend unreachable at ${DJANGO_ORIGIN}. Is Django running on 8001?` });
   }
 });
 

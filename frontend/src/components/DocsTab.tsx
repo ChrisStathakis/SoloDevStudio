@@ -1,4 +1,5 @@
-﻿import React, { useCallback, useEffect, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrapPaginated } from '../services/api';
 import { mapProjectDocFromApi } from '../services/mappers';
 import type { ProjectDoc } from '../types';
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react';
 import { DocEditor } from './DocEditor';
 import { LinkDocModal } from './LinkDocModal';
+import { useToast } from './Toaster';
 
 interface DocsTabProps {
   projectId: string;
@@ -36,8 +38,6 @@ const formatDate = (iso: string) => {
 export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) => {
   const { projects, refreshData } = useApp();
 
-  const [docs, setDocs] = useState<ProjectDoc[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedFilterId, setSelectedFilterId] = useState<string>('all');
   const { filters: agentFilters } = useAgentFilters();
@@ -48,6 +48,39 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) =>
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addedId, setAddedId] = useState<string | null>(null);
+  const { confirm } = useToast();
+  const queryClient = useQueryClient();
+
+  // Server list is cached per project; local state holds optimistic edits on top
+  const docsQuery = useQuery({
+    queryKey: ['project-docs', projectId],
+    queryFn: async (): Promise<ProjectDoc[]> => {
+      const res = await api.get('/docs/', { params: { project: projectId, page_size: 100 } });
+      return unwrapPaginated<any>(res.data).map(mapProjectDocFromApi);
+    },
+  });
+  const [docs, setDocs] = useState<ProjectDoc[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Fresh project: clear editor + stale filter, then sync server list when it arrives
+  useEffect(() => {
+    setOpenDocId(null);
+    setSelectedFilterId('all');
+    setDocs([]);
+    setIsLoading(true);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (docsQuery.data) {
+      setDocs(docsQuery.data);
+      setIsLoading(false);
+    } else if (docsQuery.isError) {
+      setError('Failed to load skills.');
+      setIsLoading(false);
+    } else {
+      setIsLoading(docsQuery.isLoading);
+    }
+  }, [docsQuery.data, docsQuery.isError, docsQuery.isLoading]);
 
   const copyTimeout = React.useRef<number | null>(null);
 
@@ -66,7 +99,11 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) =>
     const next = doc.active === false;
     try {
       await api.patch(`/projects/${projectId}/agents/${doc.id}/`, { active: next });
-      setDocs(prev => prev.map(item => item.id === doc.id ? { ...item, active: next } : item));
+      setDocs(prev => {
+        const updated = prev.map(item => item.id === doc.id ? { ...item, active: next } : item);
+        queryClient.setQueryData<ProjectDoc[]>(['project-docs', projectId], updated);
+        return updated;
+      });
     } catch (e) {
       console.error('Failed to update agent activity', e);
       setError('Failed to update agent activity.');
@@ -90,48 +127,38 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) =>
     }
   };
 
-  const loadDocs = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await api.get('/docs/', { params: { project: projectId, page_size: 100 } });
-      setDocs(unwrapPaginated<any>(res.data).map(mapProjectDocFromApi));
-    } catch (e) {
-      console.error('Failed to load docs', e);
-      setError('Failed to load skills.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    setOpenDocId(null);
-    loadDocs();
-  }, [loadDocs]);
-
   const openNewDoc = () => setOpenDocId('new');
 
   const openDoc = (doc: ProjectDoc) => setOpenDocId(doc.id);
 
-  // Editor saved (created or updated) — sync into this project's list
+  // Editor saved (created or updated) — sync into this project's list + cache
   const handleSaved = (doc: ProjectDoc) => {
     setDocs(prev => {
-      if (!doc.projectIds.includes(projectId)) {
-        return prev.filter(d => d.id !== doc.id);
-      }
-      return prev.some(d => d.id === doc.id)
-        ? prev.map(d => (d.id === doc.id ? doc : d))
-        : [doc, ...prev];
+      const next = !doc.projectIds.includes(projectId)
+        ? prev.filter(d => d.id !== doc.id)
+        : prev.some(d => d.id === doc.id)
+          ? prev.map(d => (d.id === doc.id ? doc : d))
+          : [doc, ...prev];
+      queryClient.setQueryData<ProjectDoc[]>(['project-docs', projectId], next);
+      return next;
     });
   };
 
   const handleDeleted = (id: string) => {
-    setDocs(prev => prev.filter(d => d.id !== id));
+    setDocs(prev => {
+      const next = prev.filter(d => d.id !== id);
+      queryClient.setQueryData<ProjectDoc[]>(['project-docs', projectId], next);
+      return next;
+    });
     if (openDocId === id) setOpenDocId(null);
   };
 
   const handleLinked = (doc: ProjectDoc) => {
-    setDocs(prev => (prev.some(d => d.id === doc.id) ? prev : [doc, ...prev]));
+    setDocs(prev => {
+      const next = prev.some(d => d.id === doc.id) ? prev : [doc, ...prev];
+      queryClient.setQueryData<ProjectDoc[]>(['project-docs', projectId], next);
+      return next;
+    });
   };
 
   const openEditingDoc = docs.find(d => d.id === openDocId) || null;
@@ -194,8 +221,11 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) =>
       </div>
 
       {error && (
-        <div className="px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
-          {error}
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300" role="alert">
+          <span>{error}</span>
+          {docsQuery.isError && (
+            <button type="button" onClick={() => void docsQuery.refetch()} className="shrink-0 rounded-lg bg-rose-600 px-2.5 py-1 text-white hover:bg-rose-500">Retry</button>
+          )}
         </div>
       )}
 
@@ -275,14 +305,17 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) =>
           {visibleDocs.map(doc => {
             const sharedCount = doc.projectIds.filter(id => id !== projectId).length;
             return (
-              <button
+              <div
                 key={doc.id}
-                type="button"
-                onClick={() => openDoc(doc)}
                 className="group w-full text-left p-4 rounded-2xl bg-surface border border-line shadow-md hover:border-indigo-800/60 transition-all"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => openDoc(doc)}
+                    aria-label={`Open skill ${doc.title}`}
+                    className="flex items-start gap-3 flex-1 min-w-0 text-left rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                  >
                     <div className="mt-0.5 p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 shrink-0">
                       <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     </div>
@@ -313,81 +346,71 @@ export const DocsTab: React.FC<DocsTabProps> = ({ projectId, onPromptAdded }) =>
                           {doc.content.replace(/[#*`>\-\[\]]/g, '').slice(0, 180)}
                         </p>
                       )}
-                    </div>
-                  </div>
+                      </div>
+                    </button>
 
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    aria-pressed={doc.active !== false}
-                    onClick={e => { e.stopPropagation(); handleToggleActive(doc); }}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleToggleActive(doc); } }}
-                    className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${doc.active === false ? 'text-slate-600 hover:text-emerald-400' : 'text-emerald-600 dark:text-emerald-400 hover:text-amber-300'}`}
-                    title={doc.active === false ? 'Activate skill for this project' : 'Deactivate skill for this project'}
-                  >
-                    <Power className="w-4 h-4" />
-                  </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      aria-pressed={doc.active !== false}
+                      onClick={() => handleToggleActive(doc)}
+                      className={`p-2 rounded-lg transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${doc.active === false ? 'text-slate-600 hover:text-emerald-400' : 'text-emerald-600 dark:text-emerald-400 hover:text-amber-300'}`}
+                      title={doc.active === false ? 'Activate skill for this project' : 'Deactivate skill for this project'}
+                      aria-label={`${doc.active === false ? 'Activate' : 'Deactivate'} skill ${doc.title}`}
+                    >
+                      <Power className="w-4 h-4" />
+                    </button>
 
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={e => { e.stopPropagation(); void handleAddToPrompt(doc); }}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); void handleAddToPrompt(doc); } }}
-                    className={`p-1.5 rounded-lg transition-all cursor-pointer shrink-0 ${addedId === doc.id ? 'text-emerald-600 dark:text-emerald-400' : 'text-content-faint hover:text-indigo-400 hover:bg-indigo-500/10'}`}
-                    title="Add this skill snapshot to the saved project prompt"
-                    aria-label={`Add ${doc.title} to project prompt`}
-                  >
-                    {addingId === doc.id ? <span className="block w-4 h-4 text-center text-[11px]">…</span> : addedId === doc.id ? <Check className="w-4 h-4" /> : <ClipboardPlus className="w-4 h-4" />}
-                  </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleAddToPrompt(doc)}
+                      className={`p-2 rounded-lg transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${addedId === doc.id ? 'text-emerald-600 dark:text-emerald-400' : 'text-content-faint hover:text-indigo-400 hover:bg-indigo-500/10'}`}
+                      title="Add this skill snapshot to the saved project prompt"
+                      aria-label={`Add ${doc.title} to project prompt`}
+                    >
+                      {addingId === doc.id ? <span className="block w-4 h-4 text-center text-[11px]">…</span> : addedId === doc.id ? <Check className="w-4 h-4" /> : <ClipboardPlus className="w-4 h-4" />}
+                    </button>
 
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={e => {
-                      e.stopPropagation();
-                      handleCopy(doc);
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.stopPropagation();
-                        handleCopy(doc);
-                      }
-                    }}
-                    className="p-1.5 rounded-lg text-content-faint hover:text-indigo-400 hover:bg-indigo-500/10 transition-all cursor-pointer shrink-0"
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(doc)}
+                    className="p-2 rounded-lg text-content-faint hover:text-indigo-400 hover:bg-indigo-500/10 transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
                     title="Copy full skill content"
+                    aria-label={`Copy skill ${doc.title}`}
                   >
                     {copiedId === doc.id ? (
                       <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     ) : (
                       <Copy className="w-4 h-4" />
                     )}
-                  </span>
+                  </button>
 
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={e => {
-                      e.stopPropagation();
-                      if (!window.confirm(`Remove skill "${doc.title}" from this project? It will remain available in other linked projects.`)) return;
+                  <button
+                    type="button"
+                    onClick={() => void (async () => {
+                      const ok = await confirm({
+                        title: `Remove skill "${doc.title}" from this project?`,
+                        description: 'It will remain available in other linked projects.',
+                        confirmLabel: 'Remove',
+                        danger: true,
+                      });
+                      if (!ok) return;
                       api.delete(`/projects/${projectId}/agents/${doc.id}/`)
                         .then(() => handleDeleted(doc.id))
                         .catch(e2 => {
                           console.error('Failed to unlink doc', e2);
                           setError('Failed to remove skill from this project.');
                         });
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.stopPropagation();
-                      }
-                    }}
-                    className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer shrink-0"
+                    })()}
+                    className="p-2 rounded-lg text-content-faint hover:text-rose-400 focus-visible:opacity-100 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                     title="Remove skill from this project"
+                    aria-label={`Remove skill ${doc.title} from this project`}
                   >
                     <Trash2 className="w-4 h-4" />
-                  </span>
+                  </button>
+                    </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

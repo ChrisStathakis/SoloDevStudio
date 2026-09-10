@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import { STAGE_CONFIG } from '../types';
 import { api } from '../services/api';
-import { PageHeader } from './ui';
+import { PageHeader, EmptyState, Button } from './ui';
+import { getDaysRemaining } from '../utils/dates';
 
 interface TimelineItem {
   id: string;
@@ -33,25 +34,19 @@ interface TimelineItem {
 }
 
 export const TimelineDeadlinesView: React.FC = () => {
-  const { projects, tasks, setSelectedProjectId, setCurrentView, searchQuery } = useApp();
+  const { projects, tasks, setSelectedProjectId, setCurrentView, searchQuery, openQuickAdd } = useApp();
 
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<'all' | 'launch' | 'milestone' | 'task'>('all');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>('all');
   const [serverGroups, setServerGroups] = useState<{ overdue: number; thisWeek: number; nextTwoWeeks: number; thisMonth: number; later: number } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
-  const getDaysRemaining = (targetDate: string) => {
-    const target = new Date(targetDate);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    target.setHours(0, 0, 0, 0);
-    return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  };
-
-  // Sync server timeline groups for stats parity (GET /api/timeline/ is authoritative)
+  // Sync server timeline groups for stats parity (GET /api/timeline/ is authoritative for the badge counts)
   useEffect(() => {
     let mounted = true;
     setIsSyncing(true);
+    setSyncError(null);
     const params: Record<string, string> = {};
     if (selectedTypeFilter !== 'all') params.type = selectedTypeFilter;
     if (selectedProjectFilter !== 'all') params.projectId = selectedProjectFilter;
@@ -59,7 +54,7 @@ export const TimelineDeadlinesView: React.FC = () => {
     api.get('/timeline/', { params }).then(res => {
       if (!mounted) return;
       if (res.data?.groups) setServerGroups(res.data.groups);
-    }).catch(() => {}).finally(() => {
+    }).catch(() => { if (mounted) setSyncError('Server timeline counts unavailable — showing local data.'); }).finally(() => {
       if (mounted) setIsSyncing(false);
     });
     return () => { mounted = false; };
@@ -180,11 +175,21 @@ export const TimelineDeadlinesView: React.FC = () => {
           {items.map(item => (
             <div
               key={item.id}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open project ${item.projectTitle} — ${item.title}, ${item.date}`}
               onClick={() => {
                 setSelectedProjectId(item.projectId);
                 setCurrentView('projects');
               }}
-              className={`p-4 rounded-2xl bg-surface border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 group ${
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedProjectId(item.projectId);
+                  setCurrentView('projects');
+                }
+              }}
+              className={`p-4 rounded-2xl bg-surface border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
                 item.completed
                   ? 'border-line opacity-50 bg-surface-2'
                   : isOverdue
@@ -264,7 +269,8 @@ export const TimelineDeadlinesView: React.FC = () => {
       <PageHeader eyebrow="Planning workspace" title="Timeline" description="Keep launches, milestones, and task deadlines visible in sequence." actions={<div className="flex flex-wrap items-center gap-2.5">
           <select
             value={selectedTypeFilter}
-            onChange={e => setSelectedTypeFilter(e.target.value as any)}
+            onChange={e => setSelectedTypeFilter(e.target.value as 'all' | 'launch' | 'milestone' | 'task')}
+            aria-label="Filter timeline by event type"
             className="px-3.5 py-2 text-xs bg-surface-2 border border-line rounded-xl text-content font-bold outline-none shadow-sm focus:border-indigo-500"
           >
             <option value="all">All Events</option>
@@ -276,6 +282,7 @@ export const TimelineDeadlinesView: React.FC = () => {
           <select
             value={selectedProjectFilter}
             onChange={e => setSelectedProjectFilter(e.target.value)}
+            aria-label="Filter timeline by project"
             className="px-3.5 py-2 text-xs bg-surface-2 border border-line rounded-xl text-content font-bold outline-none shadow-sm focus:border-indigo-500"
           >
             <option value="all">All Projects</option>
@@ -289,15 +296,20 @@ export const TimelineDeadlinesView: React.FC = () => {
             onClick={handleExportICS}
             disabled={allItems.filter(i => !i.completed).length === 0}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-content-muted hover:text-content text-xs font-black disabled:opacity-40 transition-all"
-            title="Export visible deadlines as ICS calendar file"
+            title={allItems.filter(i => !i.completed).length === 0 ? 'Nothing to export — all visible items are completed' : 'Export pending deadlines as ICS calendar file (completed items excluded)'}
           >
             <Download className="w-3.5 h-3.5" />
             <span>Export ICS</span>
           </button>
 
-          {isSyncing && <Loader2 className="w-4 h-4 text-content-faint animate-spin" />}
-          {serverGroups && (
-            <span className="text-[12px] font-mono font-bold text-content-faint bg-surface-2 border border-line px-2 py-1 rounded-lg">
+          {isSyncing && <Loader2 className="w-4 h-4 text-content-faint animate-spin" aria-label="Syncing server counts" />}
+          {syncError && (
+            <span className="text-[12px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2 py-1 rounded-lg" role="status">
+              {syncError}
+            </span>
+          )}
+          {serverGroups && !syncError && (
+            <span className="text-[12px] font-mono font-bold text-content-faint bg-surface-2 border border-line px-2 py-1 rounded-lg" title="Authoritative server counts for current filters">
               server: {serverGroups.overdue} overdue · {serverGroups.thisWeek} this week
             </span>
           )}
@@ -306,10 +318,13 @@ export const TimelineDeadlinesView: React.FC = () => {
       {/* Timeline List */}
       <div className="space-y-8">
         {allItems.length === 0 ? (
-          <div className="p-12 text-center text-xs text-content-faint bg-surface border border-line rounded-3xl">
-            <CalendarClock className="w-8 h-8 mx-auto text-content-faint mb-2" />
-            No deadlines matching filter criteria.
-          </div>
+          <EmptyState
+            title={projects.length === 0 ? 'No deadlines yet' : 'No deadlines match these filters'}
+            description={projects.length === 0 ? 'Create a project with a launch date to start your timeline.' : 'Try widening the type/project filters or clearing search.'}
+            action={projects.length === 0
+              ? <Button size="sm" onClick={() => openQuickAdd('project')}>New project</Button>
+              : <div className="flex flex-wrap justify-center gap-2"><Button size="sm" tone="secondary" onClick={() => { setSelectedTypeFilter('all'); setSelectedProjectFilter('all'); }}>Clear filters</Button><Button size="sm" onClick={() => openQuickAdd('task')}>New task deadline</Button></div>}
+          />
         ) : (
           <>
             {renderSection('⚠️ Overdue Action Items', overdueItems, true)}

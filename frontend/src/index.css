@@ -69,7 +69,7 @@
   body {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     letter-spacing: -0.01em;
-    @apply bg-slate-50 text-slate-900 dark:bg-[#0A0A0B] dark:text-slate-100 transition-colors duration-200;
+    @apply bg-slate-50 text-slate-900 dark:bg-surface-inverse dark:text-slate-100 transition-colors duration-200;
   }
 
   code, kbd, samp, pre {
@@ -94,10 +94,10 @@
   }
 }
 
-/* Custom crisp scrollbar */
+/* Custom crisp scrollbar - kept wide enough for pointer + keyboard users */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {

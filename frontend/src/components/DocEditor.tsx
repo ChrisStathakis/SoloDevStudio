@@ -3,7 +3,8 @@ import { api } from '../services/api';
 import { mapProjectDocFromApi } from '../services/mappers';
 import type { Project, ProjectDoc } from '../types';
 import { useAgentFilters } from '../hooks/useAgentFilters';
-import { marked } from 'marked';
+import { renderMarkdownSafe } from '../utils/markdown';
+import { useToast } from './Toaster';
 import {
   FileText,
   Trash2,
@@ -17,8 +18,6 @@ import {
   Copy,
   Check
 } from 'lucide-react';
-
-marked.setOptions({ gfm: true, breaks: true });
 
 interface DocEditorProps {
   allProjects: Project[];
@@ -46,7 +45,17 @@ export const DocEditor: React.FC<DocEditorProps> = ({
   const [draftProjectIds, setDraftProjectIds] = useState<string[]>(
     initialDoc ? initialDoc.projectIds : preselectedProjectIds
   );
+  // Resync draft when a different doc is opened in the same mounted instance
+  React.useEffect(() => {
+    setDraftTitle(initialDoc?.title || '');
+    setDraftContent(initialDoc?.content || '');
+    setDraftFilterId(initialDoc?.filterId || null);
+    setDraftProjectIds(initialDoc ? initialDoc.projectIds : preselectedProjectIds);
+    setEditorMode(!initialDoc ? 'edit' : 'preview');
+    setError(null);
+  }, [initialDoc?.id]);
   const { filters: agentFilters } = useAgentFilters();
+  const { confirm } = useToast();
   const [editorMode, setEditorMode] = useState<'edit' | 'preview'>(isNew ? 'edit' : 'preview');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,10 +111,17 @@ export const DocEditor: React.FC<DocEditorProps> = ({
   const handleDelete = async () => {
     if (!initialDoc) return;
     const removingFromProject = Boolean(contextProjectId);
-    const message = removingFromProject
-      ? `Remove skill "${initialDoc.title}" from this project? It will remain available in other linked projects.`
-      : `Delete skill "${initialDoc.title}"? It will be removed from all linked projects.`;
-    if (!window.confirm(message)) return;
+    const ok = await confirm({
+      title: removingFromProject
+        ? `Remove skill "${initialDoc.title}" from this project?`
+        : `Delete skill "${initialDoc.title}"?`,
+      description: removingFromProject
+        ? 'It will remain available in other linked projects.'
+        : 'It will be removed from all linked projects.',
+      confirmLabel: removingFromProject ? 'Remove' : 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       if (contextProjectId) {
         await api.delete(`/projects/${contextProjectId}/agents/${initialDoc.id}/`);
@@ -120,7 +136,7 @@ export const DocEditor: React.FC<DocEditorProps> = ({
   };
 
   const renderedHtml = useMemo(
-    () => (editorMode === 'preview' ? String(marked.parse(draftContent || '')) : ''),
+    () => (editorMode === 'preview' ? renderMarkdownSafe(draftContent || '') : ''),
     [editorMode, draftContent]
   );
 

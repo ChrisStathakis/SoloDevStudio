@@ -14,8 +14,9 @@ import {
   Trash2,
   MoveRight
 } from 'lucide-react';
-import { PriorityQuadrant, QUADRANT_CONFIG, STAGE_CONFIG } from '../types';
+import { PriorityQuadrant, QUADRANT_CONFIG, STAGE_CONFIG, Task } from '../types';
 import { PageHeader } from './ui';
+import { useToast } from './Toaster';
 
 export const PriorityMatrixView: React.FC = () => {
   const { 
@@ -33,6 +34,7 @@ export const PriorityMatrixView: React.FC = () => {
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>('all');
   const [showCompleted, setShowCompleted] = useState<boolean>(false);
   const [quickTaskInput, setQuickTaskInput] = useState<{ [key in PriorityQuadrant]?: string }>({});
+  const { toast, confirm } = useToast();
 
   const filteredTasks = tasks.filter(task => {
     const matchesProject = selectedProjectFilter === 'all' || task.projectId === selectedProjectFilter;
@@ -46,9 +48,12 @@ export const PriorityMatrixView: React.FC = () => {
   const handleQuickAdd = (quadrant: PriorityQuadrant) => {
     const title = quickTaskInput[quadrant];
     if (!title || !title.trim()) return;
+    if (selectedProjectFilter === 'all' && projects.length === 0) return;
+    const targetProjectId = selectedProjectFilter !== 'all' ? selectedProjectFilter : projects[0]?.id;
+    if (!targetProjectId) return;
 
     addTask({
-      projectId: selectedProjectFilter !== 'all' ? selectedProjectFilter : (projects[0]?.id ?? 'proj-1'),
+      projectId: targetProjectId,
       title: title.trim(),
       stage: 'development',
       quadrant,
@@ -60,6 +65,35 @@ export const PriorityMatrixView: React.FC = () => {
     } as any);
 
     setQuickTaskInput(prev => ({ ...prev, [quadrant]: '' }));
+  };
+
+  const handleDeleteTask = async (task: Task) => {
+    const ok = await confirm({
+      title: `Delete "${task.title}"?`,
+      description: 'The task and its subtasks will be removed. You can undo right after.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const { id, createdAt, timeSpentMinutes, ...snapshot } = task;
+    void id; void createdAt; void timeSpentMinutes;
+    try {
+      await deleteTask(task.id);
+      toast({
+        title: `Deleted "${task.title}"`,
+        tone: 'success',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            void addTask({ ...snapshot, completed: false } as Parameters<typeof addTask>[0])
+              .then(() => toast({ title: 'Task restored', tone: 'success' }))
+              .catch(() => toast({ title: 'Could not restore task', tone: 'error' }));
+          },
+        },
+      });
+    } catch {
+      toast({ title: 'Could not delete task', tone: 'error' });
+    }
   };
 
   const quadrants: PriorityQuadrant[] = ['q1_do', 'q2_schedule', 'q3_delegate', 'q4_eliminate'];
@@ -83,9 +117,10 @@ export const PriorityMatrixView: React.FC = () => {
           <button
             type="button"
             onClick={() => setShowCompleted(!showCompleted)}
+            aria-pressed={showCompleted}
             className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all ${
               showCompleted
-                ? 'bg-white text-slate-900 border-white'
+                ? 'bg-indigo-600 text-white border-indigo-600'
                 : 'bg-surface-2 text-content-faint border-line hover:text-content'
             }`}
           >
@@ -127,8 +162,12 @@ export const PriorityMatrixView: React.FC = () => {
                 </p>
 
                 {/* Quick Add Input inside Quadrant */}
+                {selectedProjectFilter === 'all' && projects.length > 1 && (
+                  <p className="mb-2 text-[11px] text-content-faint">Quick add will use <span className="font-bold text-content">{projects[0]?.title}</span>. Filter to a project to target it precisely.</p>
+                )}
                 <div className="flex items-center gap-2 mb-4">
                   <input
+                    id={`quick-add-${quadrantKey}`}
                     type="text"
                     placeholder={`+ Quick add ${qConfig.title} task...`}
                     value={inputValue}
@@ -149,8 +188,9 @@ export const PriorityMatrixView: React.FC = () => {
                 {/* Task Items */}
                 <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
                   {quadTasks.length === 0 ? (
-                    <div className="text-center py-10 text-xs text-content-faint border border-dashed border-line rounded-2xl">
-                      No tasks in this quadrant.
+                    <div className="text-center py-8 space-y-3 border border-dashed border-line rounded-2xl">
+                      <p className="text-xs text-content-faint">No tasks in this quadrant.</p>
+                      <button type="button" onClick={() => document.getElementById(`quick-add-${quadrantKey}`)?.focus()} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500">Add the first one above</button>
                     </div>
                   ) : (
                     quadTasks.map(task => {
@@ -221,22 +261,26 @@ export const PriorityMatrixView: React.FC = () => {
                               </button>
 
                               {/* Move Quadrant quick cycle */}
+                              <label className="sr-only" htmlFor={`move-${task.id}`}>Move {task.title} to quadrant</label>
                               <select
+                                id={`move-${task.id}`}
                                 value={task.quadrant}
                                 onChange={e => moveTaskQuadrant(task.id, e.target.value as PriorityQuadrant)}
                                 className="text-[12px] bg-surface-3 text-content-muted rounded-md px-1.5 py-0.5 border border-line-strong outline-none font-bold cursor-pointer"
-                                title="Move to another quadrant"
+                                title="Move to another quadrant (Q1 Do, Q2 Schedule, Q3 Quick Wins, Q4 Backlog)"
                               >
-                                <option value="q1_do">Q1</option>
-                                <option value="q2_schedule">Q2</option>
-                                <option value="q3_delegate">Q3</option>
-                                <option value="q4_eliminate">Q4</option>
+                                <option value="q1_do">Q1 Do</option>
+                                <option value="q2_schedule">Q2 Schedule</option>
+                                <option value="q3_delegate">Q3 Wins</option>
+                                <option value="q4_eliminate">Q4 Backlog</option>
                               </select>
 
                               <button
                                 type="button"
-                                onClick={() => deleteTask(task.id)}
-                                className="p-1 text-content-faint hover:text-rose-400 rounded transition-colors"
+                                onClick={() => void handleDeleteTask(task)}
+                                aria-label={`Delete task ${task.title}`}
+                                title="Delete task"
+                                className="p-2 text-content-faint hover:text-rose-400 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>

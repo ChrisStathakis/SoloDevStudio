@@ -105,10 +105,9 @@ def create_project_terminal(request, pk=None):
 def list_terminals(request):
     project_id = request.query_params.get('project') or None
     alive_only = (request.query_params.get('alive') or '').lower() in ('1', 'true', 'yes')
-    # A missing project filter must not leak unrelated project consoles into a
-    # project drawer. The drawer is only meaningful in a project context.
-    if not project_id:
-        return Response([])
+    # Without a project filter this returns all of the user's sessions (used by
+    # the global live-consoles pill). The per-project drawer always passes
+    # ?project=<id> so it keeps its scoped behavior.
     sessions = terminal_manager.list_for_user(
         owner_id=request.user.id, project_id=project_id, alive_only=alive_only
     )
@@ -240,7 +239,9 @@ def _stream_events(session, start_offset):
             last_emitted = time.monotonic()
 
         if not payload_sent:
-            time.sleep(0.1)
+            # Short idle poll so pasted-input echo and interactive output feel
+            # responsive; this loop only re-checks an in-memory buffer cursor.
+            time.sleep(0.03)
 
         if time.monotonic() - started > STREAM_MAX_SECONDS:
             yield _ndjson({'k': True, 't': cursor})

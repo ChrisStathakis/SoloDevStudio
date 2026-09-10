@@ -19,8 +19,15 @@ export function bbox(o: SketchObject): Box {
   if (o.type === 'path' || o.type === 'arrow' || o.type === 'line') {
     const pts = o.points && o.points.length >= 2 ? o.points : [];
     if (pts.length < 2) return { x: o.x, y: o.y, w: o.w, h: o.h };
-    const xs = pts.filter((_, i) => i % 2 === 0);
-    const ys = pts.filter((_, i) => i % 2 === 1);
+    let xs = pts.filter((_, i) => i % 2 === 0);
+    let ys = pts.filter((_, i) => i % 2 === 1);
+    if ((o.type === 'arrow' || o.type === 'line') && o.route && o.route !== 'straight' && pts.length >= 4) {
+      // Routed connectors bow outside the straight endpoints: pad so selection
+      // boxes, marquees, and exports always contain the visible stroke.
+      const r = routeConnector(o.route, pts[0], pts[1], pts[pts.length - 2], pts[pts.length - 1]);
+      xs = r.pts.filter((_, i) => i % 2 === 0);
+      ys = r.pts.filter((_, i) => i % 2 === 1);
+    }
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
     const minY = Math.min(...ys);
@@ -91,6 +98,14 @@ export function distToSegment(px: number, py: number, x0: number, y0: number, x1
 export function hitTest(o: SketchObject, px: number, py: number, tol: number): boolean {
   if (o.type === 'arrow' || o.type === 'line') {
     const p = o.points || [];
+    if (p.length >= 4 && o.route && o.route !== 'straight') {
+      const r = routeConnector(o.route, p[0], p[1], p[p.length - 2], p[p.length - 1]);
+      const q = r.pts;
+      for (let i = 2; i < q.length; i += 2) {
+        if (distToSegment(px, py, q[i - 2], q[i - 1], q[i], q[i + 1]) <= tol) return true;
+      }
+      return false;
+    }
     return distToSegment(px, py, p[0], p[1], p[p.length - 2], p[p.length - 1]) <= tol;
   }
   if (o.type === 'path') {
@@ -102,9 +117,13 @@ export function hitTest(o: SketchObject, px: number, py: number, tol: number): b
     return false;
   }
   if (o.type === 'sticky' || o.type === 'text') {
-    return pointInBox(bbox(o), px, py);
+    return pointInBox(bbox(o), px, py, tol * 0.5);
   }
   const b = bbox(o);
+  // Hollow shapes are edge-selectable so objects underneath stay reachable
+  if (!o.fill) {
+    return distToShapeEdge(o.type, b, px, py) <= tol;
+  }
   const cx = b.x + b.w / 2;
   const cy = b.y + b.h / 2;
   if (o.type === 'ellipse') {
@@ -122,13 +141,52 @@ export function hitTest(o: SketchObject, px: number, py: number, tol: number): b
   return pointInBox(b, px, py, tol);
 }
 
-/** Intersect a ray from box center toward (tx,ty) with the box perimeter. */
-export function edgePoint(b: Box, tx: number, ty: number): { x: number; y: number } {
+/** Distance from a point to the true edge of a rect/ellipse/diamond shape. */
+export function distToShapeEdge(type: SketchObjectType, b: Box, px: number, py: number): number {
+  if (type === 'ellipse') {
+    const rx = Math.max(0.001, b.w / 2);
+    const ry = Math.max(0.001, b.h / 2);
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const norm = Math.sqrt(((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2);
+    // Approximate world-space distance from the ellipse perimeter
+    return Math.abs(norm - 1) * Math.min(rx, ry);
+  }
+  if (type === 'diamond') {
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const d = Math.abs(px - cx) / (b.w / 2 || 1) + Math.abs(py - cy) / (b.h / 2 || 1);
+    return Math.abs(d - 1) * (Math.min(b.w, b.h) / 2);
+  }
+  // rect: distance to the box perimeter (0 when inside)
+  const dx = Math.max(b.x - px, 0, px - (b.x + b.w));
+  const dy = Math.max(b.y - py, 0, py - (b.y + b.h));
+  if (dx === 0 && dy === 0) {
+    // Inside: distance to nearest edge
+    return Math.min(px - b.x, b.x + b.w - px, py - b.y, b.y + b.h - py);
+  }
+  return Math.hypot(dx, dy);
+}
+
+/** Intersect a ray from shape center toward (tx,ty) with the true shape edge. */
+export function edgePoint(b: Box, tx: number, ty: number, type?: SketchObjectType): { x: number; y: number } {
   const cx = b.x + b.w / 2;
   const cy = b.y + b.h / 2;
   const dx = tx - cx;
   const dy = ty - cy;
   if (dx === 0 && dy === 0) return { x: cx, y: cy };
+  if (type === 'ellipse') {
+    const rx = Math.max(0.001, b.w / 2);
+    const ry = Math.max(0.001, b.h / 2);
+    const t = 1 / Math.sqrt((dx / rx) ** 2 + (dy / ry) ** 2);
+    return { x: cx + dx * t, y: cy + dy * t };
+  }
+  if (type === 'diamond') {
+    const hw = Math.max(0.001, b.w / 2);
+    const hh = Math.max(0.001, b.h / 2);
+    const t = 1 / (Math.abs(dx) / hw + Math.abs(dy) / hh);
+    return { x: cx + dx * t, y: cy + dy * t };
+  }
   const hw = b.w / 2;
   const hh = b.h / 2;
   const scale = 1 / Math.max(Math.abs(dx) / (hw || 1), Math.abs(dy) / (hh || 1));
@@ -152,12 +210,12 @@ export function resolveArrow(
   const sb = o.startBinding?.objectId ? byId.get(o.startBinding.objectId) : null;
   const eb = o.endBinding?.objectId ? byId.get(o.endBinding.objectId) : null;
   if (sb) {
-    const ep = edgePoint(bbox(sb), x1, y1);
+    const ep = edgePoint(bbox(sb), x1, y1, sb.type);
     x0 = ep.x;
     y0 = ep.y;
   }
   if (eb) {
-    const ep = edgePoint(bbox(eb), x0, y0);
+    const ep = edgePoint(bbox(eb), x0, y0, eb.type);
     x1 = ep.x;
     y1 = ep.y;
   }
@@ -172,23 +230,49 @@ export function wrapText(
   maxWidth: number,
   lineHeight: number,
 ) {
-  const paragraphs = (text || '').split('\n');
   let cy = y;
-  for (const para of paragraphs) {
+  for (const line of wrapLines(text, maxWidth, s => ctx.measureText(s).width)) {
+    ctx.fillText(line, x, cy);
+    cy += lineHeight;
+  }
+}
+
+/** Word-agnostic line splitter shared by canvas rendering and SVG export. */
+export function wrapLines(text: string, maxWidth: number, measure: (s: string) => number): string[] {
+  const out: string[] = [];
+  for (const para of (text || '').split('\n')) {
     let line = '';
     for (const ch of para) {
       const test = line + ch;
-      if (ctx.measureText(test).width > maxWidth && line) {
-        ctx.fillText(line, x, cy);
+      if (measure(test) > maxWidth && line) {
+        out.push(line);
         line = ch;
-        cy += lineHeight;
       } else {
         line = test;
       }
     }
-    ctx.fillText(line, x, cy);
-    cy += lineHeight;
+    out.push(line);
   }
+  return out;
+}
+
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+function getMeasureCtx(): CanvasRenderingContext2D | null {
+  if (measureCtx !== undefined) return measureCtx;
+  try {
+    measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+  } catch {
+    measureCtx = null;
+  }
+  return measureCtx;
+}
+
+/** Wrap text for SVG export using the same metrics as a canvas font string. */
+export function wrapLinesForSvg(text: string, maxWidth: number, font: string): string[] {
+  const ctx = getMeasureCtx();
+  if (!ctx) return (text || '').split('\n');
+  ctx.font = font;
+  return wrapLines(text, maxWidth, s => ctx.measureText(s).width);
 }
 
 export function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -241,6 +325,83 @@ export const CANVAS_H = 500;
 
 export function snap(v: number, grid: number): number {
   return Math.round(v / grid) * grid;
+}
+
+// ---- Routed connectors (straight / curve / elbow) ----
+export interface RoutedConnector {
+  kind: 'line' | 'curve' | 'elbow';
+  /** Polyline approximation of the visible stroke (flat coords). */
+  pts: number[];
+  /** Quadratic control point for curves (undefined otherwise). */
+  control?: { x: number; y: number };
+  startAngle: number;
+  endAngle: number;
+  label: { x: number; y: number };
+}
+
+/** Route a connector between endpoints. Pure geometry shared by canvas + SVG. */
+export function routeConnector(
+  route: 'straight' | 'curve' | 'elbow' | undefined,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  waypoints?: number[],
+): RoutedConnector {
+  if (route === 'curve') {
+    const mx = (x0 + x1) / 2;
+    const my = (y0 + y1) / 2;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = Math.hypot(dx, dy) || 1;
+    const k = Math.min(len * 0.25, 120);
+    const cx = mx + (-dy / len) * k;
+    const cy = my + (dx / len) * k;
+    // Sample the quadratic for hit-testing / bbox
+    const pts: number[] = [];
+    for (let i = 0; i <= 10; i++) {
+      const t = i / 10;
+      const mt = 1 - t;
+      pts.push(mt * mt * x0 + 2 * mt * t * cx + t * t * x1, mt * mt * y0 + 2 * mt * t * cy + t * t * y1);
+    }
+    return {
+      kind: 'curve',
+      pts,
+      control: { x: cx, y: cy },
+      startAngle: Math.atan2(cy - y0, cx - x0),
+      endAngle: Math.atan2(y1 - cy, x1 - cx),
+      label: { x: mt2(x0, cx, x1), y: mt2(y0, cy, y1) },
+    };
+  }
+  if (route === 'elbow') {
+    // Custom waypoints define the full corner path; default is horizontal-first
+    const pts = waypoints && waypoints.length >= 2
+      ? [x0, y0, ...waypoints, x1, y1]
+      : [x0, y0, x1, y0, x1, y1];
+    const n = pts.length;
+    const startAngle = Math.atan2(pts[3] - pts[1], pts[2] - pts[0]);
+    const endAngle = Math.atan2(pts[n - 1] - pts[n - 3], pts[n - 2] - pts[n - 4]);
+    // Upper-middle vertex so labels sit on a corner, not an endpoint
+    const mid = Math.floor(n / 4) * 2;
+    return {
+      kind: 'elbow',
+      pts,
+      startAngle,
+      endAngle,
+      label: { x: pts[mid], y: pts[mid + 1] },
+    };
+  }
+  return {
+    kind: 'line',
+    pts: [x0, y0, x1, y1],
+    startAngle: Math.atan2(y1 - y0, x1 - x0),
+    endAngle: Math.atan2(y1 - y0, x1 - x0),
+    label: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 },
+  };
+}
+
+function mt2(a: number, c: number, b: number): number {
+  return 0.25 * a + 0.5 * c + 0.25 * b;
 }
 
 // ---- Perfect-Freehand (smooth pressure-sensitive strokes) ----

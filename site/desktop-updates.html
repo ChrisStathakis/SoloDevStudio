@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        
+        
+        
+        <link rel="shortcut icon" href="img/favicon.ico">
+        <title>Desktop updates - SoloDev Studio</title>
+        <link href="css/bootstrap.min.css" rel="stylesheet">
+        <link href="css/fontawesome.min.css" rel="stylesheet">
+        <link href="css/brands.min.css" rel="stylesheet">
+        <link href="css/solid.min.css" rel="stylesheet">
+        <link href="css/v4-font-face.min.css" rel="stylesheet">
+        <link href="css/base.css" rel="stylesheet">
+        <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" >
+        <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css" disabled>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script>hljs.highlightAll();</script> 
+    </head>
+
+    <body>
+        <div class="navbar fixed-top navbar-expand-lg navbar-dark bg-primary">
+            <div class="container">
+                <a class="navbar-brand" href="index.html">SoloDev Studio</a>
+                <!-- Expander button -->
+                <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#navbar-collapse" aria-controls="navbar-collapse" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <!-- Expanded navigation -->
+                <div id="navbar-collapse" class="navbar-collapse collapse">
+                        <!-- Main navigation -->
+                        <ul class="nav navbar-nav">
+                            <li class="nav-item">
+                                <a href="index.html" class="nav-link">Home</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="getting-started.html" class="nav-link">Getting started</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="user-guide.html" class="nav-link">User guide</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="architecture.html" class="nav-link">Architecture</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="api-reference.html" class="nav-link">API reference</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="operations.html" class="nav-link">Operations</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="desktop-updates.html" class="nav-link active" aria-current="page">Desktop updates</a>
+                            </li>
+                        </ul>
+
+                    <ul class="nav navbar-nav ms-md-auto">
+                        <li class="nav-item">
+                            <a href="#" class="nav-link" data-bs-toggle="modal" data-bs-target="#mkdocs_search_modal">
+                                <i class="fa fa-search"></i> Search
+                            </a>
+                        </li>
+                            <li class="nav-item">
+                                <a rel="prev" href="operations.html" class="nav-link">
+                                    <i class="fa fa-arrow-left"></i> Previous
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a rel="next" class="nav-link disabled">
+                                    Next <i class="fa fa-arrow-right"></i>
+                                </a>
+                            </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="container">
+            <div class="row">
+                    <div class="col-md-3"><div class="navbar-expand-md bs-sidebar hidden-print affix" role="complementary">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggler collapsed" data-bs-toggle="collapse" data-bs-target="#toc-collapse" title="Table of Contents">
+            <span class="fa fa-angle-down"></span>
+        </button>
+    </div>
+
+    
+    <div id="toc-collapse" class="navbar-collapse collapse card bg-body-tertiary">
+        <ul class="nav flex-column">
+            
+            <li class="nav-item" data-bs-level="1"><a href="#desktop-app-how-it-works-and-how-to-ship-updates" class="nav-link">Desktop app — how it works and how to ship updates</a>
+              <ul class="nav flex-column">
+            <li class="nav-item" data-bs-level="2"><a href="#how-the-app-works-at-runtime" class="nav-link">How the app works at runtime</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#shipping-a-manual-update" class="nav-link">Shipping a manual update</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#dev-loop-no-installer" class="nav-link">Dev loop (no installer)</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#caveats" class="nav-link">Caveats</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+              </ul>
+            </li>
+        </ul>
+    </div>
+</div></div>
+                    <div class="col-md-9" role="main">
+
+<h1 id="desktop-app-how-it-works-and-how-to-ship-updates">Desktop app — how it works and how to ship updates</h1>
+<p>SoloDev Studio ships as a Windows Electron app (NSIS installer in <code>release/</code>).
+There is <strong>no auto-update mechanism</strong>: no <code>electron-updater</code> dependency, no update
+check in <code>desktop/main.cjs</code>, and no <code>publish</code> provider in the electron-builder
+config. (<code>release/latest.yml</code> and <code>.blockmap</code> files are electron-builder
+byproducts; nothing reads them at runtime.) Updates are manual: build a new
+installer and have users run it.</p>
+<h2 id="how-the-app-works-at-runtime">How the app works at runtime</h2>
+<ul>
+<li><strong>Shell</strong> (<code>desktop/main.cjs</code>): on launch it spawns the frozen Django backend
+  (<code>resources/backend/solodev-backend.exe</code>) on a loopback port — an automatically
+  picked free port, or the port saved in Settings — waits up to ~30s for
+  <code>GET /api/health/</code>, then opens a 1440×960 <code>BrowserWindow</code> loading the UI from
+  the custom <code>app://solodev/index.html</code> protocol served out of
+  <code>resources/frontend-dist</code>. Backend output is piped to the Electron console;
+  the backend process is killed when all windows close / before quit.</li>
+<li><strong>Bridge</strong> (<code>desktop/preload.cjs</code>): exposes <code>window.solodevDesktop</code>
+  (<code>isDesktop</code>, <code>apiBase</code>, <code>getSettings</code>, <code>setBackendPort</code>). The frontend uses it
+  in <code>frontend/src/services/api.ts</code> (API base = the dynamic loopback URL, not
+  <code>VITE_API_URL</code>) and shows a “Desktop app” section in Settings for the backend
+  port (stored in <code>%AppData%/…/desktop-settings.json</code>, restart required).</li>
+<li><strong>Backend</strong> (<code>server/desktop_backend.py</code>): threaded WSGI on <code>127.0.0.1</code>, runs
+  migrations on every start, per-user SQLite DB at <code>&lt;userData&gt;/solodev.sqlite3</code>,
+  <code>DEBUG=False</code>, CORS locked to <code>app://solodev</code>. Frozen with PyInstaller
+  (<code>desktop/backend.spec</code>, which bundles the <code>winpty</code> DLLs needed for in-app
+  terminals).</li>
+<li><strong>User data safety:</strong> the database and settings live in the OS user-data
+  directory, <em>not</em> the install directory — reinstalling never wipes them.</li>
+</ul>
+<h2 id="shipping-a-manual-update">Shipping a manual update</h2>
+<ol>
+<li>Bump <code>version</code> in the root <code>package.json</code> (currently <code>1.0.2</code>).</li>
+<li>Build everything (frontend bundle → PyInstaller backend → NSIS installer):</li>
+</ol>
+<p><code>powershell
+   npm run desktop:build</code></p>
+<p>Equivalent step-by-step:</p>
+<p><code>powershell
+   npm run desktop:build:frontend   # vite build -&gt; frontend/dist
+   npm run desktop:build:backend    # PyInstaller -&gt; backend-dist/solodev-backend.exe
+   npx electron-builder --win       # NSIS installer -&gt; release/</code></p>
+<ol>
+<li>Take <code>release/SoloDev-Studio-Setup-&lt;version&gt;.exe</code> and distribute it; the user
+   runs it (the installer allows changing the directory and creates Desktop /
+   Start Menu shortcuts). The old version is replaced; DB and settings carry over.</li>
+<li>Delete stale installers from <code>release/</code> when shipping (only the latest
+   <code>Setup-&lt;version&gt;.exe</code> should remain).</li>
+</ol>
+<h2 id="dev-loop-no-installer">Dev loop (no installer)</h2>
+<pre><code class="language-powershell">npm run desktop:dev   # builds both bundles, then runs `electron .`
+</code></pre>
+<p>This runs Electron unpackaged against local <code>frontend/dist</code> and <code>backend-dist</code>,
+with the same spawn-backend-on-loopback behavior as the installed app.</p>
+<h2 id="caveats">Caveats</h2>
+<ul>
+<li>Each release is a full ~140MB download (it embeds Chromium, Python, and all
+  dependencies).</li>
+<li>Users get no in-app notice of new versions; announce updates out-of-band.</li>
+<li>Unsigned builds trigger Windows SmartScreen warnings on install.</li>
+<li>If manual updates ever become painful, the upgrade path is <code>electron-updater</code></li>
+<li>a GitHub Releases <code>publish</code> config + <code>checkForUpdatesAndNotify()</code> in
+  <code>desktop/main.cjs</code>.</li>
+</ul></div>
+            </div>
+        </div>
+
+        <footer class="col-md-12">
+            <hr>
+            <p>Documentation built with <a href="https://www.mkdocs.org/">MkDocs</a>.</p>
+        </footer>
+        <script src="js/bootstrap.bundle.min.js"></script>
+        <script>
+            var base_url = ".",
+                shortcuts = {"help": 191, "next": 78, "previous": 80, "search": 83};
+        </script>
+        <script src="js/base.js"></script>
+        <script src="search/main.js"></script>
+
+        <div class="modal" id="mkdocs_search_modal" tabindex="-1" role="dialog" aria-labelledby="searchModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="searchModalLabel">Search</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>From here you can search these documents. Enter your search terms below.</p>
+                <form>
+                    <div class="form-group">
+                        <input type="search" class="form-control" placeholder="Search..." id="mkdocs-search-query" title="Type search term here">
+                    </div>
+                </form>
+                <div id="mkdocs-search-results" data-no-results-text="No results found"></div>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div><div class="modal" id="mkdocs_keyboard_modal" tabindex="-1" role="dialog" aria-labelledby="keyboardModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="keyboardModalLabel">Keyboard Shortcuts</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th style="width: 20%;">Keys</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="help shortcut"><kbd>?</kbd></td>
+                    <td>Open this help</td>
+                  </tr>
+                  <tr>
+                    <td class="next shortcut"><kbd>n</kbd></td>
+                    <td>Next page</td>
+                  </tr>
+                  <tr>
+                    <td class="prev shortcut"><kbd>p</kbd></td>
+                    <td>Previous page</td>
+                  </tr>
+                  <tr>
+                    <td class="search shortcut"><kbd>s</kbd></td>
+                    <td>Search</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div>
+
+    </body>
+</html>

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Play, 
@@ -18,13 +18,15 @@ import {
   Layers,
   CheckSquare
 } from 'lucide-react';
-import { STAGE_CONFIG, ProjectStage } from '../types';
+import { STAGE_CONFIG, ProjectStage, TimeEntry } from '../types';
 import { PageHeader, Button } from './ui';
+import { useToast } from './Toaster';
 
 export const TimeTrackerView: React.FC = () => {
   const {
     timeTracker,
     startTimer,
+    setTimerTarget,
     pauseTimer,
     resumeTimer,
     stopTimer,
@@ -38,6 +40,7 @@ export const TimeTrackerView: React.FC = () => {
 
   const [sessionNotes, setSessionNotes] = useState('');
   const [showManualModal, setShowManualModal] = useState(false);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   // Manual entry form
   const [manualProjectId, setManualProjectId] = useState(projects[0]?.id || '');
@@ -45,6 +48,15 @@ export const TimeTrackerView: React.FC = () => {
   const [manualMinutes, setManualMinutes] = useState('45');
   const [manualNotes, setManualNotes] = useState('');
   const [manualDate, setManualDate] = useState(new Date().toISOString().split('T')[0]);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const { toast, confirm } = useToast();
+
+  // Keep manual project default in sync once projects load async
+  useEffect(() => {
+    if (!manualProjectId && projects.length > 0) setManualProjectId(projects[0].id);
+  }, [projects, manualProjectId]);
+
+  const todayIso = new Date().toISOString().split('T')[0];
 
   // Format MM:SS
   const formatTime = (seconds: number) => {
@@ -80,9 +92,23 @@ export const TimeTrackerView: React.FC = () => {
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setManualError(null);
+    const minutes = parseInt(manualMinutes, 10);
+    if (!manualProjectId) {
+      setManualError('Select a project for this time log.');
+      return;
+    }
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+      setManualError('Enter a duration between 1 and 1440 minutes.');
+      return;
+    }
+    if (!manualDate || manualDate > todayIso) {
+      setManualError('Date cannot be in the future.');
+      return;
+    }
     const proj = projects.find(p => p.id === manualProjectId);
     const tsk = tasks.find(t => t.id === manualTaskId);
-    const durSec = (parseInt(manualMinutes) || 45) * 60;
+    const durSec = minutes * 60;
 
     addManualTimeEntry({
       projectId: manualProjectId,
@@ -98,6 +124,37 @@ export const TimeTrackerView: React.FC = () => {
 
     setShowManualModal(false);
     setManualNotes('');
+    setSessionNotes('');
+    setManualError(null);
+  };
+
+  const handleDeleteEntry = async (entry: TimeEntry) => {
+    const ok = await confirm({
+      title: 'Delete this time entry?',
+      description: `"${entry.notes || entry.taskTitle || 'Focus block'}" (${Math.round(entry.durationSeconds / 60)} min) will be removed. You can undo right after.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const { id, ...snapshot } = entry;
+    void id;
+    try {
+      await deleteTimeEntry(entry.id);
+      toast({
+        title: 'Time entry deleted',
+        tone: 'success',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            void addManualTimeEntry(snapshot)
+              .then(() => toast({ title: 'Time entry restored', tone: 'success' }))
+              .catch(() => toast({ title: 'Could not restore entry', tone: 'error' }));
+          },
+        },
+      });
+    } catch {
+      toast({ title: 'Could not delete entry', tone: 'error' });
+    }
   };
 
   return (
@@ -127,10 +184,11 @@ export const TimeTrackerView: React.FC = () => {
             }`} />
 
             {/* Mode & Phase Switches */}
-            <div className="flex items-center gap-2 mb-6 z-10">
+            <div className="flex items-center gap-2 mb-6 z-10" role="group" aria-label="Timer mode">
               <button
                 type="button"
                 id="btn-pomodoro-work"
+                aria-pressed={timeTracker.mode === 'pomodoro' && timeTracker.pomodoroType === 'work'}
                 onClick={() => switchPomodoroPhase('work')}
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   timeTracker.mode === 'pomodoro' && timeTracker.pomodoroType === 'work'
@@ -145,6 +203,7 @@ export const TimeTrackerView: React.FC = () => {
               <button
                 type="button"
                 id="btn-pomodoro-break"
+                aria-pressed={timeTracker.mode === 'pomodoro' && timeTracker.pomodoroType === 'short_break'}
                 onClick={() => switchPomodoroPhase('short_break')}
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   timeTracker.mode === 'pomodoro' && timeTracker.pomodoroType === 'short_break'
@@ -159,6 +218,7 @@ export const TimeTrackerView: React.FC = () => {
               <button
                 type="button"
                 id="btn-stopwatch-mode"
+                aria-pressed={timeTracker.mode === 'stopwatch'}
                 onClick={() => startTimer('stopwatch')}
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                   timeTracker.mode === 'stopwatch'
@@ -173,7 +233,7 @@ export const TimeTrackerView: React.FC = () => {
 
             {/* Large Digit Display */}
             <div className="my-4 z-10">
-              <div className="font-mono text-7xl sm:text-8xl font-black tracking-tight text-content tabular-nums drop-shadow-lg">
+              <div className="font-mono text-7xl sm:text-8xl font-black tracking-tight text-content tabular-nums drop-shadow-lg" role="timer" aria-live="polite" aria-label={`Timer ${formatTime(currentSeconds)}`}>
                 {formatTime(currentSeconds)}
               </div>
               <div className="text-[13px] font-black uppercase tracking-[0.25em] text-content-faint mt-2 font-mono">
@@ -191,9 +251,11 @@ export const TimeTrackerView: React.FC = () => {
                 ACTIVE FOCUS TARGET
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <label className="sr-only" htmlFor="focus-target-project">Focus target project</label>
                 <select
+                  id="focus-target-project"
                   value={timeTracker.projectId || ''}
-                  onChange={e => startTimer(timeTracker.mode, e.target.value || undefined, undefined)}
+                  onChange={e => setTimerTarget(e.target.value || undefined, undefined)}
                   className="px-3 py-2 text-xs bg-surface border border-line rounded-xl text-content font-medium outline-none focus:border-indigo-500"
                 >
                   <option value="">No Project Assigned</option>
@@ -202,9 +264,11 @@ export const TimeTrackerView: React.FC = () => {
                   ))}
                 </select>
 
+                <label className="sr-only" htmlFor="focus-target-task">Focus target task</label>
                 <select
+                  id="focus-target-task"
                   value={timeTracker.taskId || ''}
-                  onChange={e => startTimer(timeTracker.mode, timeTracker.projectId, e.target.value || undefined)}
+                  onChange={e => setTimerTarget(timeTracker.projectId, e.target.value || undefined)}
                   className="px-3 py-2 text-xs bg-surface border border-line rounded-xl text-content font-medium outline-none focus:border-indigo-500"
                 >
                   <option value="">No Specific Task</option>
@@ -215,6 +279,7 @@ export const TimeTrackerView: React.FC = () => {
                     ))}
                 </select>
               </div>
+              <p className="mt-2 text-[11px] text-content-faint">Changing the target won’t restart a running timer. Press Start to apply.</p>
             </div>
 
             {/* Controls: Start / Pause / Stop */}
@@ -261,18 +326,18 @@ export const TimeTrackerView: React.FC = () => {
               )}
             </div>
 
-            {/* Session Notes input */}
-            {(timeTracker.isRunning || timeTracker.secondsElapsed > 0) && (
-              <div className="w-full max-w-md mt-4 z-10">
-                <input
-                  type="text"
-                  placeholder="Notes on what you are accomplishing in this sprint..."
-                  value={sessionNotes}
-                  onChange={e => setSessionNotes(e.target.value)}
-                  className="w-full px-4 py-2 text-xs bg-surface-3 border border-line rounded-xl text-content placeholder-slate-500 outline-none focus:border-indigo-500"
-                />
-              </div>
-            )}
+            {/* Session Notes input - always available so intent is captured before start */}
+            <div className="w-full max-w-md mt-4 z-10">
+              <label className="sr-only" htmlFor="session-notes">Session notes</label>
+              <input
+                id="session-notes"
+                type="text"
+                placeholder="Notes on what you are accomplishing in this sprint..."
+                value={sessionNotes}
+                onChange={e => setSessionNotes(e.target.value)}
+                className="w-full px-4 py-2 text-xs bg-surface-3 border border-line rounded-xl text-content placeholder-slate-500 outline-none focus:border-indigo-500"
+              />
+            </div>
 
             {/* Completed Pomodoro Counter */}
             <div className="flex items-center gap-2 mt-6 text-xs text-content-faint font-bold z-10 font-mono">
@@ -370,12 +435,13 @@ export const TimeTrackerView: React.FC = () => {
         </div>
 
         {timeEntries.length === 0 ? (
-          <div className="py-10 text-center text-xs text-content-faint">
-            No time entries recorded yet.
+          <div className="py-10 text-center space-y-3">
+            <p className="text-xs text-content-faint">No time entries recorded yet. Start a focus session or log past work.</p>
+            <button type="button" onClick={() => setShowManualModal(true)} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500">Log your first session</button>
           </div>
         ) : (
           <div className="divide-y divide-line/80">
-            {timeEntries.slice(0, 10).map(entry => {
+            {(showAllHistory ? timeEntries : timeEntries.slice(0, 10)).map(entry => {
               const mins = Math.round(entry.durationSeconds / 60);
 
               return (
@@ -402,8 +468,10 @@ export const TimeTrackerView: React.FC = () => {
                     </span>
                     <button
                       type="button"
-                      onClick={() => deleteTimeEntry(entry.id)}
-                      className="p-1 text-content-faint hover:text-rose-400 rounded transition-colors"
+                      onClick={() => void handleDeleteEntry(entry)}
+                      aria-label={`Delete time entry ${entry.notes || entry.taskTitle || 'focus block'}`}
+                      title="Delete time entry"
+                      className="p-2 text-content-faint hover:text-rose-400 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -413,24 +481,33 @@ export const TimeTrackerView: React.FC = () => {
             })}
           </div>
         )}
+        {timeEntries.length > 10 && (
+          <div className="pt-2 text-center">
+            <button type="button" onClick={() => setShowAllHistory(v => !v)} className="px-4 py-2 rounded-xl text-xs font-bold text-content-muted hover:text-content bg-surface-2 border border-line">
+              {showAllHistory ? 'Show less' : `View all ${timeEntries.length} sessions`}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Manual Time Entry Modal */}
       {showManualModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in" role="dialog" aria-modal="true" aria-label="Log offline work time">
           <div className="bg-surface rounded-3xl p-6 shadow-2xl border border-line w-full max-w-md space-y-4">
             <h3 className="text-lg font-black text-content">
               Log Offline Work Time
             </h3>
+            {manualError && <p role="alert" className="text-xs font-bold text-rose-600 dark:text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2">{manualError}</p>}
 
             <form onSubmit={handleManualSubmit} className="space-y-3.5 text-xs">
               <div>
-                <label className="block font-bold text-content-muted mb-1">
+                <label htmlFor="manual-project" className="block font-bold text-content-muted mb-1">
                   Project
                 </label>
                 <select
+                  id="manual-project"
                   value={manualProjectId}
-                  onChange={e => setManualProjectId(e.target.value)}
+                  onChange={e => { setManualProjectId(e.target.value); setManualTaskId(''); }}
                   className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500"
                 >
                   {projects.map(p => (
@@ -440,10 +517,11 @@ export const TimeTrackerView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-bold text-content-muted mb-1">
+                <label htmlFor="manual-task" className="block font-bold text-content-muted mb-1">
                   Associated Task (Optional)
                 </label>
                 <select
+                  id="manual-task"
                   value={manualTaskId}
                   onChange={e => setManualTaskId(e.target.value)}
                   className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500"
@@ -457,12 +535,14 @@ export const TimeTrackerView: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold text-content-muted mb-1">
+                  <label htmlFor="manual-minutes" className="block font-bold text-content-muted mb-1">
                     Duration (Minutes)
                   </label>
                   <input
+                    id="manual-minutes"
                     type="number"
-                    min="5"
+                    min={1}
+                    max={1440}
                     step="5"
                     value={manualMinutes}
                     onChange={e => setManualMinutes(e.target.value)}
@@ -471,12 +551,14 @@ export const TimeTrackerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-content-muted mb-1">
+                  <label htmlFor="manual-date" className="block font-bold text-content-muted mb-1">
                     Date
                   </label>
                   <input
+                    id="manual-date"
                     type="date"
                     value={manualDate}
+                    max={todayIso}
                     onChange={e => setManualDate(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-surface-3 border border-line rounded-xl text-content outline-none focus:border-indigo-500 font-mono"
                   />
@@ -484,10 +566,11 @@ export const TimeTrackerView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-bold text-content-muted mb-1">
+                <label htmlFor="manual-notes" className="block font-bold text-content-muted mb-1">
                   Notes
                 </label>
                 <input
+                  id="manual-notes"
                   type="text"
                   placeholder="e.g. Refactored API routing and fixed test fixtures"
                   value={manualNotes}

@@ -62,6 +62,7 @@ export function mapProjectFromApi(raw: any): Project {
     initializationReasoningEffort: ['low', 'high'].includes(raw.initialization_reasoning_effort) ? raw.initialization_reasoning_effort : 'medium',
     initializationMode: raw.initialization_mode === 'plan' ? 'plan' : 'build',
     pinned: raw.pinned,
+    sortOrder: typeof raw.sort_order === 'number' ? raw.sort_order : 0,
     milestones: (raw.milestones || []).map(mapMilestoneFromApi),
     techResearch: raw.tech_research || undefined,
     createdAt: raw.created_at,
@@ -128,6 +129,7 @@ export function mapProjectToApi(p: Partial<Project> & { title: string }): any {
   if (p.initializationReasoningEffort !== undefined) out.initialization_reasoning_effort = p.initializationReasoningEffort;
   if (p.initializationMode !== undefined) out.initialization_mode = p.initializationMode;
   if (p.pinned !== undefined) out.pinned = p.pinned;
+  if ((p as any).sortOrder !== undefined) out.sort_order = (p as any).sortOrder;
   if (p.techResearch !== undefined) out.tech_research = p.techResearch;
   if (p.milestones !== undefined) out.milestones = p.milestones.map(mapMilestoneToApi);
   return out;
