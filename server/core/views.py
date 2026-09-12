@@ -2,11 +2,10 @@ import os
 import json
 import re
 import shutil
-import subprocess
 import uuid
 from pathlib import Path
 from datetime import timedelta, date, datetime
-from .pathutils import normalize_path, resolve_venv
+from .pathutils import normalize_path
 from django.utils import timezone
 from django.db import connection, transaction
 from django.conf import settings
@@ -19,10 +18,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
 from .serializers import (
     UserSerializer, RegisterSerializer,
-    ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer,
+    ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer, StageChecklistDefaultSerializer,
     TaskSerializer, SubtaskSerializer,
     IdeaSerializer, IdeaCategorySerializer, TimeEntrySerializer,
     ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer
@@ -31,7 +30,8 @@ from .filters import ProjectFilter, TaskFilter, IdeaFilter, TimeEntryFilter, Pro
 from .permissions import IsOwner
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 from .pdf_exports import idea_pdf, project_pdf
-from .stage_workspaces import STAGE_WORKSPACE_CONFIG, checklist_ids
+from .stage_workspaces import STAGE_WORKSPACE_CONFIG, checklist_ids, builtin_checklists, effective_checklists, stage_guidance, initialize_project_workspaces
+from .services.terminal_manager import TerminalError, terminal_manager
 
 User = get_user_model()
 
@@ -130,6 +130,80 @@ def project_drive_settings_view(request):
     return Response({'drive': drive, 'updated_count': updated_count})
 
 
+def _checklist_default_payload(owner, stage):
+    builtins = builtin_checklists(stage)
+    custom = StageChecklistDefault.objects.filter(owner=owner, stage=stage).first()
+    effective = effective_checklists(owner, stage)
+    return {
+        'stage': stage,
+        'checklist': effective['checklist'],
+        'shaping_checklist': effective['shaping_checklist'],
+        'built_in': builtins,
+        'customized': custom is not None,
+        'updated_at': custom.updated_at if custom else None,
+    }
+
+
+def _valid_stage(stage):
+    return stage in {value for value, _label in ProjectStage.choices} and stage in STAGE_WORKSPACE_CONFIG
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def checklist_defaults_view(request):
+    return Response({'stages': [_checklist_default_payload(request.user, stage) for stage, _label in ProjectStage.choices]})
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def checklist_default_stage_view(request, stage):
+    if not _valid_stage(stage):
+        return Response({'stage': 'Unknown lifecycle stage.'}, status=status.HTTP_400_BAD_REQUEST)
+    custom = StageChecklistDefault.objects.filter(owner=request.user, stage=stage).first()
+    if request.method == 'GET':
+        return Response(_checklist_default_payload(request.user, stage))
+    if request.method == 'DELETE':
+        if custom:
+            custom.delete()
+        return Response(_checklist_default_payload(request.user, stage))
+    payload = request.data if isinstance(request.data, dict) else {}
+    if custom:
+        serializer = StageChecklistDefaultSerializer(custom, data=payload, partial=True, context={'request': request, 'stage': stage})
+    else:
+        serializer = StageChecklistDefaultSerializer(data={**payload, 'stage': stage}, partial=True, context={'request': request, 'stage': stage})
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    if custom:
+        for field, value in values.items():
+            setattr(custom, field, value)
+        custom.save()
+    else:
+        custom = StageChecklistDefault.objects.create(owner=request.user, stage=stage, checklist=values.get('checklist', builtin_checklists(stage)['checklist']), shaping_checklist=values.get('shaping_checklist', builtin_checklists(stage)['shaping_checklist']))
+    return Response(_checklist_default_payload(request.user, stage))
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def daily_focus_view(request):
+    raw_day = request.query_params.get('day') if request.method == 'GET' else request.data.get('day')
+    try:
+        focus_day = datetime.strptime(raw_day, '%Y-%m-%d').date() if raw_day else timezone.localdate()
+    except (TypeError, ValueError):
+        return Response({'day': 'Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+    focus = DailyFocus.objects.filter(owner=request.user, day=focus_day).first()
+    if request.method == 'GET':
+        return Response({'id': str(focus.id) if focus else None, 'day': focus_day.isoformat(), 'task_ids': list(focus.task_ids or []) if focus else [], 'updated_at': focus.updated_at if focus else None})
+    task_ids = request.data.get('task_ids')
+    if not isinstance(task_ids, list) or any(not isinstance(task_id, str) for task_id in task_ids):
+        return Response({'task_ids': 'Provide an ordered list of task IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+    task_ids = list(dict.fromkeys(task_ids))
+    owned_ids = {str(task_id) for task_id in Task.objects.filter(project__owner=request.user, id__in=task_ids).values_list('id', flat=True)}
+    if set(task_ids) - owned_ids:
+        return Response({'task_ids': 'Every selected task must belong to you.'}, status=status.HTTP_400_BAD_REQUEST)
+    focus, _created = DailyFocus.objects.update_or_create(owner=request.user, day=focus_day, defaults={'task_ids': task_ids})
+    return Response({'id': str(focus.id), 'day': focus.day.isoformat(), 'task_ids': list(focus.task_ids or []), 'updated_at': focus.updated_at})
+
+
 def build_launch_prompt(idea):
     """Create a stable, readable coding-agent brief from the idea's saved fields."""
     lines = [
@@ -179,22 +253,41 @@ def get_potential_projects_root(user=None):
 
 def create_potential_project_folder(title, user=None):
     """Create a unique, Windows-safe project folder and return its absolute path."""
-    root = get_potential_projects_root(user)
-    root.mkdir(parents=True, exist_ok=True)
+    configured_root = get_potential_projects_root(user)
+    # A stale or protected configured drive should not prevent idea conversion
+    # or leave the user with a project that cannot open its in-app terminal.
+    # Keep the fallback local to the active database: this is persistent for a
+    # desktop install and stays inside the repository for local development.
+    db_path = os.environ.get('SQLITE_PATH')
+    fallback_root = (Path(db_path).expanduser().resolve().parent / 'projects') if db_path else (Path(settings.BASE_DIR).resolve() / 'projects')
+    roots = [configured_root]
+    if fallback_root.resolve() != configured_root.resolve():
+        roots.append(fallback_root)
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '-', str(title or '').strip())
     safe = re.sub(r'\s+', ' ', safe).rstrip(' .') or 'project'
     if safe.upper().split('.')[0] in {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}:
         safe = f'_{safe}'
     safe = safe[:180].rstrip(' .') or 'project'
-    candidate = root / safe
-    suffix = 2
-    while True:
+    last_error = None
+    for root in roots:
         try:
-            candidate.mkdir()
-            return str(candidate.resolve())
-        except FileExistsError:
-            candidate = root / f'{safe}-{suffix}'
-            suffix += 1
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            last_error = exc
+            continue
+        candidate = root / safe
+        suffix = 2
+        while True:
+            try:
+                candidate.mkdir()
+                return str(candidate.resolve())
+            except FileExistsError:
+                candidate = root / f'{safe}-{suffix}'
+                suffix += 1
+            except OSError as exc:
+                last_error = exc
+                break
+    raise last_error or OSError('Unable to create a project folder.')
 
 
 def _copy_project_source(source, destination):
@@ -472,17 +565,53 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if request.method == 'GET':
             if workspace:
                 return Response(StageWorkspaceSerializer(workspace).data)
-            return Response({'id': None, 'project_id': str(project.id), 'stage': stage, 'notes': '', 'completed_items': [], 'created_at': None, 'updated_at': None})
+            definitions = effective_checklists(project.owner, stage)
+            return Response({'id': None, 'project_id': str(project.id), 'stage': stage, 'notes': '', 'completed_items': [], **definitions, **stage_guidance(stage), 'built_in': builtin_checklists(stage), 'created_at': None, 'updated_at': None})
         if workspace:
             serializer = StageWorkspaceSerializer(workspace, data=request.data, partial=True, context={'request': request, 'stage': stage})
         else:
-            serializer = StageWorkspaceSerializer(data=request.data, partial=True, context={'request': request, 'stage': stage})
+            definitions = effective_checklists(project.owner, stage)
+            serializer = StageWorkspaceSerializer(data={**definitions, **request.data}, partial=True, context={'request': request, 'stage': stage})
         serializer.is_valid(raise_exception=True)
         if workspace:
             workspace = serializer.save()
         else:
             workspace = StageWorkspace.objects.create(project=project, stage=stage, **serializer.validated_data)
         return Response(StageWorkspaceSerializer(workspace).data)
+
+    @action(detail=True, methods=['get', 'post'], url_path=r'stage-reviews/(?P<stage>[^/.]+)')
+    def stage_review(self, request, pk=None, stage=None):
+        project = self.get_object()
+        if not _valid_stage(stage):
+            return Response({'stage': 'Unknown lifecycle stage.'}, status=status.HTTP_400_BAD_REQUEST)
+        workspace = StageWorkspace.objects.filter(project=project, stage=stage).first()
+        tasks = list(Task.objects.filter(project=project, stage=stage).values('id', 'completed', 'blocker_reason'))
+        milestones = list(project.milestones.filter(stage=stage).values('id', 'completed'))
+        checklist = workspace or None
+        snapshot = {
+            'task_total': len(tasks),
+            'task_completed': sum(1 for task in tasks if task['completed']),
+            'blocked_tasks': sum(1 for task in tasks if task['blocker_reason']),
+            'milestone_total': len(milestones),
+            'milestone_completed': sum(1 for milestone in milestones if milestone['completed']),
+            'checklist_completed': len(checklist.completed_items or []) if checklist else 0,
+            'checklist_total': len((checklist.checklist if checklist else effective_checklists(project.owner, stage)['checklist']) or []) + len((checklist.shaping_checklist if checklist else effective_checklists(project.owner, stage)['shaping_checklist']) or []),
+        }
+        latest = StageReview.objects.filter(project=project, stage=stage).first()
+        if request.method == 'GET':
+            return Response({'latest': self._stage_review_payload(latest) if latest else None, 'current_snapshot': snapshot})
+        decision = request.data.get('decision')
+        if decision not in {StageReview.CONTINUE, StageReview.READY}:
+            return Response({'decision': 'Choose continue or ready.'}, status=status.HTTP_400_BAD_REQUEST)
+        note = request.data.get('note', '')
+        if not isinstance(note, str):
+            return Response({'note': 'Review note must be a string.'}, status=status.HTTP_400_BAD_REQUEST)
+        review = StageReview.objects.create(project=project, stage=stage, decision=decision, note=note.strip(), snapshot=snapshot)
+        return Response({'review': self._stage_review_payload(review), 'current_snapshot': snapshot}, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _stage_review_payload(review):
+        return {'id': str(review.id), 'stage': review.stage, 'decision': review.decision, 'note': review.note, 'snapshot': review.snapshot, 'reviewed_at': review.reviewed_at}
 
     @action(detail=True, methods=['post'], url_path='open-folder')
     def open_folder(self, request, pk=None):
@@ -573,6 +702,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
                         estimated_minutes=task.estimated_minutes,
                         time_spent_minutes=0,
                         tags=list(task.tags or []),
+                        blocker_reason=task.blocker_reason,
+                        blocker_next_action=task.blocker_next_action,
                         completed_at=None,
                     )
                     for index, subtask in enumerate(task.subtasks.all()):
@@ -594,6 +725,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
                         stage=workspace.stage,
                         notes=workspace.notes,
                         completed_items=list(workspace.completed_items or []),
+                        checklist=[dict(item) for item in (workspace.checklist or [])],
+                        shaping_checklist=[dict(item) for item in (workspace.shaping_checklist or [])],
                     )
         except Exception as exc:
             if destination and destination.is_dir():
@@ -611,54 +744,39 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Script file does not exist: {raw}"}, status=400)
         if not raw.lower().endswith(('.bat', '.cmd')):
             return Response({"error": "Only .bat / .cmd scripts are supported."}, status=400)
-        if os.name != 'nt' or not hasattr(subprocess, 'CREATE_NEW_CONSOLE'):
-            return Response({"error": "Running scripts is only supported on Windows."}, status=501)
-        cwd = os.path.dirname(raw) or None
-        # Pass the project's optional port / run args to the script (blank = none)
         run_args = project.port.split() if project.port and project.port.strip() else []
-        # If a project virtualenv is configured, put its Scripts dir first on PATH so
-        # `python` inside the script resolves to the venv interpreter.
-        env = None
-        _activate_bat, scripts_dir = resolve_venv(project.python_env)
-        if scripts_dir:
-            env = dict(os.environ)
-            existing = env.get('PATH', '')
-            env['PATH'] = scripts_dir + ';' + existing if existing else scripts_dir
         try:
-            subprocess.Popen(  # noqa: S603, S606 - user-owned local script launched in its own console
-                [raw, *run_args],
-                cwd=cwd,
-                env=env,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            session, reused = terminal_manager.get_or_create_script(
+                owner_id=request.user.id,
+                project_id=project.id,
+                project_title=project.title,
+                script_path=raw,
+                run_args=run_args,
+                python_env=normalize_path(project.python_env),
             )
-        except Exception as e:
-            return Response({"error": f"Failed to run script: {e}"}, status=500)
-        return Response({"ok": True, "script": raw, "args": run_args, "venv": scripts_dir or None})
+        except TerminalError as e:
+            return Response({'error': e.message}, status=e.http_status)
+        return Response({'ok': True, 'session': session.to_dict(), 'reused': reused,
+                         'script': raw, 'args': run_args}, status=200 if reused else 201)
 
     @action(detail=True, methods=['post'], url_path='open-cmd')
     def open_cmd(self, request, pk=None):
         project = self.get_object()
         raw = normalize_path(project.cmd_directory)
-        if not raw:
-            return Response({"error": "No CMD directory set for this project."}, status=400)
-        if not os.path.isdir(raw):
-            return Response({"error": f"Directory does not exist: {raw}"}, status=400)
-        if os.name != 'nt' or not hasattr(subprocess, 'CREATE_NEW_CONSOLE'):
-            return Response({"error": "Opening cmd is only supported on Windows."}, status=501)
-        # Auto-activate the project's virtualenv on open when configured.
-        command = ['cmd']
-        activate_bat, _scripts_dir = resolve_venv(project.python_env)
-        if activate_bat:
-            command = ['cmd', '/k', 'call', activate_bat]
+        fallback = normalize_path(project.directory_path)
         try:
-            subprocess.Popen(  # noqa: S603 - interactive shell rooted at the validated directory
-                command,
-                cwd=raw,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            session, reused = terminal_manager.get_or_create_cmd(
+                owner_id=request.user.id,
+                project_id=project.id,
+                project_title=project.title,
+                directory=raw,
+                fallback_directory=fallback,
+                python_env=normalize_path(project.python_env),
             )
-        except Exception as e:
-            return Response({"error": f"Failed to open cmd: {e}"}, status=500)
-        return Response({"ok": True, "path": raw, "venv": activate_bat or None})
+        except TerminalError as e:
+            return Response({'error': e.message}, status=e.http_status)
+        return Response({'ok': True, 'session': session.to_dict(), 'reused': reused,
+                         'path': session.cwd}, status=200 if reused else 201)
 
     @action(detail=True, methods=['patch', 'delete'], url_path=r'agents/(?P<agent_id>[^/.]+)')
     def update_agent_link(self, request, pk=None, agent_id=None):
@@ -834,7 +952,10 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         task.completed = not task.completed
         task.completed_at = timezone.now() if task.completed else None
-        task.save(update_fields=['completed', 'completed_at'])
+        if task.completed:
+            task.blocker_reason = ''
+            task.blocker_next_action = ''
+        task.save(update_fields=['completed', 'completed_at', 'blocker_reason', 'blocker_next_action'])
         return Response(TaskSerializer(task).data)
 
     @action(detail=True, methods=['post'], url_path='move-quadrant')
@@ -961,6 +1082,7 @@ class IdeaViewSet(viewsets.ModelViewSet):
                     script_path='',
                     python_env='',
                 )
+                initialize_project_workspaces(project)
                 ProjectLaunchPrompt.objects.create(project=project, content=build_launch_prompt(idea))
                 # milestones
                 Milestone.objects.create(project=project, title='MVP Architecture & Data Model', stage=ProjectStage.PLANNING, target_date=today + timedelta(days=7), completed=False, description='Define initial data contracts and flow.', order=0)
@@ -1097,6 +1219,9 @@ def export_data_view(request):
         "timeEntries": TimeEntrySerializer(time_entries, many=True).data,
         "docs": ProjectDocSerializer(docs, many=True).data,
         "stageWorkspaces": StageWorkspaceSerializer(stage_workspaces, many=True).data,
+        "checklistDefaults": [{**_checklist_default_payload(user, stage)} for stage, _label in ProjectStage.choices if StageChecklistDefault.objects.filter(owner=user, stage=stage).exists()],
+        "dailyFocuses": [{'day': focus.day.isoformat(), 'task_ids': list(focus.task_ids or [])} for focus in DailyFocus.objects.filter(owner=user)],
+        "stageReviews": [{'project': str(review.project_id), 'stage': review.stage, 'decision': review.decision, 'note': review.note, 'snapshot': review.snapshot, 'reviewed_at': review.reviewed_at} for review in StageReview.objects.filter(project__owner=user)],
         "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
         "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
     }
@@ -1118,6 +1243,9 @@ def reset_workspace_view(request):
             'timeEntries': TimeEntry.objects.filter(owner=user).count(),
             'docs': len(doc_ids),
             'stageWorkspaces': StageWorkspace.objects.filter(project__owner=user).count(),
+            'checklistDefaults': StageChecklistDefault.objects.filter(owner=user).count(),
+            'dailyFocuses': DailyFocus.objects.filter(owner=user).count(),
+            'stageReviews': StageReview.objects.filter(project__owner=user).count(),
             'modelPresets': LauncherModelPreset.objects.filter(owner=user).count(),
         }
 
@@ -1145,6 +1273,8 @@ def reset_workspace_view(request):
         TimeEntry.objects.filter(owner=user).delete()
         ProjectDoc.objects.filter(owner=user).delete()
         LauncherModelPreset.objects.filter(owner=user).delete()
+        DailyFocus.objects.filter(owner=user).delete()
+        StageChecklistDefault.objects.filter(owner=user).delete()
         Idea.objects.filter(owner=user).delete()
         Project.objects.filter(owner=user).delete()
 
@@ -1162,9 +1292,10 @@ def reset_workspace_view(request):
 def import_data_view(request):
     data = request.data
     user = request.user
-    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "stageWorkspaces": 0, "modelPresets": 0, "settings": 0}
+    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "stageWorkspaces": 0, "checklistDefaults": 0, "dailyFocuses": 0, "stageReviews": 0, "modelPresets": 0, "settings": 0}
     project_id_map = {}
     milestone_id_map = {}
+    task_id_map = {}
 
     with transaction.atomic():
         settings_data = data.get('settings') if isinstance(data.get('settings'), dict) else {}
@@ -1240,6 +1371,7 @@ def import_data_view(request):
                 mapped['owner'] = user
                 # Use serializer for validation? Direct create for speed
                 proj = Project.objects.create(**{k: v for k, v in mapped.items() if k in [f.name for f in Project._meta.get_fields() if hasattr(f, 'column')]})
+                initialize_project_workspaces(proj)
                 if old_project_id:
                     project_id_map[str(old_project_id)] = proj
                 imported["projects"] += 1
@@ -1279,16 +1411,44 @@ def import_data_view(request):
                 completed = workspace_data.get('completedItems', workspace_data.get('completed_items', []))
                 if not isinstance(completed, list):
                     completed = []
-                completed = [item for item in completed if isinstance(item, str) and item in checklist_ids(stage)]
+                definitions = {
+                    'checklist': workspace_data.get('checklist', workspace_data.get('checklistItems')),
+                    'shaping_checklist': workspace_data.get('shaping_checklist', workspace_data.get('shapingChecklist')),
+                }
+                if not all(isinstance(definitions.get(name), list) and all(isinstance(item, dict) for item in definitions.get(name, [])) for name in ('checklist', 'shaping_checklist')):
+                    definitions = builtin_checklists(stage)
+                    # Backups created before editable definitions only carried completion IDs.
+                    # Keep those checked steps visible instead of silently dropping them.
+                    known_ids = {item['id'] for group in definitions.values() for item in group}
+                    for legacy_id in completed:
+                        if isinstance(legacy_id, str) and legacy_id not in known_ids:
+                            label = legacy_id.replace('-', ' ').strip().capitalize()
+                            definitions['checklist'].append({'id': legacy_id, 'label': f'Legacy step: {label}'})
+                            known_ids.add(legacy_id)
+                valid_ids = {item.get('id') for group in definitions.values() if isinstance(group, list) for item in group if isinstance(item, dict)}
+                completed = [item for item in completed if isinstance(item, str) and item in valid_ids]
                 StageWorkspace.objects.update_or_create(
                     project=project_obj,
                     stage=stage,
-                    defaults={'notes': workspace_data.get('notes', '') if isinstance(workspace_data.get('notes', ''), str) else '', 'completed_items': completed},
+                    defaults={'notes': workspace_data.get('notes', '') if isinstance(workspace_data.get('notes', ''), str) else '', 'completed_items': completed, **definitions},
                 )
                 imported['stageWorkspaces'] += 1
+        # Personal checklist defaults (optional for compatibility with older exports)
+        raw_defaults = data.get('checklistDefaults', data.get('checklist_defaults', []))
+        if isinstance(raw_defaults, list):
+            for default_data in raw_defaults:
+                if not isinstance(default_data, dict) or not _valid_stage(default_data.get('stage')):
+                    continue
+                stage = default_data['stage']
+                builtins = builtin_checklists(stage)
+                guided = default_data.get('checklist') if isinstance(default_data.get('checklist'), list) else builtins['checklist']
+                shaping = default_data.get('shaping_checklist') if isinstance(default_data.get('shaping_checklist'), list) else builtins['shaping_checklist']
+                StageChecklistDefault.objects.update_or_create(owner=user, stage=stage, defaults={'checklist': guided, 'shaping_checklist': shaping})
+                imported['checklistDefaults'] += 1
         # Tasks
         if 'tasks' in data and isinstance(data['tasks'], list):
             for t in data['tasks']:
+                old_task_id = t.get('id')
                 milestone_refs = t.pop('milestones', []) or []
                 subtasks = t.pop('subtasks', [])
                 t.pop('id', None)
@@ -1302,6 +1462,8 @@ def import_data_view(request):
                     'estimatedMinutes': 'estimated_minutes', 'estimated_minutes': 'estimated_minutes',
                     'timeSpentMinutes': 'time_spent_minutes', 'time_spent_minutes': 'time_spent_minutes',
                     'tags': 'tags',
+                    'blockerReason': 'blocker_reason', 'blocker_reason': 'blocker_reason',
+                    'blockerNextAction': 'blocker_next_action', 'blocker_next_action': 'blocker_next_action',
                 }
                 mapped = {}
                 project_ref = None
@@ -1328,6 +1490,8 @@ def import_data_view(request):
                         continue
                 mapped['project'] = proj_obj
                 task = Task.objects.create(**mapped)
+                if old_task_id:
+                    task_id_map[str(old_task_id)] = task
                 linked_milestones = [milestone_id_map[str(ref)] for ref in milestone_refs if str(ref) in milestone_id_map and milestone_id_map[str(ref)].project_id == proj_obj.id]
                 if linked_milestones:
                     task.milestones.set(linked_milestones)
@@ -1375,16 +1539,20 @@ def import_data_view(request):
                 task_ref = e.get('taskId') or e.get('task_id') or e.get('task')
                 proj_obj = None
                 if proj_ref:
+                    proj_obj = project_id_map.get(str(proj_ref))
                     try:
-                        proj_obj = Project.objects.get(id=proj_ref, owner=user)
+                        if not proj_obj:
+                            proj_obj = Project.objects.get(id=proj_ref, owner=user)
                     except:
                         proj_obj = Project.objects.filter(owner=user).first()
                 if not proj_obj:
                     continue
                 task_obj = None
                 if task_ref:
+                    task_obj = task_id_map.get(str(task_ref))
                     try:
-                        task_obj = Task.objects.get(id=task_ref, project__owner=user)
+                        if not task_obj:
+                            task_obj = Task.objects.get(id=task_ref, project__owner=user)
                     except:
                         pass
                 TimeEntry.objects.create(
@@ -1400,6 +1568,36 @@ def import_data_view(request):
                     timestamp=e.get('timestamp') or timezone.now().isoformat(),
                 )
                 imported["timeEntries"] += 1
+        # Daily focus and stage review history are optional in older backups.
+        raw_focuses = data.get('dailyFocuses', data.get('daily_focuses', []))
+        if isinstance(raw_focuses, list):
+            for focus_data in raw_focuses:
+                if not isinstance(focus_data, dict):
+                    continue
+                try:
+                    focus_day = datetime.strptime(str(focus_data.get('day')), '%Y-%m-%d').date()
+                except (TypeError, ValueError):
+                    continue
+                refs = focus_data.get('task_ids', focus_data.get('taskIds', []))
+                if not isinstance(refs, list):
+                    continue
+                mapped_ids = [str(task_id_map[str(ref)].id) for ref in refs if str(ref) in task_id_map]
+                DailyFocus.objects.update_or_create(owner=user, day=focus_day, defaults={'task_ids': mapped_ids})
+                imported['dailyFocuses'] += 1
+        raw_reviews = data.get('stageReviews', data.get('stage_reviews', []))
+        if isinstance(raw_reviews, list):
+            for review_data in raw_reviews:
+                if not isinstance(review_data, dict) or not _valid_stage(review_data.get('stage')):
+                    continue
+                project_ref = review_data.get('project') or review_data.get('projectId')
+                project_obj = project_id_map.get(str(project_ref))
+                if not project_obj:
+                    continue
+                decision = review_data.get('decision')
+                if decision not in {StageReview.CONTINUE, StageReview.READY}:
+                    continue
+                StageReview.objects.create(project=project_obj, stage=review_data['stage'], decision=decision, note=str(review_data.get('note') or ''), snapshot=review_data.get('snapshot') if isinstance(review_data.get('snapshot'), dict) else {})
+                imported['stageReviews'] += 1
         # Project Docs (M2M: projects list)
         if 'docs' in data and isinstance(data['docs'], list):
             for d in data['docs']:

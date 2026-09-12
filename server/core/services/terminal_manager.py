@@ -5,6 +5,9 @@ pseudo console owned by the Django process, buffers recent output in memory
 and lets HTTP clients consume it incrementally by byte/char offset.
 """
 import os
+import sys
+import ctypes
+from contextlib import contextmanager
 import subprocess
 import threading
 import time
@@ -30,6 +33,27 @@ MAX_BUFFER_CHARS = 256 * 1024          # ~256 KB of replay history per session
 MAX_ALIVE_SESSIONS_PER_USER = 6
 EXITED_SESSION_TTL = timedelta(minutes=30)
 STREAM_MAX_SECONDS = 540               # long-poll ceiling; client reconnects after
+_DLL_SEARCH_LOCK = threading.RLock()
+
+
+@contextmanager
+def external_program_libraries():
+    """Prevent frozen-app DLLs from overriding a project tool's own runtime."""
+    if os.name != 'nt' or not getattr(sys, 'frozen', False):
+        yield
+        return
+    with _DLL_SEARCH_LOCK:
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.SetDllDirectoryW.argtypes = [ctypes.c_wchar_p]
+        kernel.GetDllDirectoryW.argtypes = [ctypes.c_uint32, ctypes.c_wchar_p]
+        previous = ctypes.create_unicode_buffer(32768)
+        kernel.GetDllDirectoryW(len(previous), previous)
+        if not kernel.SetDllDirectoryW(None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            yield
+        finally:
+            kernel.SetDllDirectoryW(previous.value or None)
 
 
 class TerminalError(Exception):
@@ -151,6 +175,7 @@ class TerminalSession:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=10,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
                 )
             except Exception:
                 pass
@@ -260,9 +285,7 @@ class TerminalManager:
             title = 'CMD (venv)'
         if existing_cmds:
             title = f'{title} {existing_cmds + 1}'
-        env = dict(os.environ)
-        for key in ('DJANGO_SETTINGS_MODULE', 'DJANGO_ALLOW_ASYNC_UNSAFE', 'RUN_MAIN'):
-            env.pop(key, None)
+        env = self._build_venv_env(python_env)
         return self._spawn(
             owner_id=owner_id,
             project_id=project_id,
@@ -303,7 +326,9 @@ class TerminalManager:
         if not script_path.lower().endswith(('.bat', '.cmd')):
             raise TerminalError('Only .bat / .cmd scripts are supported.')
         cwd = os.path.dirname(script_path) or None
-        args = [script_path, *run_args]
+        # Batch files are CMD programs, not executable images. Keep the shell
+        # open so errors and prompts remain available in the in-app console.
+        args = ['cmd.exe', '/d', '/q', '/k', 'call', script_path, *run_args]
         pretty_args = f" {' '.join(run_args)}" if run_args else ''
         title = f"{os.path.basename(script_path)}{pretty_args}"
         env = self._build_venv_env(python_env)
@@ -323,20 +348,36 @@ class TerminalManager:
     def _build_venv_env(self, python_env):
         """Return a modified environment with the venv Scripts dir first on PATH.
 
-        Returns None when no usable venv is configured, so the child inherits the
-        parent environment unchanged (preserving existing behavior).
+        Always isolate project tools from the Django/frozen-backend runtime.
         """
         _activate_bat, scripts_dir = resolve_venv(python_env)
-        if not scripts_dir:
-            return None
         env = dict(os.environ)
+        for key in list(env):
+            if key.upper() in ('DJANGO_SETTINGS_MODULE', 'DJANGO_ALLOW_ASYNC_UNSAFE',
+                               'RUN_MAIN', 'SQLITE_PATH', 'PYTHONHOME', 'PYTHONPATH') or key.startswith('_PYI_'):
+                env.pop(key, None)
+        bundle = getattr(sys, '_MEIPASS', None)
+        if bundle:
+            root = os.path.normcase(os.path.abspath(bundle))
+            env['PATH'] = os.pathsep.join(
+                entry for entry in env.get('PATH', '').split(os.pathsep)
+                if entry and not (os.path.normcase(os.path.abspath(entry)) == root
+                                 or os.path.normcase(os.path.abspath(entry)).startswith(root + os.sep))
+            )
+        if not scripts_dir:
+            return env
+        env.pop('PYTHONHOME', None)
+        env['VIRTUAL_ENV'] = os.path.dirname(scripts_dir)
         existing = env.get('PATH', '')
         env['PATH'] = scripts_dir + ';' + existing if existing else scripts_dir
         return env
 
     def _assert_supported(self):
         if os.name != 'nt' or not hasattr(subprocess, 'CREATE_NEW_CONSOLE') or not HAS_WINPTY:
-            raise TerminalError('In-app terminals are only supported on Windows with pywinpty installed.', 501)
+            message = ('This desktop build is missing its bundled terminal support. Install a repaired SoloDev Studio build.'
+                       if getattr(sys, 'frozen', False) else
+                       'In-app terminals require Windows and pywinpty in the backend environment.')
+            raise TerminalError(message, 501)
 
     def _spawn(self, **kw):
         owner_id = kw['owner_id']
@@ -348,12 +389,13 @@ class TerminalManager:
                     f'Maximum of {MAX_ALIVE_SESSIONS_PER_USER} live terminals reached. Close one first.', 429
                 )
             try:
-                pty = PtyProcess.spawn(
-                    kw['command'],
-                    cwd=kw['cwd'] or None,
-                    env=kw.get('env'),
-                    dimensions=(kw['rows'], kw['cols']),
-                )
+                with external_program_libraries():
+                    pty = PtyProcess.spawn(
+                        kw['command'],
+                        cwd=kw['cwd'] or None,
+                        env=kw.get('env'),
+                        dimensions=(max(2, min(kw['rows'], 300)), max(2, min(kw['cols'], 500))),
+                    )
             except Exception as e:
                 raise TerminalError(f'Failed to start terminal: {e}', 500)
             session = TerminalSession(

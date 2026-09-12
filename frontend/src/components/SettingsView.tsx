@@ -27,7 +27,8 @@ import {
   Monitor,
   FolderOpen,
   Tags,
-  HardDrive
+  HardDrive,
+  ClipboardCheck
 } from 'lucide-react';
 import { PageHeader } from './ui';
 import { DocEditor } from './DocEditor';
@@ -35,8 +36,9 @@ import { FilterManager } from './FilterManager';
 import { PathPickerModal } from './PathPickerModal';
 import { IdeaCategoryManager } from './IdeaCategoryManager';
 import { useToast } from './Toaster';
+import { ChecklistDefaultsManager } from './ChecklistDefaultsManager';
 
-type SettingsSection = 'documents' | 'filters' | 'idea-categories' | 'models' | 'project-folder' | 'desktop' | 'data' | 'account';
+type SettingsSection = 'documents' | 'filters' | 'idea-categories' | 'models' | 'project-folder' | 'checklist-defaults' | 'desktop' | 'data' | 'account';
 const UNCATEGORIZED_FILTER_ID = 'uncategorized';
 
 const formatDate = (iso: string) => {
@@ -93,6 +95,7 @@ export const SettingsView: React.FC = () => {
   const [activeApiBase, setActiveApiBase] = useState('');
   const [desktopPortStatus, setDesktopPortStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [desktopPortBusy, setDesktopPortBusy] = useState(false);
+  const [companionEnabled, setCompanionEnabled] = useState(true);
 
   // Data & backup state
   const [backupStatus, setBackupStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -153,6 +156,7 @@ export const SettingsView: React.FC = () => {
     window.solodevDesktop.getSettings().then(settings => {
       setBackendPortDraft(settings.backendPort ? String(settings.backendPort) : '');
       setActiveApiBase(settings.apiBase || '');
+      setCompanionEnabled(settings.companionEnabled !== false);
       setDesktopPortStatus(null);
     }).catch(() => setDesktopPortStatus({ ok: false, msg: 'Unable to load desktop settings.' }));
   }, [section]);
@@ -351,6 +355,7 @@ export const SettingsView: React.FC = () => {
     { id: 'idea-categories', label: 'Idea categories', icon: Tags },
     { id: 'models', label: 'Launch Presets', icon: Cpu },
     { id: 'project-folder', label: 'Project folder', icon: FolderOpen },
+    { id: 'checklist-defaults', label: 'Checklist defaults', icon: ClipboardCheck },
     ...(isDesktop ? [{ id: 'desktop' as SettingsSection, label: 'Desktop app', icon: Monitor }] : []),
     { id: 'data', label: 'Data & Backup', icon: DatabaseBackup },
     { id: 'account', label: 'Account', icon: UserRound }
@@ -358,7 +363,7 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in">
-      <PageHeader eyebrow="Workspace" title="Settings" description="Manage your skills, backups, and account." />
+      <PageHeader eyebrow="Workspace" title="Settings" description="Manage your skills, checklist defaults, desktop companion, backups, and account." />
 
       {/* Section tabs */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
@@ -378,6 +383,9 @@ export const SettingsView: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {/* SECTION: DOCUMENTS */}
+      {section === 'checklist-defaults' && <ChecklistDefaultsManager />}
 
       {/* SECTION: DOCUMENTS */}
       {section === 'documents' && (
@@ -599,6 +607,7 @@ export const SettingsView: React.FC = () => {
               <h3 className="text-sm font-black text-content">Launch presets</h3>
               <p className="text-xs text-content-faint mt-1">Save reusable OpenCode and Codex launch configurations with a model, effort, and mode (build/plan).</p>
             </div>
+            <label className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 py-3 text-xs font-bold text-content"><input type="checkbox" checked={companionEnabled} onChange={async e => { const enabled = e.target.checked; setCompanionEnabled(enabled); try { await window.solodevDesktop?.setCompanionEnabled(enabled); } catch { setCompanionEnabled(!enabled); } }} className="h-4 w-4 accent-indigo-600" /> <span><span className="block">Show companion when minimized</span><span className="mt-0.5 block text-[11px] font-normal text-content-faint">A small SoloDev robot appears near the bottom-right while this window is minimized.</span></span></label>
             <div className="flex flex-wrap items-stretch gap-2">
               <select value={newModelTool} onChange={e => { setNewModelTool(e.target.value as 'opencode' | 'codex'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
                 <option value="opencode">OpenCode</option><option value="codex">Codex</option>

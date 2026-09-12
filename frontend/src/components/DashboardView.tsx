@@ -23,6 +23,7 @@ import {
 import { STAGE_CONFIG, ProjectStage } from '../types';
 import { api } from '../services/api';
 import { PageHeader, Button } from './ui';
+import { TodayFocusCard } from './TodayFocusCard';
 
 export const DashboardView: React.FC = () => {
   const {
@@ -119,6 +120,10 @@ export const DashboardView: React.FC = () => {
 
   return (
     <div className="space-y-8 pb-12 animate-in fade-in">
+      <TodayFocusCard />
+      {tasks.filter(task => !task.completed && task.blockerReason).length > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs"><span className="font-bold text-rose-700 dark:text-rose-300"><AlertCircle className="mr-2 inline-block h-4 w-4" />{tasks.filter(task => !task.completed && task.blockerReason).length} blocked task{tasks.filter(task => !task.completed && task.blockerReason).length === 1 ? '' : 's'} need a next action.</span><button type="button" onClick={() => setCurrentView('projects')} className="font-black text-rose-700 dark:text-rose-300">Review blockers →</button></div>
+      )}
       {/* NEW: Overdue alert banner (server timeline groups) */}
       {overdueCount !== null && overdueCount > 0 && (
         <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-200 text-xs">

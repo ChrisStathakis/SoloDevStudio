@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Plus,
   CheckCircle2,
@@ -89,6 +89,13 @@ export const ProjectTasksTab: React.FC<Props> = ({
     .filter(t => taskFilterStage === 'all' || t.stage === taskFilterStage)
     .filter(t => taskFilterCategory === 'all' || (t as unknown as { category?: string }).category === taskFilterCategory)
     .sort((a, b) => Number(a.completed) - Number(b.completed));
+  const [expandedBlocker, setExpandedBlocker] = useState<string | null>(null);
+  const [blockerDraft, setBlockerDraft] = useState<Record<string, { reason: string; nextAction: string }>>({});
+  const getBlockerDraft = (task: Task) => blockerDraft[task.id] || { reason: task.blockerReason || '', nextAction: task.blockerNextAction || '' };
+  const saveBlocker = (task: Task) => {
+    const draft = getBlockerDraft(task);
+    void updateTask(task.id, { blockerReason: draft.reason.trim(), blockerNextAction: draft.nextAction.trim() });
+  };
 
   const handleDeleteTask = async (task: Task) => {
     const ok = await confirm({
@@ -238,6 +245,11 @@ export const ProjectTasksTab: React.FC<Props> = ({
                           {task.description}
                         </p>
                       )}
+
+                      <div className="mt-2">
+                        {task.blockerReason ? <div className="flex flex-wrap items-center gap-2 text-xs"><span className="rounded-md bg-rose-500/10 px-2 py-1 font-bold text-rose-600 dark:text-rose-300">Blocked: {task.blockerReason}</span><span className="text-content-faint">Next: {task.blockerNextAction || 'Add a next action'}</span><button type="button" onClick={() => setExpandedBlocker(expandedBlocker === task.id ? null : task.id)} className="text-indigo-600 dark:text-indigo-300 font-bold">{expandedBlocker === task.id ? 'Close' : 'Edit blocker'}</button></div> : <button type="button" onClick={() => setExpandedBlocker(task.id)} className="text-xs font-bold text-content-faint hover:text-rose-500">+ Add blocker</button>}
+                        {expandedBlocker === task.id && <div className="mt-2 grid gap-2 sm:grid-cols-2 rounded-xl border border-rose-500/20 bg-rose-500/5 p-3"><input value={getBlockerDraft(task).reason} onChange={e => setBlockerDraft(prev => ({ ...prev, [task.id]: { ...getBlockerDraft(task), reason: e.target.value } }))} placeholder="What is blocking this task?" className="rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-content" aria-label="Blocker reason" /><input value={getBlockerDraft(task).nextAction} onChange={e => setBlockerDraft(prev => ({ ...prev, [task.id]: { ...getBlockerDraft(task), nextAction: e.target.value } }))} placeholder="Concrete next action" className="rounded-lg border border-line bg-surface px-2.5 py-2 text-xs text-content" aria-label="Blocker next action" /><div className="flex gap-2 sm:col-span-2"><button type="button" onClick={() => { saveBlocker(task); setExpandedBlocker(null); }} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white">Save blocker</button><button type="button" onClick={() => { void updateTask(task.id, { blockerReason: '', blockerNextAction: '' }); setExpandedBlocker(null); }} className="rounded-lg border border-line px-3 py-1.5 text-xs font-bold text-content-faint">Clear</button></div></div>}
+                      </div>
 
                       {/* Subtasks checklist */}
                       {task.subtasks.length > 0 && (

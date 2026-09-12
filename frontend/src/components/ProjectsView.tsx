@@ -826,11 +826,6 @@ export const ProjectsView: React.FC = () => {
 
   const handleOpenCmd = async () => {
     if (!activeProject) return;
-    if (!activeProject.cmdDirectory) {
-      setCmdDirDraft('');
-      setIsEditingCmdDir(true);
-      return;
-    }
     setIsOpeningCmd(true);
     clearFieldError('cmd');
     try {
@@ -1574,6 +1569,7 @@ export const ProjectsView: React.FC = () => {
 
               {/* Action Buttons & Links */}
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button type="button" onClick={() => setActiveDetailTab('workspace')} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-black hover:bg-indigo-500 transition-colors" title="Open the current stage workspace"><Sparkles className="w-3.5 h-3.5" /> Stage Workspace</button>
                 {activeProject.repoUrl && (
                   <a
                     href={activeProject.repoUrl}
@@ -1639,7 +1635,7 @@ export const ProjectsView: React.FC = () => {
                   type="button"
                   onClick={handleOpenCmd}
                   disabled={isOpeningCmd}
-                  title={activeProject.cmdDirectory ? `Open in-app CMD at ${activeProject.cmdDirectory}` : 'Set a CMD directory first'}
+                  title={activeProject.cmdDirectory ? `Open in-app CMD at ${activeProject.cmdDirectory}` : 'Open in-app CMD in the project folder'}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content text-xs font-bold hover:bg-surface-3 hover:border-slate-600 transition-colors disabled:opacity-50"
                 >
                   {isOpeningCmd ? (
@@ -1647,7 +1643,7 @@ export const ProjectsView: React.FC = () => {
                   ) : (
                     <Terminal className="w-3.5 h-3.5" />
                   )}
-                  <span>{activeProject.cmdDirectory ? 'CMD' : 'Set CMD'}</span>
+                  <span>CMD</span>
                 </button>
                 <button
                   type="button"

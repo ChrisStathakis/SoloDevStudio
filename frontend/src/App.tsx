@@ -20,6 +20,37 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/Toaster';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './services/queryClient';
+import { api } from './services/api';
+
+const DesktopCompanionBridge: React.FC = () => {
+  const { projects, tasks, timeTracker, startTimer, pauseTimer, resumeTimer, setCurrentView, setSelectedProjectId, openQuickAdd } = useApp();
+  const { isAuthenticated } = useAuth();
+  const [focusIds, setFocusIds] = useState<string[]>([]);
+  useEffect(() => { if (!isAuthenticated) { setFocusIds([]); return; } let active = true; const load = () => { void api.get('/daily-focus/').then(res => { if (active) setFocusIds(Array.isArray(res.data?.task_ids) ? res.data.task_ids : []); }).catch(() => {}); }; load(); const interval = window.setInterval(load, 15000); return () => { active = false; window.clearInterval(interval); }; }, [isAuthenticated]);
+  useEffect(() => {
+    const bridge = window.solodevDesktop;
+    if (!bridge) return;
+    if (!isAuthenticated) { bridge.updateCompanionState({ reportedAt: Date.now(), loggedOut: true, timer: null, task: null }); return; }
+    const activeTask = tasks.find(task => task.id === timeTracker.taskId);
+    const suggested = focusIds.map(id => tasks.find(task => task.id === id)).find(task => task && !task.completed) || tasks.find(task => !task.completed);
+    bridge.updateCompanionState({ reportedAt: Date.now(),
+      timer: timeTracker.isRunning || timeTracker.projectId ? { active: Boolean(timeTracker.isRunning || timeTracker.secondsElapsed), paused: !timeTracker.isRunning, secondsRemaining: timeTracker.secondsRemaining, secondsElapsed: timeTracker.secondsElapsed, taskTitle: activeTask?.title || '', projectTitle: projects.find(project => project.id === timeTracker.projectId)?.title || '' } : null,
+      task: suggested ? { title: suggested.title, projectTitle: projects.find(project => project.id === suggested.projectId)?.title || '', taskId: suggested.id, projectId: suggested.projectId } : null,
+    });
+  }, [projects, tasks, timeTracker, isAuthenticated, focusIds]);
+  useEffect(() => {
+    const bridge = window.solodevDesktop;
+    if (!bridge) return;
+    return bridge.onCompanionCommand(command => {
+      const suggested = tasks.find(task => !task.completed);
+      if (command === 'pause') pauseTimer();
+      else if (command === 'resume') resumeTimer();
+      else if (command === 'start-focus' && suggested) startTimer('pomodoro', suggested.projectId, suggested.id);
+      else if (command === 'restore-task') { const target = timeTracker.taskId ? tasks.find(task => task.id === timeTracker.taskId) : suggested; if (target) { setSelectedProjectId(target.projectId); setCurrentView('projects'); openQuickAdd('task', { taskId: target.id }); } else setCurrentView('projects'); }
+    });
+  }, [tasks, timeTracker.taskId, timeTracker.projectId, pauseTimer, resumeTimer, startTimer, setCurrentView, setSelectedProjectId, openQuickAdd]);
+  return null;
+};
 
 const TimelineDeadlinesView = React.lazy(() => import('./components/TimelineDeadlinesView').then(m => ({ default: m.TimelineDeadlinesView })));
 const SettingsView = React.lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
@@ -88,6 +119,7 @@ export default function App() {
       <AuthProvider>
         <AppProvider>
           <ToastProvider>
+            <DesktopCompanionBridge />
             <AppFrame />
           </ToastProvider>
         </AppProvider>

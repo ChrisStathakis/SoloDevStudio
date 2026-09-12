@@ -1,5 +1,6 @@
 # PyInstaller spec for the self-contained Windows backend.
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from winpty import PtyProcess  # Fail the build if the terminal runtime is missing.
 
 
 hiddenimports = (

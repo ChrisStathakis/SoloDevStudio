@@ -160,6 +160,8 @@ class StageWorkspace(models.Model):
     stage = models.CharField(max_length=20, choices=ProjectStage.choices)
     notes = models.TextField(blank=True, default='')
     completed_items = models.JSONField(default=list, blank=True)
+    checklist = models.JSONField(default=list, blank=True)
+    shaping_checklist = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -172,6 +174,55 @@ class StageWorkspace(models.Model):
 
     def __str__(self):
         return f"{self.project.title} — {self.get_stage_display()} workspace"
+
+
+class StageChecklistDefault(models.Model):
+    """Owner-scoped checklist defaults copied into newly created projects."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='stage_checklist_defaults')
+    stage = models.CharField(max_length=20, choices=ProjectStage.choices)
+    checklist = models.JSONField(default=list, blank=True)
+    shaping_checklist = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['stage']
+        constraints = [models.UniqueConstraint(fields=['owner', 'stage'], name='unique_owner_stage_checklist_default')]
+        indexes = [models.Index(fields=['owner', 'stage'])]
+
+
+class DailyFocus(models.Model):
+    """An ordered selection of task IDs for a user's work day."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='daily_focuses')
+    day = models.DateField()
+    task_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-day']
+        constraints = [models.UniqueConstraint(fields=['owner', 'day'], name='unique_owner_daily_focus')]
+        indexes = [models.Index(fields=['owner', 'day'])]
+
+
+class StageReview(models.Model):
+    """A deliberate stage review snapshot; advancement remains explicit."""
+    CONTINUE = 'continue'
+    READY = 'ready'
+    DECISION_CHOICES = [(CONTINUE, 'Continue working'), (READY, 'Ready to advance')]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='stage_reviews')
+    stage = models.CharField(max_length=20, choices=ProjectStage.choices)
+    decision = models.CharField(max_length=20, choices=DECISION_CHOICES)
+    note = models.TextField(blank=True, default='')
+    snapshot = models.JSONField(default=dict, blank=True)
+    reviewed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-reviewed_at']
+        indexes = [models.Index(fields=['project', 'stage', 'reviewed_at'])]
 
 
 class ProjectLaunchPrompt(models.Model):
@@ -241,6 +292,8 @@ class Task(models.Model):
     estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
     time_spent_minutes = models.PositiveIntegerField(default=0)
     tags = models.JSONField(default=list, blank=True)
+    blocker_reason = models.TextField(blank=True, default='')
+    blocker_next_action = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

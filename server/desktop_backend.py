@@ -23,22 +23,35 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SoloDev Studio desktop API")
-    parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--db-path", required=True)
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--db-path")
+    parser.add_argument("--terminal-self-test", action="store_true")
     parser.add_argument("--origin", default="app://solodev")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.terminal_self_test:
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+        import django
+        django.setup()
+        from django.core.management import call_command
+        failures = call_command('test', 'core.test_terminal_runtime', verbosity=2)
+        raise SystemExit(1 if failures else 0)
+    if args.port is None or not args.db_path:
+        raise SystemExit('--port and --db-path are required')
     if not 1 <= args.port <= 65535:
         raise SystemExit("--port must be between 1 and 65535")
 
     db_path = Path(args.db_path).expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    project_root = db_path.parent / 'projects'
+    project_root.mkdir(parents=True, exist_ok=True)
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ["SQLITE_PATH"] = str(db_path)
+    os.environ.setdefault("PROJECTS_ROOT", str(project_root))
     os.environ["ALLOWED_HOSTS"] = "127.0.0.1,localhost"
     # Preserve web dev origins alongside the desktop custom-scheme origin.
     # Overwriting with only app://solodev blocks localhost frontends with

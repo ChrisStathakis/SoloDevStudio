@@ -71,12 +71,20 @@ export function mapProjectFromApi(raw: any): Project {
 }
 
 export function mapStageWorkspaceFromApi(raw: any, stage: Project['currentStage']): StageWorkspace {
+  const mapItems = (value: any) => Array.isArray(value) ? value.filter((item: any) => item && typeof item.id === 'string' && typeof item.label === 'string').map((item: any) => ({ id: item.id, label: item.label })) : [];
   return {
     id: raw.id ? String(raw.id) : undefined,
     projectId: raw.project_id ? String(raw.project_id) : undefined,
     stage: raw.stage || stage,
     notes: raw.notes || '',
     completedItems: Array.isArray(raw.completed_items) ? raw.completed_items.filter((item: any) => typeof item === 'string') : [],
+    checklist: mapItems(raw.checklist),
+    shapingChecklist: mapItems(raw.shaping_checklist),
+    guidance: raw.guidance || '',
+    prompts: Array.isArray(raw.prompts) ? raw.prompts : [],
+    shapingGuidance: raw.shaping_guidance || '',
+    shapingPrompts: Array.isArray(raw.shaping_prompts) ? raw.shaping_prompts : [],
+    builtIn: raw.built_in ? { checklist: mapItems(raw.built_in.checklist), shapingChecklist: mapItems(raw.built_in.shaping_checklist) } : undefined,
     createdAt: raw.created_at || undefined,
     updatedAt: raw.updated_at || undefined,
   };
@@ -164,6 +172,8 @@ export function mapTaskFromApi(raw: any): Task {
     tags: raw.tags || [],
     createdAt: raw.created_at,
     completedAt: raw.completed_at || undefined,
+    blockerReason: raw.blocker_reason || undefined,
+    blockerNextAction: raw.blocker_next_action || undefined,
   };
 }
 
@@ -181,6 +191,8 @@ export function mapTaskToApi(t: Partial<Task> & { projectId: string; title: stri
   if (t.milestoneIds !== undefined) out.milestones = t.milestoneIds;
   if (t.tags !== undefined) out.tags = t.tags;
   if (t.subtasks !== undefined) out.subtasks = t.subtasks.map(mapSubtaskToApi);
+  if (t.blockerReason !== undefined) out.blocker_reason = t.blockerReason || '';
+  if (t.blockerNextAction !== undefined) out.blocker_next_action = t.blockerNextAction || '';
   return out;
 }
 

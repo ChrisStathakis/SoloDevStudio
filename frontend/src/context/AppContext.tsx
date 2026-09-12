@@ -132,6 +132,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     secondsElapsed: 0,
     pomodoroType: 'work',
     pomodorosCompleted: 0,
+    lastTickAt: undefined,
   });
   const fetchGenerationRef = useRef(0);
 
@@ -195,40 +196,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const refreshData = async () => { await fetchAll(); };
 
-  // Timer interval (unchanged)
+  // Timestamp-backed timer: renderer throttling while minimized cannot slow time tracking.
+  const advanceTimer = (prev: ActiveTimerState, now: number): ActiveTimerState => {
+    if (!prev.isRunning) return prev;
+    const delta = Math.max(0, Math.floor((now - (prev.lastTickAt || now)) / 1000));
+    if (!delta) return { ...prev, lastTickAt: now };
+    if (prev.mode === 'stopwatch') return { ...prev, secondsElapsed: prev.secondsElapsed + delta, lastTickAt: now };
+    if (delta < prev.secondsRemaining) return { ...prev, secondsRemaining: prev.secondsRemaining - delta, secondsElapsed: prev.secondsElapsed + delta, lastTickAt: now };
+    const isWorkSession = prev.pomodoroType === 'work';
+    const newCompleted = isWorkSession ? prev.pomodorosCompleted + 1 : prev.pomodorosCompleted;
+    const nextType = isWorkSession ? (newCompleted % 4 === 0 ? 'long_break' : 'short_break') : 'work';
+    const nextDuration = nextType === 'work' ? 25 * 60 : (nextType === 'long_break' ? 15 * 60 : 5 * 60);
+    try { const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)(); const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain(); osc.connect(gain); gain.connect(audioCtx.destination); osc.frequency.value = 660; osc.start(); osc.stop(audioCtx.currentTime + 0.2); } catch {}
+    if (isWorkSession) confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
+    return { ...prev, isRunning: false, pomodoroType: nextType, secondsRemaining: nextDuration, secondsElapsed: prev.secondsElapsed + prev.secondsRemaining, pomodorosCompleted: newCompleted, lastTickAt: now };
+  };
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (timeTracker.isRunning) {
-      interval = setInterval(() => {
-        setTimeTracker(prev => {
-          if (prev.mode === 'stopwatch') {
-            return { ...prev, secondsElapsed: prev.secondsElapsed + 1 };
-          } else {
-            if (prev.secondsRemaining <= 1) {
-              const isWorkSession = prev.pomodoroType === 'work';
-              try {
-                const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
-                osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.15);
-                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
-                osc.start();
-                osc.stop(audioCtx.currentTime + 0.8);
-              } catch {}
-              if (isWorkSession) confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
-              const newCompleted = isWorkSession ? prev.pomodorosCompleted + 1 : prev.pomodorosCompleted;
-              const nextType = isWorkSession ? (newCompleted % 4 === 0 ? 'long_break' : 'short_break') : 'work';
-              const nextDuration = nextType === 'work' ? 25 * 60 : (nextType === 'long_break' ? 15 * 60 : 5 * 60);
-              return { ...prev, isRunning: false, pomodoroType: nextType, secondsRemaining: nextDuration, secondsElapsed: prev.secondsElapsed + 1, pomodorosCompleted: newCompleted };
-            }
-            return { ...prev, secondsRemaining: prev.secondsRemaining - 1, secondsElapsed: prev.secondsElapsed + 1 };
-          }
-        });
-      }, 1000);
+      interval = setInterval(() => setTimeTracker(prev => advanceTimer(prev, Date.now())), 1000);
     }
     return () => { if (interval) clearInterval(interval); };
   }, [timeTracker.isRunning]);
@@ -457,10 +443,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       projectId: projectId || prev.projectId,
       taskId: taskId || prev.taskId,
       secondsRemaining: mode === 'pomodoro' && prev.secondsRemaining === 0 ? 25 * 60 : prev.secondsRemaining,
+      lastTickAt: Date.now(),
     }));
   };
-  const pauseTimer = () => setTimeTracker(prev => ({ ...prev, isRunning: false }));
-  const resumeTimer = () => setTimeTracker(prev => ({ ...prev, isRunning: true }));
+  const pauseTimer = () => setTimeTracker(prev => ({ ...advanceTimer(prev, Date.now()), isRunning: false, lastTickAt: Date.now() }));
+  const resumeTimer = () => setTimeTracker(prev => ({ ...prev, isRunning: true, lastTickAt: Date.now() }));
   const setTimerTarget = (projectId?: string, taskId?: string) => {
     setTimeTracker(prev => ({
       ...prev,
@@ -471,7 +458,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
   const stopTimer = async (notes = '') => {
-    const elapsed = timeTracker.secondsElapsed;
+    const timerSnapshot = advanceTimer(timeTracker, Date.now());
+    const elapsed = timerSnapshot.secondsElapsed;
     const proj = projects.find(p => p.id === timeTracker.projectId);
     const tsk = tasks.find(t => t.id === timeTracker.taskId);
     if (elapsed > 30) {
@@ -480,11 +468,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const entry: any = {
           projectId,
           projectTitle: proj?.title || 'Solo Productivity Focus',
-          taskId: timeTracker.taskId || undefined,
+          taskId: timerSnapshot.taskId || undefined,
           taskTitle: tsk?.title || undefined,
           stage: (proj?.currentStage as any) || 'development',
           durationSeconds: elapsed,
-          mode: timeTracker.mode as any,
+          mode: timerSnapshot.mode as any,
           notes: notes || (tsk ? `Focus session on: ${tsk.title}` : 'Solo deep work focus block'),
           timestamp: new Date().toISOString(),
         };
@@ -509,14 +497,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       secondsRemaining: 25 * 60,
       secondsElapsed: 0,
       pomodoroType: 'work',
-      pomodorosCompleted: timeTracker.pomodorosCompleted,
+      pomodorosCompleted: timerSnapshot.pomodorosCompleted,
       projectId: undefined,
       taskId: undefined,
+      lastTickAt: undefined,
     });
   };
   const switchPomodoroPhase = (type: 'work' | 'short_break' | 'long_break') => {
     const duration = type === 'work' ? 25 * 60 : type === 'long_break' ? 15 * 60 : 5 * 60;
-    setTimeTracker(prev => ({ ...prev, pomodoroType: type, secondsRemaining: duration, isRunning: false }));
+    setTimeTracker(prev => ({ ...prev, pomodoroType: type, secondsRemaining: duration, isRunning: false, lastTickAt: Date.now() }));
   };
 
   const addManualTimeEntry = async (entryData: Omit<TimeEntry, 'id'>) => {

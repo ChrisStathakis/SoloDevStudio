@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, net, protocol } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const netModule = require('net');
@@ -17,6 +17,10 @@ protocol.registerSchemesAsPrivileged([
 
 let backendProcess = null;
 let activeApiBase = '';
+let mainWindow = null;
+let companionWindow = null;
+let companionDismissed = false;
+let companionState = null;
 
 function settingsPath() {
   return path.join(app.getPath('userData'), 'desktop-settings.json');
@@ -25,15 +29,19 @@ function settingsPath() {
 function readSettings() {
   try {
     const data = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-    return { backendPort: Number.isInteger(data.backendPort) ? data.backendPort : null };
+    return {
+      backendPort: Number.isInteger(data.backendPort) ? data.backendPort : null,
+      companionEnabled: data.companionEnabled !== false,
+      companionPosition: data.companionPosition && Number.isFinite(data.companionPosition.x) && Number.isFinite(data.companionPosition.y) ? data.companionPosition : null,
+    };
   } catch {
-    return { backendPort: null };
+    return { backendPort: null, companionEnabled: true, companionPosition: null };
   }
 }
 
 function writeSettings(settings) {
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
-  fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
+  fs.writeFileSync(settingsPath(), JSON.stringify({ ...readSettings(), ...settings }, null, 2), 'utf8');
 }
 
 function validatePort(value) {
@@ -142,7 +150,7 @@ function stopBackend() {
 }
 
 function createWindow() {
-  const window = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1440,
     height: 960,
     minWidth: 1024,
@@ -155,9 +163,39 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
-  window.loadURL(`${DESKTOP_ORIGIN}/index.html`);
-  return window;
+  mainWindow.loadURL(`${DESKTOP_ORIGIN}/index.html`);
+  mainWindow.on('minimize', () => { companionDismissed = false; showCompanion(); });
+  mainWindow.on('restore', hideCompanion);
+  mainWindow.on('closed', () => { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.close(); mainWindow = null; });
+  return mainWindow;
 }
+
+function clampCompanionPosition(x, y) {
+  const display = screen.getDisplayNearestPoint({ x, y });
+  const area = display.workArea;
+  const width = 330; const height = 220;
+  return { x: Math.max(area.x, Math.min(Math.round(x), area.x + area.width - width)), y: Math.max(area.y, Math.min(Math.round(y), area.y + area.height - height)) };
+}
+
+function showCompanion() {
+  const settings = readSettings();
+  if (!settings.companionEnabled || companionDismissed || !mainWindow) return;
+  if (!companionWindow) {
+    companionWindow = new BrowserWindow({ width: 330, height: 220, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'companion-preload.cjs') } });
+    companionWindow.setAlwaysOnTop(true, 'floating');
+    companionWindow.setVisibleOnAllWorkspaces(true);
+    companionWindow.loadFile(path.join(__dirname, 'companion.html'));
+    companionWindow.webContents.on('did-finish-load', () => { if (companionState && companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:state', companionState); });
+    companionWindow.on('closed', () => { companionWindow = null; });
+  }
+  const display = screen.getDisplayMatching(mainWindow.getBounds());
+  const saved = settings.companionPosition || { x: display.workArea.x + display.workArea.width - 350, y: display.workArea.y + display.workArea.height - 240 };
+  const position = clampCompanionPosition(saved.x, saved.y);
+  companionWindow.setPosition(position.x, position.y);
+  companionWindow.showInactive();
+  if (companionState) companionWindow.webContents.send('companion:state', companionState);
+}
+function hideCompanion() { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); }
 
 ipcMain.handle('desktop:get-settings', () => ({ ...readSettings(), apiBase: activeApiBase }));
 ipcMain.on('desktop:get-api-base', (event) => {
@@ -168,6 +206,11 @@ ipcMain.handle('desktop:set-backend-port', (_event, value) => {
   writeSettings({ backendPort });
   return { backendPort, restartRequired: true };
 });
+ipcMain.handle('desktop:set-companion-enabled', (_event, value) => { const companionEnabled = Boolean(value); writeSettings({ companionEnabled }); if (!companionEnabled) hideCompanion(); return { companionEnabled }; });
+ipcMain.on('desktop:update-companion-state', (_event, state) => { companionState = state && typeof state === 'object' ? state : null; if (companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:state', companionState); });
+ipcMain.on('desktop:companion-command', (_event, command) => { const allowed = new Set(['restore', 'pause', 'resume', 'start-focus', 'restore-task']); if (!allowed.has(command) || !mainWindow || mainWindow.isDestroyed()) return; if (command === 'restore') { mainWindow.restore(); mainWindow.focus(); hideCompanion(); } else mainWindow.webContents.send('desktop:companion-command', command); });
+ipcMain.on('desktop:companion-dismiss', () => { companionDismissed = true; hideCompanion(); });
+ipcMain.on('desktop:companion-position', (_event, position) => { if (!companionWindow || !position) return; const x = Number(position.x); const y = Number(position.y); if (!Number.isFinite(x) || !Number.isFinite(y)) return; const next = clampCompanionPosition(x, y); companionWindow.setPosition(next.x, next.y); writeSettings({ companionPosition: next }); });
 
 app.whenReady().then(async () => {
   registerAppProtocol();

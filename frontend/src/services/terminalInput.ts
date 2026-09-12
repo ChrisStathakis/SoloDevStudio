@@ -14,5 +14,7 @@ export function splitInputChunks(text: string, maxChars: number): string[] {
 }
 
 export function isBracketedPaste(data: string): boolean {
-  return data.startsWith(BRACKETED_PASTE_START) && data.endsWith(BRACKETED_PASTE_END);
+  if (!data.startsWith(BRACKETED_PASTE_START) || !data.endsWith(BRACKETED_PASTE_END)) return false;
+  const payload = data.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+  return !payload.includes(BRACKETED_PASTE_START) && !payload.includes(BRACKETED_PASTE_END);
 }

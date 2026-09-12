@@ -7,10 +7,10 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
-    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace,
+    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode
 )
-from .stage_workspaces import checklist_ids
+from .stage_workspaces import checklist_ids, builtin_checklists, stage_guidance, initialize_project_workspaces, STAGE_WORKSPACE_CONFIG
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 
 User = get_user_model()
@@ -88,25 +88,125 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
 class StageWorkspaceSerializer(serializers.ModelSerializer):
     project_id = serializers.UUIDField(source='project.id', read_only=True)
+    guidance = serializers.SerializerMethodField()
+    prompts = serializers.SerializerMethodField()
+    shaping_guidance = serializers.SerializerMethodField()
+    shaping_prompts = serializers.SerializerMethodField()
+    built_in = serializers.SerializerMethodField()
 
     class Meta:
         model = StageWorkspace
-        fields = ['id', 'project_id', 'stage', 'notes', 'completed_items', 'created_at', 'updated_at']
+        fields = ['id', 'project_id', 'stage', 'notes', 'completed_items', 'checklist', 'shaping_checklist', 'guidance', 'prompts', 'shaping_guidance', 'shaping_prompts', 'built_in', 'created_at', 'updated_at']
         read_only_fields = ['id', 'stage', 'created_at', 'updated_at']
+
+    def get_guidance(self, obj):
+        return stage_guidance(obj.stage)['guidance']
+
+    def get_prompts(self, obj):
+        return stage_guidance(obj.stage)['prompts']
+
+    def get_shaping_guidance(self, obj):
+        return stage_guidance(obj.stage)['shaping_guidance']
+
+    def get_shaping_prompts(self, obj):
+        return stage_guidance(obj.stage)['shaping_prompts']
+
+    def get_built_in(self, obj):
+        return builtin_checklists(obj.stage)
+
+    def _validate_group(self, value, field_name):
+        if not isinstance(value, list):
+            raise serializers.ValidationError(f'{field_name} must be a list of items.')
+        result = []
+        seen = set()
+        for item in value:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError(f'{field_name} items must be objects.')
+            item_id = item.get('id')
+            label = item.get('label')
+            if not isinstance(item_id, str) or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', item_id):
+                raise serializers.ValidationError(f'{field_name} item IDs must use lowercase letters, numbers, and hyphens.')
+            if item_id in seen:
+                raise serializers.ValidationError(f'Duplicate checklist item ID: {item_id}.')
+            if not isinstance(label, str) or not label.strip():
+                raise serializers.ValidationError(f'{field_name} item labels cannot be blank.')
+            seen.add(item_id)
+            result.append({'id': item_id, 'label': label.strip()[:300]})
+        return result
+
+    def validate_checklist(self, value):
+        return self._validate_group(value, 'checklist')
+
+    def validate_shaping_checklist(self, value):
+        return self._validate_group(value, 'shaping_checklist')
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        guided = attrs.get('checklist', self.instance.checklist if self.instance else [])
+        shaping = attrs.get('shaping_checklist', self.instance.shaping_checklist if self.instance else [])
+        ids = [item['id'] for item in guided] + [item['id'] for item in shaping]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError('Checklist item IDs must be unique across both groups.')
+        completed_supplied = 'completed_items' in attrs
+        completed = attrs.get('completed_items', self.instance.completed_items if self.instance else [])
+        if not isinstance(completed, list) or any(not isinstance(item, str) for item in completed):
+            raise serializers.ValidationError({'completed_items': 'completed_items must be a list of strings.'})
+        invalid = sorted(set(completed) - set(ids))
+        if invalid and completed_supplied:
+            raise serializers.ValidationError({'completed_items': f'Unknown checklist item(s): {", ".join(invalid)}'})
+        stage = self.instance.stage if self.instance else self.context.get('stage')
+        if stage not in STAGE_WORKSPACE_CONFIG:
+            raise serializers.ValidationError({'stage': 'Unknown lifecycle stage.'})
+        return attrs
 
     def validate_completed_items(self, value):
         if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
             raise serializers.ValidationError('completed_items must be a list of strings.')
-        stage = self.instance.stage if self.instance else self.context.get('stage')
-        invalid = sorted(set(value) - checklist_ids(stage))
-        if invalid:
-            raise serializers.ValidationError(f'Unknown checklist item(s) for {stage}: {", ".join(invalid)}')
         return list(dict.fromkeys(value))
 
     def validate_notes(self, value):
         if not isinstance(value, str):
             raise serializers.ValidationError('notes must be a string.')
         return value
+
+    def update(self, instance, validated_data):
+        old_labels = {item['id']: item.get('label') for item in (instance.checklist or []) + (instance.shaping_checklist or []) if isinstance(item, dict) and item.get('id')}
+        previous_completed = list(instance.completed_items or [])
+        requested_completed = list(validated_data.get('completed_items', previous_completed))
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        new_labels = {item['id']: item.get('label') for item in (instance.checklist or []) + (instance.shaping_checklist or []) if isinstance(item, dict) and item.get('id')}
+        instance.completed_items = [item for item in requested_completed if item in new_labels and old_labels.get(item) == new_labels.get(item)]
+        instance.save()
+        return instance
+
+
+class StageChecklistDefaultSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StageChecklistDefault
+        fields = ['id', 'stage', 'checklist', 'shaping_checklist', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'stage', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        fallback = builtin_checklists(self.context.get('stage')) if not self.instance and self.context.get('stage') else {'checklist': [], 'shaping_checklist': []}
+        guided = attrs.get('checklist', self.instance.checklist if self.instance else fallback['checklist'])
+        shaping = attrs.get('shaping_checklist', self.instance.shaping_checklist if self.instance else fallback['shaping_checklist'])
+        for name, items in [('checklist', guided), ('shaping_checklist', shaping)]:
+            if not isinstance(items, list):
+                raise serializers.ValidationError({name: 'Must be a list of items.'})
+            for item in items:
+                if not isinstance(item, dict) or not isinstance(item.get('id'), str) or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', item['id']):
+                    raise serializers.ValidationError({name: 'Each item needs a valid lowercase ID.'})
+                if not isinstance(item.get('label'), str) or not item['label'].strip():
+                    raise serializers.ValidationError({name: 'Item labels cannot be blank.'})
+        ids = [item['id'] for item in guided] + [item['id'] for item in shaping]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError('Checklist item IDs must be unique across both groups.')
+        if 'checklist' in attrs:
+            attrs['checklist'] = [{'id': item['id'], 'label': item['label'].strip()[:300]} for item in guided]
+        if 'shaping_checklist' in attrs:
+            attrs['shaping_checklist'] = [{'id': item['id'], 'label': item['label'].strip()[:300]} for item in shaping]
+        return attrs
 
 class ProjectLaunchPromptSerializer(serializers.ModelSerializer):
     class Meta:
@@ -170,6 +270,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         milestones_data = validated_data.pop('milestones', [])
         project = Project.objects.create(**validated_data)
+        initialize_project_workspaces(project)
         for idx, m in enumerate(milestones_data):
             # allow client to pass id? generate if not
             m_id = m.get('id') or uuid.uuid4()
@@ -291,7 +392,7 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'project', 'title', 'description', 'stage', 'quadrant', 'category',
             'completed', 'due_date', 'estimated_minutes', 'time_spent_minutes',
-            'tags', 'created_at', 'completed_at', 'subtasks', 'milestones'
+            'tags', 'blocker_reason', 'blocker_next_action', 'created_at', 'completed_at', 'subtasks', 'milestones'
         ]
         read_only_fields = ['id', 'created_at', 'time_spent_minutes', 'completed_at']
 
@@ -315,6 +416,14 @@ class TaskSerializer(serializers.ModelSerializer):
             invalid = [str(m.id) for m in milestones if m.project_id != project.id]
             if invalid:
                 raise serializers.ValidationError({'milestones': 'All milestones must belong to the task project.'})
+        reason = attrs.get('blocker_reason', self.instance.blocker_reason if self.instance else '')
+        next_action = attrs.get('blocker_next_action', self.instance.blocker_next_action if self.instance else '')
+        if not isinstance(reason, str) or not isinstance(next_action, str):
+            raise serializers.ValidationError({'blocker_reason': 'Blocker fields must be strings.'})
+        if next_action.strip() and not reason.strip():
+            raise serializers.ValidationError({'blocker_reason': 'Add a blocker reason before the next action.'})
+        attrs['blocker_reason'] = reason.strip()
+        attrs['blocker_next_action'] = next_action.strip()
         return attrs
 
     def create(self, validated_data):
@@ -339,6 +448,11 @@ class TaskSerializer(serializers.ModelSerializer):
                 instance.completed_at = timezone.now()
             elif not validated_data['completed']:
                 instance.completed_at = None
+            if validated_data['completed']:
+                instance.blocker_reason = ''
+                instance.blocker_next_action = ''
+        if 'blocker_reason' in validated_data and not validated_data['blocker_reason'].strip():
+            instance.blocker_next_action = ''
         instance.save()
         if milestones_data is not None:
             instance.milestones.set(milestones_data)

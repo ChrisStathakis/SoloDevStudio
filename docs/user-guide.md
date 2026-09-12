@@ -48,7 +48,11 @@ Use **Add Task** from Projects or quick add, then set the project, stage, catego
 
 ## Stage Workspace
 
-Each project has a **Stage Workspace** tab immediately before Skills. It follows the project's current lifecycle stage and provides stage-specific guidance, a checklist, live task/checklist/time metrics, and a Markdown notes editor with Edit and Preview modes. Checklist changes save immediately; notes use **Save notes** and retain the draft if a save fails. Moving a project to another lifecycle stage opens that stage's workspace, while previous stage workspaces remain available when the project returns to them. Workspace notes are private planning context and are not included in coding-agent prompts.
+Each project has a **Stage Workspace** tab immediately before Skills. Use the stage selector to review any of the seven stages without changing the project's current stage. Guidance, tasks, metrics, notes, and both checklist groups follow the selected stage. Checklist checks save immediately; use **Edit** for either group to add, rename, reorder, or remove items with explicit Save/Cancel. **Apply my defaults** replaces the selected project's lists after confirmation. Notes use **Save notes** and retain the draft if a save fails. Workspace notes are private planning context and are not included in coding-agent prompts.
+
+Every Stage Workspace also includes an optional **Shaping the build** section. Use it to practise the four build-shaping habits: drive a build → inspect → learn → adjust loop, make product decisions and tradeoffs explicit, communicate progress and handoff context, and keep ownership through release and live feedback. Its checklist is separate from the stage checklist and never blocks stage changes. Use the prompts as reflection questions in the existing stage notes; in Development, checking the loop item means you have applied one iteration, not that the project is finished iterating.
+
+Settings → **Checklist defaults** lets you edit the starting lists for each stage and restore the built-in lists. Defaults affect new projects and future idea conversions; existing projects keep their own lists until you apply them from Stage Workspace. A completed item keeps its completion when its ID and label are unchanged.
 
 ## Ideas and sketches
 
@@ -62,9 +66,9 @@ Use **Launch to project** from an idea card or detail view. The conversion creat
 
 ## Dashboard, focus, and timeline
 
-Dashboard is the daily starting point: review active projects, pipeline stages, priority work, focus time, recent sessions, and overdue work. Select a project, task, or idea card to continue directly where you left off.
+Dashboard is the daily starting point. **Today's focus** holds an ordered selection of tasks with Start, Open, Complete, reorder, and carry-forward actions; it has no imposed three-task limit. Tasks can record a blocker reason and concrete next action, and completing a task clears its blocker. Review active projects, pipeline stages, priority work, focus time, recent sessions, and overdue work. In Stage Workspace, **Stage review** snapshots tasks, blockers, milestones, and both checklists with a Continue working or Ready to advance decision; advancement remains explicit.
 
-Focus & Timer supports Pomodoro and stopwatch modes, optional project/task assignment, notes, session history, and analytics. Use **Manual Time Log** for work completed outside the timer, **Pause** to hold a session, and **Complete & Log** to save it.
+Focus & Timer supports Pomodoro and stopwatch modes, optional project/task assignment, notes, session history, and analytics. Use **Manual Time Log** for work completed outside the timer, **Pause** to hold a session, and **Complete & Log** to save it. In the Windows desktop app, Settings → Desktop enables the SoloDev companion by default. Minimize the main window to show the indigo robot with the active task/timer, Pause/Resume, and Start focus controls. Drag it to reposition; it hides when the app is restored and exits when the app closes.
 
 Timeline groups project launches, milestone dates, and task due dates by urgency. Search or filter by event type and project, then use **Export ICS** to add the visible deadlines to a calendar.
 
@@ -82,3 +86,15 @@ Project docs are Markdown-like text records that can be linked to multiple proje
 6. Work in **Focus & Timer**, attaching sessions to the relevant project and task. Add manual entries when needed.
 7. Review **Dashboard** for progress and **Timeline** for upcoming launches, milestones, and deadlines.
 8. Keep decisions in linked project docs, export a backup periodically, and use the generated documentation site for reference.
+## Desktop CMD consoles
+
+Open a project's **CMD** action to work inside SoloDev Studio. It uses the CMD
+directory when configured, otherwise the project folder. A configured Python
+environment is activated automatically. **Run Server** runs the saved batch
+script in the same terminal interface and keeps its output and prompt available.
+Use the terminal's stop control to stop a session and its child processes.
+
+Desktop builds include Python and the terminal runtime; users do not need to
+install Python or pywinpty to open CMD. Project-specific tools such as Node.js,
+Git, or a project's Python environment are separate dependencies. Their setup
+commands and interactive prompts can be used inside the console.

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from rest_framework.test import APITestCase
 
-from .models import AgentFilter, Idea, IdeaCategory, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, StageWorkspace, Subtask, Task, TimeEntry, User
+from .models import AgentFilter, DailyFocus, Idea, IdeaCategory, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, StageChecklistDefault, StageReview, StageWorkspace, Subtask, Task, TimeEntry, User
 from .serializers import ProjectSerializer
 
 
@@ -582,6 +582,23 @@ class StageWorkspaceTests(APITestCase):
         invalid = self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/', {'completed_items': ['not-real']}, format='json')
         self.assertEqual(invalid.status_code, 400)
 
+    def test_shaping_checklist_items_save_reload_and_invalid_items_are_rejected(self):
+        saved = self.client.patch(
+            f'/api/projects/{self.project.pk}/stage-workspaces/development/',
+            {'completed_items': ['build-inspect-learn-adjust', 'progress-update']},
+            format='json',
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.data['completed_items'], ['build-inspect-learn-adjust', 'progress-update'])
+        reloaded = self.client.get(f'/api/projects/{self.project.pk}/stage-workspaces/development/')
+        self.assertEqual(reloaded.data['completed_items'], ['build-inspect-learn-adjust', 'progress-update'])
+        invalid = self.client.patch(
+            f'/api/projects/{self.project.pk}/stage-workspaces/development/',
+            {'completed_items': ['shaping-item-does-not-exist']},
+            format='json',
+        )
+        self.assertEqual(invalid.status_code, 400)
+
     def test_workspace_is_owner_scoped(self):
         self.client.force_authenticate(self.other_user)
         self.assertEqual(self.client.get(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/').status_code, 404)
@@ -593,6 +610,32 @@ class StageWorkspaceTests(APITestCase):
         self.assertEqual(StageWorkspace.objects.get(project=self.project, stage='planning').notes, 'Plan notes')
         ProjectLaunchPrompt.objects.create(project=self.project, content='Base prompt')
         self.assertNotIn('Idea notes', self.client.get(f'/api/projects/{self.project.pk}/initialize-prompt/').data['content'])
+
+    def test_editable_definitions_preserve_only_unchanged_completion(self):
+        current = self.client.get(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/').data
+        guided = [current['checklist'][0], {'id': 'custom-check', 'label': 'Custom check'}]
+        shaped = current['shaping_checklist']
+        saved = self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/', {'checklist': guided, 'shaping_checklist': shaped, 'completed_items': [guided[0]['id']]}, format='json')
+        self.assertEqual(saved.status_code, 200)
+        renamed = self.client.patch(f'/api/projects/{self.project.pk}/stage-workspaces/ideation/', {'checklist': [{'id': guided[0]['id'], 'label': 'Renamed problem'}] + guided[1:]}, format='json')
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.data['completed_items'], [])
+
+    def test_defaults_daily_focus_blocker_and_review_are_owner_scoped(self):
+        defaults = self.client.patch('/api/settings/checklist-defaults/ideation/', {'checklist': []}, format='json')
+        self.assertEqual(defaults.status_code, 200)
+        self.assertEqual(defaults.data['checklist'], [])
+        self.assertTrue(StageChecklistDefault.objects.filter(owner=self.user, stage='ideation').exists())
+        task = Task.objects.create(project=self.project, title='Unblock slice', stage='ideation')
+        focus = self.client.patch('/api/daily-focus/', {'day': '2026-09-12', 'task_ids': [str(task.id)]}, format='json')
+        self.assertEqual(focus.status_code, 200)
+        task.blocker_reason = 'Waiting on evidence'; task.blocker_next_action = 'Run interview'; task.save()
+        completed = self.client.post(f'/api/tasks/{task.pk}/toggle-complete/')
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.data['blocker_reason'], '')
+        review = self.client.post(f'/api/projects/{self.project.pk}/stage-reviews/ideation/', {'decision': 'continue', 'note': 'Keep validating'}, format='json')
+        self.assertEqual(review.status_code, 201)
+        self.assertEqual(review.data['review']['decision'], StageReview.CONTINUE)
 
 
 class LauncherModelPresetTests(APITestCase):
