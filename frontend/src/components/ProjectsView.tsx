@@ -87,6 +87,34 @@ const mapInitializationSettings = (raw: any): InitializationSettings => ({
   mode: raw?.mode === 'plan' ? 'plan' : 'build',
 });
 
+const PATH_ROW_IDS: ConsoleRowId[] = ['folder', 'script', 'cmd', 'pythonEnv'];
+
+const CopyPathButton: React.FC<{ path: string; label?: string }> = ({ path, label }) => {
+  const [copied, setCopied] = useState(false);
+  if (!path) return null;
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — no-op, title tooltip retains full path */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : `Copy ${label || 'path'}: ${path}`}
+      aria-label={`Copy ${label || 'path'}`}
+      className="p-1 rounded-lg text-slate-600 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors shrink-0"
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+};
+
 export const ProjectsView: React.FC = () => {
   const {
     projects,
@@ -145,6 +173,20 @@ export const ProjectsView: React.FC = () => {
   const [isEditingPort, setIsEditingPort] = useState<boolean>(false);
   const [portDraft, setPortDraft] = useState<string>('');
   const [pickerField, setPickerField] = useState<null | 'directoryPath' | 'scriptPath' | 'cmdDirectory' | 'pythonEnv'>(null);
+  const [pathsExpanded, setPathsExpanded] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('solodev:paths-expanded') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('solodev:paths-expanded', pathsExpanded ? '1' : '0');
+    } catch {
+      /* storage unavailable */
+    }
+  }, [pathsExpanded]);
   const [isEditingCmdDir, setIsEditingCmdDir] = useState<boolean>(false);
   const [cmdDirDraft, setCmdDirDraft] = useState<string>('');
   const [isEditingPythonEnv, setIsEditingPythonEnv] = useState<boolean>(false);
@@ -804,6 +846,15 @@ export const ProjectsView: React.FC = () => {
     setFieldError(field, msg);
   };
 
+  // Axios reports a dead/unreachable backend as a bare "Network Error".
+  // Surface that case plainly so it isn't mistaken for a CMD failure.
+  const describeTerminalError = (e: any, fallback: string) => {
+    if (!e?.response && (e?.message === 'Network Error' || e?.code === 'ERR_NETWORK')) {
+      return 'Backend unreachable — the app backend may have stopped. Restart the app and try again.';
+    }
+    return e?.response?.data?.error || e?.message || fallback;
+  };
+
   const handleRunScript = async () => {
     if (!activeProject) return;
     if (!activeProject.scriptPath) {
@@ -818,7 +869,7 @@ export const ProjectsView: React.FC = () => {
       if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
       await drawer.create('script');
     } catch (e: any) {
-      showActionError(e?.response?.data?.error || e?.message || 'Failed to run script.', 'script');
+      showActionError(describeTerminalError(e, 'Failed to run script.'), 'script');
     } finally {
       setIsRunningScript(false);
     }
@@ -833,7 +884,7 @@ export const ProjectsView: React.FC = () => {
       if (!drawer) throw new Error('Terminal console is still loading. Please try again in a moment.');
       await drawer.create('cmd');
     } catch (e: any) {
-      showActionError(e?.response?.data?.error || e?.message || 'Failed to open cmd.', 'cmd');
+      showActionError(describeTerminalError(e, 'Failed to open cmd.'), 'cmd');
     } finally {
       setIsOpeningCmd(false);
     }
@@ -1042,7 +1093,7 @@ export const ProjectsView: React.FC = () => {
         }
         if (!activeProject.directoryPath) return null;
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <FolderOpen className="w-3.5 h-3.5 text-content-faint shrink-0" />
             <span
               className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
@@ -1050,6 +1101,7 @@ export const ProjectsView: React.FC = () => {
             >
               {activeProject.directoryPath}
             </span>
+            <CopyPathButton path={activeProject.directoryPath} label="project folder" />
             <button
               type="button"
               onClick={() => {
@@ -1121,7 +1173,7 @@ export const ProjectsView: React.FC = () => {
         }
         if (!activeProject.scriptPath) return null;
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5 text-content-faint shrink-0" />
             <span
               className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
@@ -1129,6 +1181,7 @@ export const ProjectsView: React.FC = () => {
             >
               {activeProject.scriptPath}
             </span>
+            <CopyPathButton path={activeProject.scriptPath} label="server script" />
             <button
               type="button"
               onClick={() => {
@@ -1249,7 +1302,7 @@ export const ProjectsView: React.FC = () => {
         }
         if (!activeProject.cmdDirectory) return null;
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Terminal className="w-3.5 h-3.5 text-content-faint shrink-0" />
             <span
               className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
@@ -1257,6 +1310,7 @@ export const ProjectsView: React.FC = () => {
             >
               {activeProject.cmdDirectory}
             </span>
+            <CopyPathButton path={activeProject.cmdDirectory} label="CMD directory" />
             <button
               type="button"
               onClick={() => {
@@ -1335,7 +1389,7 @@ export const ProjectsView: React.FC = () => {
           );
         }
         return (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Boxes className="w-3.5 h-3.5 text-content-faint shrink-0" />
             <span
               className="text-[13px] font-mono text-content-faint truncate max-w-xs sm:max-w-md lg:max-w-lg"
@@ -1343,6 +1397,7 @@ export const ProjectsView: React.FC = () => {
             >
               {activeProject.pythonEnv}
             </span>
+            <CopyPathButton path={activeProject.pythonEnv || ''} label="Python environment" />
             <button
               type="button"
               onClick={() => {
@@ -1671,119 +1726,185 @@ export const ProjectsView: React.FC = () => {
                         {/* Project runtime errors - per field, persistent until dismissed */}
             <ProjectRuntimeErrors errors={actionErrors} onDismiss={clearFieldError} onDismissAll={clearAllActionErrors} />
             {/* Console / path rows — order + labels are customizable per project (move + rename). */}
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={consoleLayout.reset}
-                className="flex items-center gap-1 text-[12px] font-black uppercase tracking-wider text-slate-600 hover:text-indigo-400 transition-colors"
-                title="Reset row order and names to defaults"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Reset rows
-              </button>
-            </div>
-            {consoleLayout.order.map((rowId, idx) => {
-              const body = renderConsoleRowBody(rowId);
-              if (!body) return null;
-              const label = consoleLayout.displayLabel(rowId);
-              const isRenaming = renamingRowId === rowId;
-              const isDragOver = overRowId === rowId && dragRowId !== rowId;
-              return (
-                <div
-                  key={rowId}
-                  draggable={renamingRowId !== rowId}
-                  onDragStart={() => setDragRowId(rowId)}
-                  onDragEnd={() => { setDragRowId(null); setOverRowId(null); }}
-                  onDragOver={(e) => { e.preventDefault(); setOverRowId(rowId); }}
-                  onDrop={() => dropRowOn(rowId)}
-                  className={`group/row flex items-start gap-2 rounded-xl border px-2 py-1.5 transition-colors ${isDragOver ? 'border-indigo-500 bg-indigo-500/5' : 'border-transparent hover:border-line hover:bg-surface-2/50'} ${dragRowId === rowId ? 'opacity-50' : ''}`}
-                >
-                  <span
-                    className="mt-1 cursor-grab active:cursor-grabbing text-content-faint hover:text-content shrink-0"
-                    title="Drag to reorder"
+            {/* Path rows (folder/script/cmd/pythonEnv) live in a collapsible div to save space. */}
+            {(() => {
+              const renderRow = (rowId: ConsoleRowId) => {
+                const body = renderConsoleRowBody(rowId);
+                if (!body) return null;
+                const label = consoleLayout.displayLabel(rowId);
+                const isRenaming = renamingRowId === rowId;
+                const isDragOver = overRowId === rowId && dragRowId !== rowId;
+                const orderIdx = consoleLayout.order.indexOf(rowId);
+                return (
+                  <div
+                    key={rowId}
+                    draggable={renamingRowId !== rowId}
+                    onDragStart={() => setDragRowId(rowId)}
+                    onDragEnd={() => { setDragRowId(null); setOverRowId(null); }}
+                    onDragOver={(e) => { e.preventDefault(); setOverRowId(rowId); }}
+                    onDrop={() => dropRowOn(rowId)}
+                    className={`group/row flex items-start gap-2 rounded-xl border px-2 py-1.5 transition-colors ${isDragOver ? 'border-indigo-500 bg-indigo-500/5' : 'border-transparent hover:border-line hover:bg-surface-2/50'} ${dragRowId === rowId ? 'opacity-50' : ''}`}
                   >
-                    <GripVertical className="w-4 h-4" />
-                  </span>
-                  <div className="flex flex-col gap-1 min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      {isRenaming ? (
-                        <span className="flex items-center gap-1.5 flex-1 min-w-0">
-                          <input
-                            type="text"
-                            autoFocus
-                            value={renameDraft}
-                            maxLength={60}
-                            onChange={e => setRenameDraft(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') saveRenameRow();
-                              if (e.key === 'Escape') { setRenamingRowId(null); setRenameDraft(''); }
-                            }}
-                            aria-label={`Rename ${label} row`}
-                            placeholder="Row name"
-                            className="min-w-0 flex-1 px-2 py-0.5 bg-surface-2 border border-indigo-500 rounded-lg text-[12px] font-black uppercase tracking-wider text-content outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={saveRenameRow}
-                            className="p-1 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
-                            title="Save name"
-                            aria-label={`Save name for ${label} row`}
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setRenamingRowId(null); setRenameDraft(''); }}
-                            className="p-1 rounded-lg text-content-faint hover:text-content transition-colors"
-                            title="Cancel rename"
-                            aria-label={`Cancel rename for ${label} row`}
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </span>
-                      ) : (
-                        <>
-                          <span className="text-[12px] font-black uppercase tracking-wider text-content-faint truncate" title={label}>
-                            {label}
+                    <span
+                      className="mt-1 cursor-grab active:cursor-grabbing text-content-faint hover:text-content shrink-0"
+                      title="Drag to reorder"
+                    >
+                      <GripVertical className="w-4 h-4" />
+                    </span>
+                    <div className="flex flex-col gap-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        {isRenaming ? (
+                          <span className="flex items-center gap-1.5 flex-1 min-w-0">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={renameDraft}
+                              maxLength={60}
+                              onChange={e => setRenameDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveRenameRow();
+                                if (e.key === 'Escape') { setRenamingRowId(null); setRenameDraft(''); }
+                              }}
+                              aria-label={`Rename ${label} row`}
+                              placeholder="Row name"
+                              className="min-w-0 flex-1 px-2 py-0.5 bg-surface-2 border border-indigo-500 rounded-lg text-[12px] font-black uppercase tracking-wider text-content outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={saveRenameRow}
+                              className="p-1 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+                              title="Save name"
+                              aria-label={`Save name for ${label} row`}
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setRenamingRowId(null); setRenameDraft(''); }}
+                              className="p-1 rounded-lg text-content-faint hover:text-content transition-colors"
+                              title="Cancel rename"
+                              aria-label={`Cancel rename for ${label} row`}
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => startRenameRow(rowId)}
-                            className="p-0.5 rounded text-slate-600 hover:text-indigo-400 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
-                            title={`Rename ${label}`}
-                            aria-label={`Rename ${label} row`}
-                          >
-                            <Pencil className="w-3 h-3" />
-                          </button>
-                        </>
-                      )}
-                      <span className="flex-1" />
+                        ) : (
+                          <>
+                            <span className="text-[12px] font-black uppercase tracking-wider text-content-faint truncate" title={label}>
+                              {label}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => startRenameRow(rowId)}
+                              className="p-0.5 rounded text-slate-600 hover:text-indigo-400 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
+                              title={`Rename ${label}`}
+                              aria-label={`Rename ${label} row`}
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                          </>
+                        )}
+                        <span className="flex-1" />
+                        <button
+                          type="button"
+                          disabled={orderIdx === 0}
+                          onClick={() => consoleLayout.move(rowId, 'up')}
+                          className="p-0.5 rounded text-content-faint hover:text-indigo-400 disabled:opacity-20 transition-all shrink-0"
+                          title={`Move ${label} up`}
+                          aria-label={`Move ${label} up`}
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={orderIdx === consoleLayout.order.length - 1}
+                          onClick={() => consoleLayout.move(rowId, 'down')}
+                          className="p-0.5 rounded text-content-faint hover:text-indigo-400 disabled:opacity-20 transition-all shrink-0"
+                          title={`Move ${label} down`}
+                          aria-label={`Move ${label} down`}
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {body}
+                    </div>
+                  </div>
+                );
+              };
+              const pathRows = consoleLayout.order.filter(id => PATH_ROW_IDS.includes(id));
+              const otherRows = consoleLayout.order.filter(id => !PATH_ROW_IDS.includes(id));
+              const visiblePathCount = pathRows.filter(id => renderConsoleRowBody(id) !== null).length;
+              const copyAllPaths = async (e: React.MouseEvent) => {
+                e.stopPropagation();
+                if (!activeProject) return;
+                const lines = [
+                  activeProject.directoryPath ? `Project Folder: ${activeProject.directoryPath}` : null,
+                  activeProject.scriptPath ? `Server Script: ${activeProject.scriptPath}` : null,
+                  activeProject.cmdDirectory ? `CMD Directory: ${activeProject.cmdDirectory}` : null,
+                  activeProject.pythonEnv ? `Python Environment: ${activeProject.pythonEnv}` : null,
+                ].filter(Boolean) as string[];
+                if (!lines.length) return;
+                try {
+                  await navigator.clipboard.writeText(lines.join('\n'));
+                  toast({ title: 'All paths copied.', tone: 'success' });
+                } catch {
+                  toast({ title: 'Unable to copy — browser blocked clipboard.', tone: 'error' });
+                }
+              };
+              return (
+                <>
+                  <div className="rounded-2xl border border-line bg-surface-1 overflow-hidden">
+                    <div className="flex items-center gap-2 px-3 py-2">
                       <button
                         type="button"
-                        disabled={idx === 0}
-                        onClick={() => consoleLayout.move(rowId, 'up')}
-                        className="p-0.5 rounded text-content-faint hover:text-indigo-400 disabled:opacity-20 transition-all shrink-0"
-                        title={`Move ${label} up`}
-                        aria-label={`Move ${label} up`}
+                        onClick={() => setPathsExpanded(v => !v)}
+                        aria-expanded={pathsExpanded}
+                        className="flex flex-1 min-w-0 items-center gap-2 text-left"
+                        title={pathsExpanded ? 'Hide paths' : 'Show paths'}
                       >
-                        <ArrowUp className="w-3.5 h-3.5" />
+                        <FolderOpen className="w-4 h-4 text-indigo-500 shrink-0" />
+                        <span className="text-[12px] font-black uppercase tracking-wider text-content truncate">
+                          Paths & scripts
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded-md bg-surface-3 border border-line text-[11px] font-mono text-content-faint shrink-0">
+                          {visiblePathCount}/{pathRows.length}
+                        </span>
+                        {!pathsExpanded && activeProject?.directoryPath && (
+                          <span className="hidden sm:block flex-1 min-w-0 truncate text-[11px] font-mono text-content-faint" title={activeProject.directoryPath}>
+                            {activeProject.directoryPath}
+                          </span>
+                        )}
+                        <ChevronDown className={`w-4 h-4 text-content-faint transition-transform shrink-0 ${pathsExpanded ? 'rotate-180' : ''}`} />
                       </button>
                       <button
                         type="button"
-                        disabled={idx === consoleLayout.order.length - 1}
-                        onClick={() => consoleLayout.move(rowId, 'down')}
-                        className="p-0.5 rounded text-content-faint hover:text-indigo-400 disabled:opacity-20 transition-all shrink-0"
-                        title={`Move ${label} down`}
-                        aria-label={`Move ${label} down`}
+                        onClick={copyAllPaths}
+                        title="Copy all paths"
+                        aria-label="Copy all paths"
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors shrink-0"
                       >
-                        <ArrowDown className="w-3.5 h-3.5" />
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={consoleLayout.reset}
+                        className="p-1.5 rounded-lg text-slate-600 hover:text-indigo-400 transition-colors shrink-0"
+                        title="Reset row order and names to defaults"
+                        aria-label="Reset rows"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                    {body}
+                    {pathsExpanded && (
+                      <div className="px-1.5 pb-1.5 space-y-0.5">
+                        {pathRows.map(renderRow)}
+                      </div>
+                    )}
                   </div>
-                </div>
+                  {otherRows.map(renderRow)}
+                </>
               );
-            })}
+            })()}
 
 {pickerField && activeProject && (
               <PathPickerModal

@@ -14,6 +14,8 @@ import { Zap, Terminal as TerminalIcon, X, Square, ChevronsDownUp, ChevronsUpDow
 import { api, authedFetch } from '../services/api';
 import { scanOutputMarkers } from '../services/initialization';
 import { notifyTerminalsChanged, TERMINAL_OPEN_EVENT } from '../hooks/useLiveTerminals';
+import { clearTerminalPetSnapshot, publishTerminalPetSnapshot } from '../services/terminalPetFeed';
+import { extractImageFiles, fileToDownscaledDataUrl } from '../services/imagePaste';
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, splitInputChunks } from '../services/terminalInput';
 
 export type TerminalMode = 'cmd' | 'script';
@@ -182,6 +184,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const [terminalError, setTerminalError] = useState<string | null>(null);
     const [pasteProgress, setPasteProgress] = useState<{ sent: number; total: number } | null>(null);
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+    const [isDragging, setIsDragging] = useState<boolean>(false);
     const connStateRef = useRef<'idle' | 'connecting' | 'live' | 'error'>('idle');
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
@@ -205,6 +208,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const dragStateRef = useRef<{ startY: number; startH: number } | null>(null);
     // Bumped to cancel an in-flight chunked paste (tab switch / close / new paste).
     const pasteSeqRef = useRef(0);
+    const petPublishAtRef = useRef(0);
     const inputQueuesRef = useRef<Map<string, InputQueue>>(new Map());
     const pasteDispatchRef = useRef(false);
     const latestHeightRef = useRef<number>(heightPx);
@@ -309,6 +313,41 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         )
       );
     }, []);
+
+    // Publishes the active session's output tail for the desktop companion
+    // ("pet") so it can show CMD progress and done state while minimized.
+    // Throttled: the stream pump calls this on every chunk.
+    const publishPetSnapshot = useCallback((opts?: { force?: boolean; alive?: boolean; exitCode?: number | null }) => {
+      const sessionId = activeIdRef.current;
+      if (!sessionId) return;
+      const now = Date.now();
+      if (!opts?.force && now - petPublishAtRef.current < 1000) return;
+      petPublishAtRef.current = now;
+      const rt = runtimeRef.current;
+      const session = sessionsRef.current.find(s => s.id === sessionId);
+      if (!session) return;
+      const stripped = rt.outputTail.replace(ANSI_SEQUENCE_RE, '');
+      publishTerminalPetSnapshot({
+        sessionId,
+        projectId: session.projectId ?? projectIdRef.current,
+        projectTitle: session.projectTitle || '',
+        mode: session.mode,
+        alive: opts?.alive ?? session.alive,
+        exitCode: opts?.exitCode !== undefined ? opts.exitCode : session.exitCode,
+        tailText: stripped.slice(-600),
+        promptReady: CMD_PROMPT_RE.test(stripped.slice(-512)),
+        lastOutputAt: rt.lastOutputAt,
+        revision: rt.outputRevision,
+        updatedAt: now,
+      });
+    }, []);
+
+    const markExitedAndPublish = useCallback((sessionId: string, code: number | null) => {
+      markExited(sessionId, code);
+      if (sessionId === activeIdRef.current) {
+        publishPetSnapshot({ force: true, alive: false, exitCode: code });
+      }
+    }, [markExited, publishPetSnapshot]);
 
     const getInputQueue = useCallback((sessionId: string): InputQueue => {
       const existing = inputQueuesRef.current.get(sessionId);
@@ -454,6 +493,33 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       }
     }, []);
 
+    // Pasted bitmaps become file inputs: save the image server-side, then
+    // type its quoted path so commands / agent CLIs can consume it.
+    const handlePasteImages = useCallback(async (files: File[]): Promise<void> => {
+      const sessionId = activeIdRef.current;
+      const rt = runtimeRef.current;
+      if (!sessionId || !rt.term || !rt.inputReady) return;
+      setTerminalError(null);
+      try {
+        const images = [];
+        for (const file of files.slice(0, 4)) {
+          images.push(await fileToDownscaledDataUrl(file));
+        }
+        for (const image of images) {
+          const blob = await (await fetch(image.dataUrl)).blob();
+          const form = new FormData();
+          form.append('image', blob, `pasted-image.${image.mimeType === 'image/png' ? 'png' : 'jpg'}`);
+          const res = await api.post<{ path: string }>('/uploads/image/', form, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          const savedPath = res.data?.path;
+          if (savedPath) handlePasteText(`"${savedPath}"`);
+        }
+      } catch (e: any) {
+        setTerminalError(e?.response?.data?.error || e?.message || 'Could not save the pasted image.');
+      }
+    }, [handlePasteText]);
+
     // Used when Ctrl+V (etc.) is pressed while focus is outside the terminal:
     // focusing alone would not deliver the clipboard, so read it explicitly.
     const pasteFromClipboard = useCallback(async (): Promise<void> => {
@@ -572,10 +638,16 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       };
       container.addEventListener('mousedown', onMouseDown);
 
-      // xterm/browser paste handling can attempt to read image clipboard
-      // entries and surface an "image not supported" message. Terminals only
-      // need plain text, so consume the paste event before xterm sees it.
+      // Images are saved server-side and typed in as file paths (see
+      // handlePasteImages); only pure-text pastes fall through to xterm.
       const onPaste = (event: ClipboardEvent) => {
+        const images = extractImageFiles(event.clipboardData);
+        if (images.length > 0) {
+          event.preventDefault();
+          event.stopPropagation();
+          void handlePasteImages(images);
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         const text = event.clipboardData?.getData('text/plain') || '';
@@ -753,6 +825,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               rt.outputRevision += 1;
               rt.lastOutputAt = Date.now();
               rt.outputTail = `${rt.outputTail}${output}`.slice(-8192);
+              publishPetSnapshot();
               await new Promise<void>(resolve => {
                 term.write(output, () => {
                   handleInitialOutputRendered(output);
@@ -762,7 +835,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               if (connStateRef.current !== 'live') setConnState('live');
             }
             if (evt.e === true) {
-              markExited(activeId, (evt.c as number | null) ?? null);
+              markExitedAndPublish(activeId, (evt.c as number | null) ?? null);
               finished = true;
               break;
             }
@@ -796,7 +869,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             // Session gone (e.g. backend restarted, registry wiped) → stop cleanly.
             if (e instanceof Error && /HTTP 404/.test(e.message)) {
               term.write('\x1b[33m\r\n[session ended — backend may have restarted]\x1b[0m\r\n');
-              markExited(activeId, null);
+              markExitedAndPublish(activeId, null);
               setConnState('error');
               break;
             }
@@ -1025,6 +1098,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       if (fullscreen) return;
       e.preventDefault();
       dragStateRef.current = { startY: e.clientY, startH: latestHeightRef.current };
+      setIsDragging(true);
 
       const move = (ev: PointerEvent) => {
         const start = dragStateRef.current;
@@ -1034,12 +1108,43 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       };
       const up = () => {
         dragStateRef.current = null;
+        setIsDragging(false);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
         persistHeightToStorage(latestHeightRef.current);
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    };
+
+    const onHandleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape' && open) {
+        e.stopPropagation();
+        return;
+      }
+      if (fullscreen) return;
+      const step = e.shiftKey ? 40 : 12;
+      let next: number | null = null;
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        next = clampHeight(latestHeightRef.current + step);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        next = clampHeight(latestHeightRef.current - step);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        next = Math.floor(window.innerHeight * MAX_VIEWPORT_RATIO);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        resetHeight();
+        return;
+      }
+      if (next !== null) {
+        setHeightPx(next);
+        persistHeightToStorage(next);
+      }
     };
 
     const resetHeight = useCallback(() => {
@@ -1063,6 +1168,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
 
     const closeTab = (sessionId: string) => {
       if (sessionId === activeId) teardownRuntime();
+      clearTerminalPetSnapshot(sessionId);
       const remaining = sessionsRef.current.filter(s => s.id !== sessionId);
       setSessions(remaining);
       if (activeId === sessionId) {
@@ -1085,6 +1191,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           setActiveId(activeId);
         }
         markExited(sessionId, null);
+        if (sessionId === activeIdRef.current) {
+          publishPetSnapshot({ force: true, alive: false, exitCode: null });
+        }
         api.delete(`/terminals/${sessionId}/`).catch(() => {});
         notifyTerminalsChanged();
       },
@@ -1172,30 +1281,36 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           }`}
           style={{ height: `${effectiveHeight}px` }}
         >
-          {/* Drag handle */}
+          {/* Drag handle — custom tooltip only (no native `title`, which renders
+              as an unstyled white box in Electron/Chromium and lingers during drag). */}
           <div
             role="slider"
             tabIndex={0}
-            aria-label="Resize terminal drawer"
+            aria-label="Resize terminal drawer. Drag to resize, double-click to reset."
             aria-valuemin={160}
             aria-valuemax={800}
             aria-valuenow={Math.round(effectiveHeight)}
+            aria-disabled={fullscreen}
             onPointerDown={onHandlePointerDown}
             onDoubleClick={resetHeight}
-            onKeyDown={e => {
-              if (e.key === 'ArrowUp') { e.preventDefault(); onHandlePointerDown; }
-              if (e.key === 'Escape' && open) { e.stopPropagation(); }
-            }}
-            title={fullscreen ? 'Exit fullscreen' : 'Drag to resize • double-click to reset'}
-            className={`group h-3 w-full shrink-0 cursor-row-resize flex items-center justify-center select-none touch-none focus-visible:outline-none focus-visible:bg-indigo-500/20 ${
-              fullscreen ? '' : 'hover:bg-indigo-500/20'
+            onKeyDown={onHandleKeyDown}
+            className={`group relative h-3 w-full shrink-0 flex items-center justify-center select-none touch-none focus-visible:outline-none focus-visible:bg-indigo-500/20 ${
+              fullscreen ? 'cursor-default' : 'cursor-row-resize hover:bg-indigo-500/20'
             }`}
           >
             <div
-              className={`h-1 w-24 rounded-full bg-slate-700 group-hover:bg-indigo-400 transition-colors ${
-                fullscreen ? 'opacity-30' : ''
+              className={`h-1 w-24 rounded-full bg-slate-700 transition-colors ${
+                fullscreen ? 'opacity-30' : 'group-hover:bg-indigo-400'
               }`}
             />
+            {!fullscreen && !isDragging && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute top-full z-10 mt-1.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-line bg-slate-900 px-2.5 py-1 text-[11px] font-mono font-bold text-content shadow-xl opacity-0 translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0 group-focus-visible:opacity-100 group-focus-visible:translate-y-0"
+              >
+                Drag to resize • double-click to reset
+              </span>
+            )}
           </div>
 
           {/* Tab strip */}

@@ -5,6 +5,7 @@ import type { Project, ProjectDoc } from '../types';
 import { useAgentFilters } from '../hooks/useAgentFilters';
 import { renderMarkdownSafe } from '../utils/markdown';
 import { useToast } from './Toaster';
+import { useImagePaste } from '../hooks/useImagePaste';
 import {
   FileText,
   Trash2,
@@ -61,6 +62,16 @@ export const DocEditor: React.FC<DocEditorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const copyTimeout = React.useRef<number | null>(null);
+  const draftContentRef = React.useRef(draftContent);
+  draftContentRef.current = draftContent;
+  const {
+    areaRef: contentAreaRef,
+    handlePaste: handleContentPaste,
+    pasteNotice,
+  } = useImagePaste({
+    getText: () => draftContentRef.current,
+    setText: setDraftContent,
+  });
 
   const handleCopy = async () => {
     try {
@@ -312,13 +323,20 @@ export const DocEditor: React.FC<DocEditorProps> = ({
       </div>
 
       {editorMode === 'edit' ? (
-        <textarea
-          value={draftContent}
-          onChange={e => setDraftContent(e.target.value)}
-          placeholder={'# Heading\n\nWrite your markdown here...'}
-          spellCheck={false}
-          className="w-full min-h-[380px] p-4 bg-surface-2 border border-line focus:border-indigo-500 rounded-2xl text-sm font-mono text-content placeholder:text-slate-600 outline-none resize-y transition-colors leading-relaxed"
-        />
+        <>
+          <textarea
+            ref={contentAreaRef}
+            value={draftContent}
+            onChange={e => setDraftContent(e.target.value)}
+            onPaste={e => void handleContentPaste(e)}
+            placeholder={'# Heading\n\nWrite your markdown here... (tip: paste images to embed them)'}
+            spellCheck={false}
+            className="w-full min-h-[380px] p-4 bg-surface-2 border border-line focus:border-indigo-500 rounded-2xl text-sm font-mono text-content placeholder:text-slate-600 outline-none resize-y transition-colors leading-relaxed"
+          />
+          {pasteNotice && (
+            <p className="text-xs font-bold text-indigo-600 dark:text-indigo-300" role="status">{pasteNotice}</p>
+          )}
+        </>
       ) : (
         <div className="min-h-[380px] p-5 bg-surface-2 border border-line rounded-2xl overflow-auto">
           {draftContent.trim() ? (

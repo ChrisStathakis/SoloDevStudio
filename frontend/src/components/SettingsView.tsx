@@ -16,6 +16,8 @@ import {
   Filter,
   Download,
   Upload,
+  CloudUpload,
+  CloudDownload,
   RotateCcw,
   LogOut,
   FileCog,
@@ -30,6 +32,19 @@ import {
   HardDrive,
   ClipboardCheck
 } from 'lucide-react';
+import {
+  fetchCloudMeta,
+  pushCloudBackup,
+  restoreCloudBackup,
+  getLastPushAt,
+  getLastSyncAt,
+  isLocalDirty,
+  isAutoPushEnabled,
+  setAutoPushEnabled,
+  setLastSeenRemoteAt,
+  formatCloudDate,
+  type CloudBackupMeta,
+} from '../services/cloudBackup';
 import { PageHeader } from './ui';
 import { DocEditor } from './DocEditor';
 import { FilterManager } from './FilterManager';
@@ -100,6 +115,88 @@ export const SettingsView: React.FC = () => {
   // Data & backup state
   const [backupStatus, setBackupStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [isBusy, setIsBusy] = useState<boolean>(false);
+
+  // PythonAnywhere cloud backup state
+  const [cloudMeta, setCloudMeta] = useState<CloudBackupMeta | null>(null);
+  const [cloudBusy, setCloudBusy] = useState<boolean>(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [lastPushAt, setLastPushAt] = useState<string | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [localDirty, setLocalDirty] = useState<boolean>(false);
+  const [autoPush, setAutoPush] = useState<boolean>(true);
+
+  const refreshCloudMeta = useCallback(async () => {
+    try {
+      const meta = await fetchCloudMeta();
+      setCloudMeta(meta);
+      setCloudError(null);
+      if (meta?.exists && meta.exportedAt) setLastSeenRemoteAt(meta.exportedAt);
+    } catch {
+      setCloudError('PythonAnywhere is unreachable. Local data is unaffected.');
+    } finally {
+      setLastPushAt(getLastPushAt());
+      setLastSyncAt(getLastSyncAt());
+      setLocalDirty(isLocalDirty());
+      setAutoPush(isAutoPushEnabled());
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === 'data') void refreshCloudMeta();
+  }, [section, refreshCloudMeta]);
+
+  const handleCloudPush = async () => {
+    if (cloudMeta?.exists && cloudMeta.exportedAt && lastSyncAt && cloudMeta.exportedAt > lastSyncAt) {
+      const ok = await confirm({
+        title: `Overwrite cloud backup from ${formatCloudDate(cloudMeta.exportedAt)}?`,
+        description: 'Another device saved a newer snapshot after your last sync. Saving now replaces it.',
+        confirmLabel: 'Overwrite cloud backup',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setCloudBusy(true);
+    setCloudError(null);
+    try {
+      const meta = await pushCloudBackup();
+      setCloudMeta(meta?.exists === false ? { exists: false } : { exists: true, ...meta });
+      setBackupStatus({ ok: true, msg: 'Workspace saved to PythonAnywhere.' });
+      setTimeout(() => setBackupStatus(null), 4000);
+    } catch {
+      setCloudError('Save to PythonAnywhere failed. Check your connection and try again.');
+    } finally {
+      setCloudBusy(false);
+      setLastPushAt(getLastPushAt());
+      setLastSyncAt(getLastSyncAt());
+      setLocalDirty(isLocalDirty());
+    }
+  };
+
+  const handleCloudPull = async () => {
+    if (!cloudMeta?.exists) return;
+    const ok = await confirm({
+      title: `Replace local workspace with cloud backup from ${formatCloudDate(cloudMeta.exportedAt)}?`,
+      description: 'Local changes since your last sync will be lost. This cannot be undone.',
+      confirmLabel: 'Load cloud backup',
+      danger: true,
+    });
+    if (!ok) return;
+    setCloudBusy(true);
+    setCloudError(null);
+    try {
+      await restoreCloudBackup();
+      await refreshData();
+      setBackupStatus({ ok: true, msg: 'Workspace loaded from PythonAnywhere.' });
+      setTimeout(() => setBackupStatus(null), 4000);
+    } catch {
+      setCloudError('Load from PythonAnywhere failed. Local data is unchanged.');
+    } finally {
+      setCloudBusy(false);
+      setLastPushAt(getLastPushAt());
+      setLastSyncAt(getLastSyncAt());
+      setLocalDirty(isLocalDirty());
+    }
+  };
 
   const loadDocs = useCallback(async () => {
     setIsLoadingDocs(true);
@@ -766,6 +863,63 @@ export const SettingsView: React.FC = () => {
                 <div className="text-[13px] text-content-faint">Imports a backup file into this workspace.</div>
               </div>
               <input type="file" accept=".json" onChange={handleFileUpload} className="hidden" />
+            </label>
+          </div>
+
+          <div className="p-5 rounded-2xl bg-surface border border-line space-y-4">
+            <div>
+              <h3 className="text-sm font-black text-content">PythonAnywhere Sync</h3>
+              <p className="text-xs text-content-faint mt-0.5">
+                Share one workspace between devices. Saving overwrites the single cloud snapshot; loading replaces this device&apos;s workspace.
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-[11px] font-mono text-content-faint space-y-0.5">
+              <div>Cloud snapshot: {cloudMeta?.exists ? formatCloudDate(cloudMeta.exportedAt) : 'none yet'}</div>
+              <div>Last saved: {formatCloudDate(lastPushAt)}{localDirty ? ' · unsaved local changes' : ''}</div>
+            </div>
+
+            {cloudError && (
+              <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{cloudError}</p>
+            )}
+
+            <button
+              type="button"
+              disabled={isBusy || cloudBusy}
+              onClick={handleCloudPush}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-left transition-all disabled:opacity-40"
+            >
+              <CloudUpload className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <div>
+                <div className="text-xs font-black text-content">Save to PythonAnywhere</div>
+                <div className="text-[13px] text-content-faint">Uploads this workspace to the shared cloud snapshot.</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              disabled={isBusy || cloudBusy || !cloudMeta?.exists}
+              onClick={handleCloudPull}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-2 border border-line hover:border-emerald-700 text-left transition-all disabled:opacity-40"
+            >
+              <CloudDownload className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div>
+                <div className="text-xs font-black text-content">Load from PythonAnywhere</div>
+                <div className="text-[13px] text-content-faint">Replaces this workspace with the cloud snapshot.</div>
+              </div>
+            </button>
+
+            <label className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 py-3 text-xs font-bold text-content">
+              <input
+                type="checkbox"
+                checked={autoPush}
+                onChange={e => { const enabled = e.target.checked; setAutoPush(enabled); setAutoPushEnabled(enabled); }}
+                className="h-4 w-4 accent-indigo-600"
+              />
+              <span>
+                <span className="block">Auto-save to cloud on exit</span>
+                <span className="mt-0.5 block text-[11px] font-normal text-content-faint">Best-effort save when the app closes. Use Save before important changes.</span>
+              </span>
             </label>
           </div>
 

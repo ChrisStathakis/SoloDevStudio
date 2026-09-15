@@ -173,7 +173,7 @@ function createWindow() {
 function clampCompanionPosition(x, y) {
   const display = screen.getDisplayNearestPoint({ x, y });
   const area = display.workArea;
-  const width = 330; const height = 220;
+  const width = 330; const height = 250;
   return { x: Math.max(area.x, Math.min(Math.round(x), area.x + area.width - width)), y: Math.max(area.y, Math.min(Math.round(y), area.y + area.height - height)) };
 }
 
@@ -181,7 +181,7 @@ function showCompanion() {
   const settings = readSettings();
   if (!settings.companionEnabled || companionDismissed || !mainWindow) return;
   if (!companionWindow) {
-    companionWindow = new BrowserWindow({ width: 330, height: 220, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'companion-preload.cjs') } });
+    companionWindow = new BrowserWindow({ width: 330, height: 250, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'companion-preload.cjs') } });
     companionWindow.setAlwaysOnTop(true, 'floating');
     companionWindow.setVisibleOnAllWorkspaces(true);
     companionWindow.loadFile(path.join(__dirname, 'companion.html'));
@@ -189,7 +189,7 @@ function showCompanion() {
     companionWindow.on('closed', () => { companionWindow = null; });
   }
   const display = screen.getDisplayMatching(mainWindow.getBounds());
-  const saved = settings.companionPosition || { x: display.workArea.x + display.workArea.width - 350, y: display.workArea.y + display.workArea.height - 240 };
+  const saved = settings.companionPosition || { x: display.workArea.x + display.workArea.width - 350, y: display.workArea.y + display.workArea.height - 270 };
   const position = clampCompanionPosition(saved.x, saved.y);
   companionWindow.setPosition(position.x, position.y);
   companionWindow.showInactive();

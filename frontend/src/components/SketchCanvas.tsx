@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import type { SketchObject, SketchObjectType } from '../types';
 import { clearSketchDraft } from './sketchDraft';
+import { extractImageFiles, fileToDownscaledDataUrl } from '../services/imagePaste';
 import {
   bbox,
   unionBox,
@@ -604,6 +605,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   useEffect(() => () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
   }, []);
+
+  // Repaint once pasted images finish decoding (drawObject draws a
+  // placeholder until the bitmap is ready).
+  useEffect(() => {
+    registerSketchImageNotify(() => requestDraw());
+    return () => registerSketchImageNotify(null);
+  }, [requestDraw]);
 
   // ---------- minimap (board + content overview, click/drag to navigate) ----------
   const miniRef = useRef<HTMLCanvasElement | null>(null);
@@ -1548,6 +1556,49 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     setCam(c => ({ ...c, z: nz }));
   };
 
+  // Paste clipboard bitmaps as selectable `image` objects at the viewport
+  // center. Plain-text pastes are ignored here (canvas has no text fields).
+  const pasteImages = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    setSaveError(null);
+    try {
+      const cam = camRef.current;
+      const cx = (CANVAS_W / 2 - cam.x) / cam.z;
+      const cy = (CANVAS_H / 2 - cam.y) / cam.z;
+      const added: SketchObject[] = [];
+      for (const [index, file] of files.slice(0, 4).entries()) {
+        const image = await fileToDownscaledDataUrl(file);
+        const scale = Math.min(1, 420 / Math.max(image.width, image.height));
+        const w = Math.max(1, Math.round(image.width * scale));
+        const h = Math.max(1, Math.round(image.height * scale));
+        added.push({
+          id: uid(),
+          type: 'image',
+          x: Math.round(cx - w / 2 + index * 24),
+          y: Math.round(cy - h / 2 + index * 24),
+          w,
+          h,
+          color: '#818cf8',
+          fill: true,
+          src: image.dataUrl,
+        });
+      }
+      if (!added.length) return;
+      commit([...objectsRef.current, ...added]);
+      setSelectedIds(added.map(o => o.id));
+    } catch (e: any) {
+      setSaveError(e?.message || 'Could not paste the image.');
+    }
+  }, [commit]);
+
+  const handleCanvasPaste = useCallback((e: React.ClipboardEvent) => {
+    const files = extractImageFiles(e.clipboardData);
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void pasteImages(files);
+  }, [pasteImages]);
+
   const fitToContent = () => {
     const boxes = objectsRef.current.map(bbox);
     const b = unionBox(boxes);
@@ -2399,6 +2450,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       {/* Canvas Area */}
       <div
         ref={containerRef}
+        onPaste={handleCanvasPaste}
         className={`relative flex items-center justify-center p-4 bg-surface-inverse overflow-auto ${
           isFullscreen ? 'flex-1 min-h-0' : 'min-h-[400px]'
         }`}
@@ -2481,7 +2533,42 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 };
 
 // ---- drawing of a single object (module-level, uses world coords) ----
+// Decoded bitmap cache for pasted `image` objects (keyed by data-URL).
+// drawObject is synchronous, so first paint draws a placeholder and the
+// onload callback asks the mounted canvas to repaint via requestDraw.
+const sketchImageCache = new Map<string, HTMLImageElement>();
+let sketchImageNotify: (() => void) | null = null;
+export function registerSketchImageNotify(fn: (() => void) | null) {
+  sketchImageNotify = fn;
+}
+function cachedSketchImage(src: string): HTMLImageElement | null {
+  let img = sketchImageCache.get(src);
+  if (!img) {
+    img = new Image();
+    img.onload = () => sketchImageNotify?.();
+    img.src = src;
+    sketchImageCache.set(src, img);
+    return null;
+  }
+  return img.complete && img.naturalWidth > 0 ? img : null;
+}
+
 function drawObject(ctx: CanvasRenderingContext2D, o: SketchObject, byId: Map<string, SketchObject>) {
+  if (o.type === 'image') {
+    const img = o.src ? cachedSketchImage(o.src) : null;
+    if (img) {
+      ctx.drawImage(img, o.x, o.y, o.w, o.h);
+    } else {
+      ctx.save();
+      ctx.fillStyle = '#e0e7ff';
+      ctx.strokeStyle = '#818cf8';
+      ctx.setLineDash([6, 4]);
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+      ctx.strokeRect(o.x, o.y, o.w, o.h);
+      ctx.restore();
+    }
+    return;
+  }
   if (o.type === 'sticky') {
     ctx.fillStyle = o.color;
     roundRect(ctx, o.x, o.y, o.w, o.h, 10);
@@ -2609,6 +2696,10 @@ function svgArrowHead(x: number, y: number, ang: number, len: number, color: str
 
 function svgForObject(o: SketchObject, byId: Map<string, SketchObject>): string {
   const sw = o.strokeWidth || 3;
+  if (o.type === 'image') {
+    if (!o.src) return '';
+    return `<image href="${svgEscape(o.src)}" x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" preserveAspectRatio="xMidYMid meet"/>`;
+  }
   if (o.type === 'sticky') {
     // Same metrics as canvas: per-object font size, 12px pad, fs+4 rhythm
     const fs = o.fontSize || 14;

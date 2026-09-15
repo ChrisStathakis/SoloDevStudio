@@ -1,0 +1,20 @@
+  • electron-builder  version=26.15.3 os=10.0.26200
+  • loaded configuration  file=package.json ("build" field)
+  • author is missed in the package.json  appPackageFile=E:\projects\app_task\package.json
+  • executing @electron/rebuild  electronVersion=37.10.3 arch=x64 buildFromSource=false workspaceRoot=E:\projects\app_task projectDir=./ appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=win32 arch=x64 electron=37.10.3 appOutDir=release\win-unpacked
+  • downloaded      label=electron progress=100%
+  • downloaded electron zip extracted successfully  output=E:\projects\app_task\release\win-unpacked
+  • searching for node modules  pm=npm searchDir=E:\projects\app_task
+  • updating asar integrity executable resource  executablePath=release\win-unpacked\SoloDev Studio.exe
+  • signing with signtool.exe  path=release\win-unpacked\resources\backend\solodev-backend.exe
+  • default Electron icon is used  reason=application icon is not set
+  • signing with signtool.exe  path=release\win-unpacked\SoloDev Studio.exe
+  • building        target=nsis file=release\SoloDev-Studio-Setup-1.0.3.exe archs=x64 oneClick=false perMachine=false
+  • signing with signtool.exe  path=release\win-unpacked\resources\elevate.exe
+  • downloaded      label=nsis-resources-3.4.1.7z progress=100%
+  • signing with signtool.exe  path=release\SoloDev-Studio-Setup-1.0.3.__uninstaller.exe
+  • signing with signtool.exe  path=release\SoloDev-Studio-Setup-1.0.3.exe
+  • building block map  blockMapFile=release\SoloDev-Studio-Setup-1.0.3.exe.blockmap

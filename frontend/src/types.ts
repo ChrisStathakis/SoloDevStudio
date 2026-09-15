@@ -238,7 +238,8 @@ export type SketchObjectType =
   | 'text'
   | 'path'
   | 'arrow'
-  | 'line';
+  | 'line'
+  | 'image';
 
 export type SketchArrowhead = 'none' | 'start' | 'end' | 'both';
 
@@ -267,6 +268,7 @@ export interface SketchObject {
   dash?: boolean; // dashed stroke for shapes/arrows/lines
   groupId?: string | null; // shared id for grouped objects (moved/selected together)
   locked?: boolean; // locked objects can't be selected, moved, or edited
+  src?: string; // image: data-URL of the pasted picture
   route?: SketchRoute; // arrow/line: straight (default), curve, or elbow
   label?: string; // arrow/line: optional midpoint label
   waypoints?: number[]; // elbow route: intermediate corners [x1,y1,x2,y2,...]

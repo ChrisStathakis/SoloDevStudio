@@ -1,5 +1,5 @@
-﻿import React, { useState, useEffect, useCallback } from 'react';
-import { Folder, File as FileIcon, ChevronUp, X, Loader2, HardDrive } from 'lucide-react';
+﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Folder, File as FileIcon, ChevronUp, ChevronDown, X, Loader2, HardDrive, Copy, Check } from 'lucide-react';
 import { api } from '../services/api';
 
 interface PathPickerModalProps {
@@ -32,6 +32,51 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [crumbOpen, setCrumbOpen] = useState<boolean>(false);
+  const [copiedPath, setCopiedPath] = useState<boolean>(false);
+
+  const copyText = useCallback(async (text: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const handleCopyCurrent = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const target = mode === 'folder' ? currentPath : selected || currentPath;
+    if (!target) return;
+    if (await copyText(target)) {
+      setCopiedPath(true);
+      window.setTimeout(() => setCopiedPath(false), 1500);
+    }
+  }, [mode, currentPath, selected, copyText]);
+
+  // Split Windows/posix path into breadcrumb segments with cumulative paths.
+  const crumbs = useMemo(() => {
+    if (!currentPath) return [] as { label: string; path: string }[];
+    const normalized = currentPath.replace(/\//g, '\\');
+    const parts = normalized.split('\\').filter(Boolean);
+    if (!parts.length) return [];
+    // Detect drive root e.g. "D:" -> "D:\"
+    const out: { label: string; path: string }[] = [];
+    let acc = '';
+    parts.forEach((part, idx) => {
+      if (idx === 0 && /^[A-Za-z]:$/.test(part)) {
+        acc = `${part}\\`;
+        out.push({ label: acc, path: acc });
+      } else {
+        acc = acc ? `${acc}${part}\\` : part;
+        // strip trailing slash except drive root for browsing
+        const browsePath = acc.endsWith('\\') && !/^[A-Za-z]:\\$/.test(acc) ? acc.slice(0, -1) : acc;
+        out.push({ label: part, path: browsePath });
+      }
+    });
+    return out;
+  }, [currentPath]);
 
   const browse = useCallback(async (path: string) => {
     setLoading(true);
@@ -104,7 +149,7 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
           </button>
         </div>
 
-        {/* Current path bar */}
+        {/* Current path bar + breadcrumb dropdown + copy */}
         <div className="flex items-center gap-2 px-5 py-2.5 bg-surface-2 border-b border-line">
           <button
             type="button"
@@ -115,9 +160,54 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
           >
             <ChevronUp className="w-4 h-4" />
           </button>
-          <div className="flex-1 min-w-0 px-2 py-1 rounded-lg bg-surface-1 border border-line text-[12px] font-mono text-content-faint truncate" title={currentPath || 'This PC'}>
-            {currentPath || 'This PC'}
+          <div className="relative flex-1 min-w-0">
+            <button
+              type="button"
+              onClick={() => setCrumbOpen(v => !v)}
+              className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-1 border border-line text-[12px] font-mono text-content-faint hover:text-content hover:border-line-strong transition-colors min-w-0"
+              title={currentPath || 'This PC — click to jump to a parent folder'}
+            >
+              <span className="flex-1 min-w-0 truncate text-left">{currentPath || 'This PC'}</span>
+              {crumbs.length > 0 && <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${crumbOpen ? 'rotate-180' : ''}`} />}
+            </button>
+            {crumbOpen && crumbs.length > 0 && (
+              <>
+                <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-10 cursor-default" onClick={() => setCrumbOpen(false)} />
+                <div role="menu" className="absolute left-0 right-0 sm:right-auto sm:min-w-[280px] sm:max-w-[420px] z-20 mt-1.5 rounded-xl border border-line bg-surface-1 shadow-2xl py-1 max-h-64 overflow-y-auto">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setCrumbOpen(false); browse(''); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs font-mono text-content-faint hover:bg-surface-3 hover:text-content transition-colors text-left"
+                  >
+                    <HardDrive className="w-3.5 h-3.5 shrink-0" /> This PC
+                  </button>
+                  {crumbs.map(c => (
+                    <button
+                      key={c.path}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { setCrumbOpen(false); browse(c.path); }}
+                      title={c.path}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors text-left truncate ${c.path === currentPath ? 'text-indigo-400 bg-indigo-500/10' : 'text-content-faint hover:bg-surface-3 hover:text-content'}`}
+                    >
+                      <Folder className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{c.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
+          <button
+            type="button"
+            onClick={handleCopyCurrent}
+            disabled={!(mode === 'folder' ? currentPath : selected || currentPath)}
+            title={copiedPath ? 'Copied!' : `Copy ${mode === 'folder' ? 'current folder' : 'selected'} path`}
+            className="p-1.5 rounded-lg bg-surface-1 border border-line text-content-faint hover:text-indigo-400 hover:border-line-strong transition-colors disabled:opacity-40 shrink-0"
+          >
+            {copiedPath ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+          </button>
         </div>
 
         {/* Entries */}
@@ -143,17 +233,21 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
               ? !fileFilter.map(f => f.toLowerCase()).some(ext => entry.name.toLowerCase().endsWith(ext))
               : false;
             return (
-              <button
+              <div
                 key={entry.path}
+                className={`group/entry w-full flex items-center gap-1 pl-1 pr-1.5 py-0.5 rounded-xl text-left transition-colors border ${
+                  isSelected
+                    ? 'bg-indigo-600/20 border-indigo-500/40'
+                    : 'hover:bg-surface-3 border-transparent'
+                } ${disabledFile ? 'opacity-40' : ''}`}
+              >
+              <button
                 type="button"
                 disabled={disabledFile}
                 onClick={() => handleEntryClick(entry)}
                 onDoubleClick={() => { if (entry.is_dir) browse(entry.path); }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition-colors ${
-                  isSelected
-                    ? 'bg-indigo-600/20 border border-indigo-500/40'
-                    : 'hover:bg-surface-3 border border-transparent'
-                } ${disabledFile ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                title={entry.is_dir ? `Open ${entry.path}` : entry.path}
+                className={`flex-1 min-w-0 flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left ${disabledFile ? 'cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {entry.is_dir ? (
                   isRoots ? <HardDrive className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" /> : <Folder className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
@@ -162,17 +256,40 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
                 )}
                 <span className="text-[13px] font-mono text-content truncate">{entry.name}</span>
               </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); void copyText(entry.path); }}
+                title={`Copy path: ${entry.path}`}
+                aria-label={`Copy ${entry.name} path`}
+                className="p-1.5 rounded-lg text-slate-600 hover:text-indigo-400 hover:bg-indigo-500/10 opacity-0 group-hover/entry:opacity-100 focus-visible:opacity-100 transition-all shrink-0"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+              </div>
             );
           })}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-line">
-          <span className="text-[11px] font-bold text-content-faint truncate max-w-[60%]" title={mode === 'folder' ? currentPath : selected || ''}>
-            {mode === 'folder'
-              ? (currentPath || 'This PC')
-              : (selected || 'No file selected')}
-          </span>
+          <div className="flex items-center gap-1 min-w-0 max-w-[60%]">
+            <span className="flex-1 text-[11px] font-bold text-content-faint truncate" title={mode === 'folder' ? currentPath : selected || ''}>
+              {mode === 'folder'
+                ? (currentPath || 'This PC')
+                : (selected || 'No file selected')}
+            </span>
+            {(mode === 'folder' ? currentPath : selected) && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); void copyText(mode === 'folder' ? currentPath : selected || ''); }}
+                title="Copy selected path"
+                aria-label="Copy selected path"
+                className="p-1 rounded-lg text-slate-600 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors shrink-0"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"

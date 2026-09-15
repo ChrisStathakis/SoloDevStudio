@@ -18,7 +18,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup
 from .serializers import (
     UserSerializer, RegisterSerializer,
     ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer, StageChecklistDefaultSerializer,
@@ -1196,12 +1196,13 @@ class ProjectDocViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
-# ---------- Export / Import / Dashboard / Timeline / Research ----------
+# ---------- Export / Import / Cloud backup / Dashboard / Timeline / Research ----------
 
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def export_data_view(request):
-    user = request.user
+CLOUD_BACKUP_SLOT = 'manual'
+CLOUD_BACKUP_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _build_export_payload(user):
     projects = Project.objects.filter(owner=user).prefetch_related('milestones')
     tasks = Task.objects.filter(project__owner=user).prefetch_related('subtasks')
     ideas = Idea.objects.filter(owner=user)
@@ -1210,7 +1211,7 @@ def export_data_view(request):
     presets = LauncherModelPreset.objects.filter(owner=user)
     stage_workspaces = StageWorkspace.objects.filter(project__owner=user)
     from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer
-    data = {
+    return {
         "version": "1.0",
         "exportedAt": timezone.now().isoformat(),
         "projects": ProjectSerializer(projects, many=True).data,
@@ -1225,7 +1226,52 @@ def export_data_view(request):
         "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
         "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
     }
-    return Response(data)
+
+
+def _wipe_workspace_data(user):
+    """Delete every user-owned workspace record; shared by reset + cloud restore."""
+    project_ids = list(Project.objects.filter(owner=user).values_list('id', flat=True))
+    doc_ids = list(ProjectDoc.objects.filter(owner=user).values_list('id', flat=True))
+    legacy_link_table = 'core_projectdoc_projects'
+    if legacy_link_table in connection.introspection.table_names() and (project_ids or doc_ids):
+        clauses = []
+        params = []
+        if doc_ids:
+            placeholders = ', '.join(['%s'] * len(doc_ids))
+            clauses.append(f'projectdoc_id IN ({placeholders})')
+            params.extend(value.hex for value in doc_ids)
+        if project_ids:
+            placeholders = ', '.join(['%s'] * len(project_ids))
+            clauses.append(f'project_id IN ({placeholders})')
+            params.extend(value.hex for value in project_ids)
+        with connection.cursor() as cursor:
+            cursor.execute(f'DELETE FROM {legacy_link_table} WHERE {" OR ".join(clauses)}', params)
+    TimeEntry.objects.filter(owner=user).delete()
+    ProjectDoc.objects.filter(owner=user).delete()
+    LauncherModelPreset.objects.filter(owner=user).delete()
+    DailyFocus.objects.filter(owner=user).delete()
+    StageChecklistDefault.objects.filter(owner=user).delete()
+    Idea.objects.filter(owner=user).delete()
+    Project.objects.filter(owner=user).delete()
+    if user.potential_projects_root:
+        user.potential_projects_root = ''
+        user.save(update_fields=['potential_projects_root'])
+
+
+def _cloud_backup_meta(backup):
+    return {
+        'exists': True,
+        'name': backup.name,
+        'exportedAt': backup.exported_at.isoformat() if backup.exported_at else None,
+        'updatedAt': backup.updated_at.isoformat() if backup.updated_at else None,
+        'sizeBytes': backup.size_bytes,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def export_data_view(request):
+    return Response(_build_export_payload(request.user))
 
 
 @api_view(['POST'])
@@ -1249,49 +1295,15 @@ def reset_workspace_view(request):
             'modelPresets': LauncherModelPreset.objects.filter(owner=user).count(),
         }
 
-        # Migration 0018 replaced Django's automatic M2M table with
-        # ProjectAgentLink, but early local databases retain the old table.
-        # Django no longer knows about it, so its rows must be removed before
-        # deleting projects or skills or SQLite rejects the transaction.
-        legacy_link_table = 'core_projectdoc_projects'
-        if legacy_link_table in connection.introspection.table_names() and (project_ids or doc_ids):
-            clauses = []
-            params = []
-            if doc_ids:
-                placeholders = ', '.join(['%s'] * len(doc_ids))
-                clauses.append(f'projectdoc_id IN ({placeholders})')
-                params.extend(value.hex for value in doc_ids)
-            if project_ids:
-                placeholders = ', '.join(['%s'] * len(project_ids))
-                clauses.append(f'project_id IN ({placeholders})')
-                params.extend(value.hex for value in project_ids)
-            with connection.cursor() as cursor:
-                cursor.execute(f'DELETE FROM {legacy_link_table} WHERE {" OR ".join(clauses)}', params)
-
-        # Delete direct user-owned records first. Project deletion cascades to
-        # milestones, subtasks, launch prompts, and project-skill links.
-        TimeEntry.objects.filter(owner=user).delete()
-        ProjectDoc.objects.filter(owner=user).delete()
-        LauncherModelPreset.objects.filter(owner=user).delete()
-        DailyFocus.objects.filter(owner=user).delete()
-        StageChecklistDefault.objects.filter(owner=user).delete()
-        Idea.objects.filter(owner=user).delete()
-        Project.objects.filter(owner=user).delete()
-
-        # This setting is part of an exported workspace, unlike sign-in and
-        # device preferences such as theme and desktop port.
-        if user.potential_projects_root:
-            user.potential_projects_root = ''
-            user.save(update_fields=['potential_projects_root'])
+        _wipe_workspace_data(user)
 
     return Response({'success': True, 'deleted': deleted})
 
 
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
-def import_data_view(request):
-    data = request.data
-    user = request.user
+def _perform_import(user, data):
+    """Shared additive import used by manual import and cloud restore."""
+    if not isinstance(data, dict):
+        raise ValueError('Invalid backup format.')
     imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "stageWorkspaces": 0, "checklistDefaults": 0, "dailyFocuses": 0, "stageReviews": 0, "modelPresets": 0, "settings": 0}
     project_id_map = {}
     milestone_id_map = {}
@@ -1686,7 +1698,72 @@ def import_data_view(request):
                     defaults={'model_id': model_id.strip(), 'reasoning_effort': reasoning_effort, 'mode': mode, 'enabled': preset.get('enabled', True)},
                 )
                 imported["modelPresets"] += 1
+    return imported
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def import_data_view(request):
+    try:
+        with transaction.atomic():
+            imported = _perform_import(request.user, request.data)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     return Response({"success": True, "imported": imported})
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def cloud_backup_latest_view(request):
+    backup = CloudBackup.objects.filter(owner=request.user, name=CLOUD_BACKUP_SLOT).first()
+    if not backup:
+        return Response({'exists': False})
+    meta_only = request.query_params.get('meta') in ('1', 'true', 'yes')
+    meta = _cloud_backup_meta(backup)
+    if meta_only:
+        return Response(meta)
+    return Response({**meta, 'payload': backup.payload})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def cloud_backup_push_view(request):
+    data = request.data
+    if not isinstance(data, dict) or data.get('version') != '1.0':
+        return Response({'error': 'Invalid backup format: version 1.0 payload required.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        raw = json.dumps(data)
+    except (TypeError, ValueError):
+        return Response({'error': 'Backup payload is not JSON serializable.'}, status=status.HTTP_400_BAD_REQUEST)
+    size_bytes = len(raw.encode('utf-8'))
+    if size_bytes > CLOUD_BACKUP_MAX_BYTES:
+        return Response({'error': f'Backup too large ({size_bytes} bytes, max {CLOUD_BACKUP_MAX_BYTES}).'}, status=status.HTTP_400_BAD_REQUEST)
+    exported_at = None
+    raw_exported = data.get('exportedAt')
+    if isinstance(raw_exported, str):
+        try:
+            exported_at = datetime.fromisoformat(raw_exported)
+        except ValueError:
+            exported_at = None
+    backup, _ = CloudBackup.objects.update_or_create(
+        owner=request.user,
+        name=CLOUD_BACKUP_SLOT,
+        defaults={'payload': data, 'exported_at': exported_at or timezone.now(), 'size_bytes': size_bytes},
+    )
+    return Response({'success': True, **_cloud_backup_meta(backup)})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def cloud_backup_restore_view(request):
+    """Replace the caller's workspace with their stored cloud snapshot."""
+    backup = CloudBackup.objects.filter(owner=request.user, name=CLOUD_BACKUP_SLOT).first()
+    if not backup or not isinstance(backup.payload, dict):
+        return Response({'error': 'No cloud backup found.'}, status=status.HTTP_404_NOT_FOUND)
+    with transaction.atomic():
+        _wipe_workspace_data(request.user)
+        imported = _perform_import(request.user, backup.payload)
+    return Response({"success": True, "imported": imported, **_cloud_backup_meta(backup)})
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])

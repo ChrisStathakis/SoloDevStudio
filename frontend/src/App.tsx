@@ -18,14 +18,81 @@ import { CommandPalette } from './components/CommandPalette';
 import { ActiveTerminalsPill } from './components/ActiveTerminalsPill';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/Toaster';
+import { CloudSyncManager } from './components/CloudSyncManager';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './services/queryClient';
 import { api } from './services/api';
+import { useLiveTerminals } from './hooks/useLiveTerminals';
+import {
+  extractPetLines,
+  getTerminalPetSnapshot,
+  subscribeTerminalPetSnapshot,
+  type TerminalPetSnapshot,
+} from './services/terminalPetFeed';
+
+export type CompanionTerminalStatus = 'running' | 'done' | 'exited' | 'idle';
+
+export interface CompanionTerminalState {
+  status: CompanionTerminalStatus;
+  projectTitle: string;
+  mode: string;
+  exitCode: number | null;
+  lines: string[];
+  doneAt: number | null;
+  updatedAt: number;
+}
+
+const TERMINAL_DONE_QUIET_MS = 2000;
+const TERMINAL_STALE_MS = 15000;
+
+function resolveCompanionTerminal(
+  snapshot: TerminalPetSnapshot | null,
+  liveIds: Set<string>,
+  now: number,
+): CompanionTerminalState | null {
+  if (!snapshot) return null;
+  if (now - snapshot.updatedAt > 60000 && !liveIds.has(snapshot.sessionId)) return null;
+  // The live list only contains alive sessions: if it has loaded and the
+  // snapshot session is gone while the snapshot itself is stale, the
+  // session exited without the drawer noticing (e.g. drawer closed).
+  const alive = snapshot.alive && (liveIds.has(snapshot.sessionId) || now - snapshot.updatedAt < TERMINAL_STALE_MS);
+  let status: CompanionTerminalStatus;
+  let doneAt: number | null = null;
+  if (!alive) {
+    status = 'exited';
+    doneAt = snapshot.updatedAt;
+  } else if (snapshot.lastOutputAt > 0 && now - snapshot.lastOutputAt >= TERMINAL_DONE_QUIET_MS && snapshot.promptReady) {
+    status = 'done';
+    doneAt = snapshot.lastOutputAt + TERMINAL_DONE_QUIET_MS;
+  } else if (snapshot.lastOutputAt > 0) {
+    status = 'running';
+  } else {
+    status = 'idle';
+  }
+  return {
+    status,
+    projectTitle: snapshot.projectTitle,
+    mode: snapshot.mode,
+    exitCode: snapshot.exitCode,
+    lines: extractPetLines(snapshot.tailText),
+    doneAt,
+    updatedAt: snapshot.updatedAt,
+  };
+}
 
 const DesktopCompanionBridge: React.FC = () => {
   const { projects, tasks, timeTracker, startTimer, pauseTimer, resumeTimer, setCurrentView, setSelectedProjectId, openQuickAdd } = useApp();
   const { isAuthenticated } = useAuth();
   const [focusIds, setFocusIds] = useState<string[]>([]);
+  const [petSnapshot, setPetSnapshot] = useState<TerminalPetSnapshot | null>(() => getTerminalPetSnapshot());
+  const [petTick, setPetTick] = useState(() => Date.now());
+  const { sessions: liveSessions } = useLiveTerminals();
+  useEffect(() => subscribeTerminalPetSnapshot(setPetSnapshot), []);
+  useEffect(() => {
+    if (!petSnapshot) return;
+    const t = window.setInterval(() => setPetTick(Date.now()), 2000);
+    return () => window.clearInterval(t);
+  }, [petSnapshot]);
   useEffect(() => { if (!isAuthenticated) { setFocusIds([]); return; } let active = true; const load = () => { void api.get('/daily-focus/').then(res => { if (active) setFocusIds(Array.isArray(res.data?.task_ids) ? res.data.task_ids : []); }).catch(() => {}); }; load(); const interval = window.setInterval(load, 15000); return () => { active = false; window.clearInterval(interval); }; }, [isAuthenticated]);
   useEffect(() => {
     const bridge = window.solodevDesktop;
@@ -33,11 +100,14 @@ const DesktopCompanionBridge: React.FC = () => {
     if (!isAuthenticated) { bridge.updateCompanionState({ reportedAt: Date.now(), loggedOut: true, timer: null, task: null }); return; }
     const activeTask = tasks.find(task => task.id === timeTracker.taskId);
     const suggested = focusIds.map(id => tasks.find(task => task.id === id)).find(task => task && !task.completed) || tasks.find(task => !task.completed);
+    const liveIds = new Set(liveSessions.map(s => s.id));
+    const terminal = resolveCompanionTerminal(petSnapshot, liveIds, petTick);
     bridge.updateCompanionState({ reportedAt: Date.now(),
       timer: timeTracker.isRunning || timeTracker.projectId ? { active: Boolean(timeTracker.isRunning || timeTracker.secondsElapsed), paused: !timeTracker.isRunning, secondsRemaining: timeTracker.secondsRemaining, secondsElapsed: timeTracker.secondsElapsed, taskTitle: activeTask?.title || '', projectTitle: projects.find(project => project.id === timeTracker.projectId)?.title || '' } : null,
       task: suggested ? { title: suggested.title, projectTitle: projects.find(project => project.id === suggested.projectId)?.title || '', taskId: suggested.id, projectId: suggested.projectId } : null,
+      terminal,
     });
-  }, [projects, tasks, timeTracker, isAuthenticated, focusIds]);
+  }, [projects, tasks, timeTracker, isAuthenticated, focusIds, petSnapshot, petTick, liveSessions]);
   useEffect(() => {
     const bridge = window.solodevDesktop;
     if (!bridge) return;
@@ -120,6 +190,7 @@ export default function App() {
         <AppProvider>
           <ToastProvider>
             <DesktopCompanionBridge />
+            <CloudSyncManager />
             <AppFrame />
           </ToastProvider>
         </AppProvider>

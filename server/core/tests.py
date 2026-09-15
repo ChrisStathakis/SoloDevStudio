@@ -3,6 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from .models import AgentFilter, DailyFocus, Idea, IdeaCategory, LauncherModelPreset, Milestone, Project, ProjectAgentLink, ProjectDoc, ProjectLaunchPrompt, StageChecklistDefault, StageReview, StageWorkspace, Subtask, Task, TimeEntry, User
@@ -744,3 +746,51 @@ class TerminalOutputTests(APITestCase):
         self.assertEqual(response.status_code, 404)
         self.assertTrue(response['Content-Type'].startswith('application/x-ndjson'))
         self.assertEqual(response.content, b'{"error":"Terminal session not found."}\n')
+
+
+class ImageUploadTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='upload-owner',
+            email='upload-owner@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _png(self, name='paste.png'):
+        # Minimal valid PNG (1x1 pixel).
+        payload = (
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+            b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00'
+            b'\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+        return SimpleUploadedFile(name, payload, content_type='image/png')
+
+    def _post_image(self, **kwargs):
+        db_path = str(Path(self.tmp.name) / 'test.sqlite3')
+        with override_settings(DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': db_path}}):
+            return self.client.post('/api/uploads/image/', {'image': self._png()}, format='multipart', **kwargs)
+
+    def test_upload_saves_png_next_to_database(self):
+        response = self._post_image()
+
+        self.assertEqual(response.status_code, 201)
+        saved = Path(response.data['path'])
+        self.assertEqual(saved.parent, Path(self.tmp.name) / 'uploads')
+        self.assertTrue(saved.suffix == '.png' and saved.exists())
+
+    def test_upload_rejects_non_images(self):
+        db_path = str(Path(self.tmp.name) / 'test.sqlite3')
+        bad = SimpleUploadedFile('note.txt', b'hello', content_type='text/plain')
+        with override_settings(DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': db_path}}):
+            response = self.client.post('/api/uploads/image/', {'image': bad}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_upload_requires_auth(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.post('/api/uploads/image/', {'image': self._png()}, format='multipart')
+
+        self.assertIn(response.status_code, (401, 403))

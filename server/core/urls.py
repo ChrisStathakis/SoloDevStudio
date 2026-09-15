@@ -6,12 +6,14 @@ from .views import (
     ProjectViewSet, MilestoneViewSet, TaskViewSet, IdeaViewSet, TimeEntryViewSet,
     ProjectDocViewSet, AgentFilterViewSet, IdeaCategoryViewSet, LauncherModelPresetViewSet,
     export_data_view, import_data_view, reset_workspace_view, dashboard_view, timeline_view,
+    cloud_backup_latest_view, cloud_backup_push_view, cloud_backup_restore_view,
     filesystem_browse, project_folder_settings_view, project_drive_settings_view, checklist_defaults_view, checklist_default_stage_view, daily_focus_view,
 )
 from .terminal_views import (
     create_project_terminal, list_terminals, kill_terminal,
     terminal_input, terminal_output, terminal_resize,
 )
+from .upload_views import upload_image
 
 router = DefaultRouter()
 router.register(r'projects', ProjectViewSet, basename='project')
@@ -32,6 +34,9 @@ urlpatterns = [
     path('auth/me/', me_view, name='me'),
     path('export/', export_data_view, name='export'),
     path('import/', import_data_view, name='import_data'),
+    path('cloud-backup/latest/', cloud_backup_latest_view, name='cloud-backup-latest'),
+    path('cloud-backup/push/', cloud_backup_push_view, name='cloud-backup-push'),
+    path('cloud-backup/restore/', cloud_backup_restore_view, name='cloud-backup-restore'),
     path('workspace/reset/', reset_workspace_view, name='workspace-reset'),
     path('dashboard/', dashboard_view, name='dashboard'),
     path('timeline/', timeline_view, name='timeline'),
@@ -41,6 +46,8 @@ urlpatterns = [
     path('settings/checklist-defaults/', checklist_defaults_view, name='checklist-defaults'),
     path('settings/checklist-defaults/<str:stage>/', checklist_default_stage_view, name='checklist-default-stage'),
     path('daily-focus/', daily_focus_view, name='daily-focus'),
+    # Pasted-image uploads (consoles consume them as file paths)
+    path('uploads/image/', upload_image, name='upload-image'),
     # In-app terminal sessions
     path('terminals/', list_terminals, name='terminal-list'),
     path('terminals/<str:session_id>/output/', terminal_output, name='terminal-output'),

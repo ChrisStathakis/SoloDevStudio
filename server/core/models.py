@@ -429,3 +429,34 @@ class TimeEntry(models.Model):
 
     def __str__(self):
         return f"{self.project_title} - {self.duration_seconds}s"
+
+
+class CloudBackup(models.Model):
+    """Single-slot per-user workspace snapshot for PythonAnywhere sync.
+
+    The Electron app pushes the full ``export/`` payload here and pulls it
+    back on another device. ``name`` allows future slots; v1 uses 'manual'.
+    """
+
+    MANUAL = 'manual'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='cloud_backups')
+    name = models.CharField(max_length=50, default=MANUAL)
+    payload = models.JSONField(default=dict)
+    exported_at = models.DateTimeField(null=True, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'name'], name='unique_owner_cloud_backup'),
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'name']),
+        ]
+
+    def __str__(self):
+        return f"Cloud backup {self.name} ({self.owner})"
