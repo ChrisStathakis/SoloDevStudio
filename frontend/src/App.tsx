@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { CloudAuthProvider } from './context/CloudAuthContext';
 import { Navigation } from './components/Navigation';
 import { DashboardView } from './components/DashboardView';
 import { ProjectsView } from './components/ProjectsView';
@@ -187,13 +188,15 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <AppProvider>
-          <ToastProvider>
-            <DesktopCompanionBridge />
-            <CloudSyncManager />
-            <AppFrame />
-          </ToastProvider>
-        </AppProvider>
+        <CloudAuthProvider>
+          <AppProvider>
+            <ToastProvider>
+              <DesktopCompanionBridge />
+              <CloudSyncManager />
+              <AppFrame />
+            </ToastProvider>
+          </AppProvider>
+        </CloudAuthProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

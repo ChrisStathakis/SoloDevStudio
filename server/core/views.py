@@ -1214,6 +1214,7 @@ def _build_export_payload(user):
     return {
         "version": "1.0",
         "exportedAt": timezone.now().isoformat(),
+        "ownerUsername": user.username,
         "projects": ProjectSerializer(projects, many=True).data,
         "tasks": TaskSerializer(tasks, many=True).data,
         "ideas": IdeaSerializer(ideas, many=True).data,
@@ -1265,6 +1266,7 @@ def _cloud_backup_meta(backup):
         'exportedAt': backup.exported_at.isoformat() if backup.exported_at else None,
         'updatedAt': backup.updated_at.isoformat() if backup.updated_at else None,
         'sizeBytes': backup.size_bytes,
+        'ownerUsername': backup.owner.username,
     }
 
 
@@ -1731,6 +1733,23 @@ def cloud_backup_push_view(request):
     data = request.data
     if not isinstance(data, dict) or data.get('version') != '1.0':
         return Response({'error': 'Invalid backup format: version 1.0 payload required.'}, status=status.HTTP_400_BAD_REQUEST)
+    # Strict per-account sync: a payload stamped for another username cannot be
+    # stored under this JWT identity. The client also blocks mismatched
+    # local/cloud logins before sending; this is the server-side backstop.
+    claimed = data.get('ownerUsername')
+    if isinstance(claimed, str):
+        if claimed.strip() and claimed.strip() != request.user.username:
+            return Response(
+                {'error': 'Backup owner mismatch.', 'code': 'USER_MISMATCH'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+    local_header = request.headers.get('X-Local-Username')
+    if isinstance(local_header, str):
+        if local_header.strip() and local_header.strip() != request.user.username:
+            return Response(
+                {'error': 'Local and cloud accounts must match.', 'code': 'USER_MISMATCH'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
     try:
         raw = json.dumps(data)
     except (TypeError, ValueError):

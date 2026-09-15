@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useCloudAuth } from '../context/CloudAuthContext';
 import { useApp } from '../context/AppContext';
 import { useToast } from './Toaster';
 import {
@@ -10,6 +11,7 @@ import {
   getLastSyncAt,
   setLastSeenRemoteAt,
   formatCloudDate,
+  strictUsernamesEqual,
 } from '../services/cloudBackup';
 
 const POLL_MS = 5 * 60 * 1000;
@@ -17,13 +19,15 @@ const POLL_MS = 5 * 60 * 1000;
 /**
  * Headless cloud-sync coordinator, mounted once inside ToastProvider:
  * - installs local-dirty tracking for mutating API calls,
- * - on sign-in checks the PythonAnywhere slot and offers to load it,
+ * - on sign-in checks the configured cloud slot and offers to load it
+ *   (strict: only when local and cloud usernames match),
  * - polls backup metadata so quit-time auto-save never silently overwrites
  *   a newer backup from another device,
  * - best-effort auto-push on page unload.
  */
 export const CloudSyncManager: React.FC = () => {
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+  const { cloudUser, cloudBase } = useCloudAuth();
   const { refreshData } = useApp();
   const { toast, confirm } = useToast();
   const checkedSessionRef = useRef(false);
@@ -36,6 +40,8 @@ export const CloudSyncManager: React.FC = () => {
 
   useEffect(() => {
     if (authLoading || !isAuthenticated || checkedSessionRef.current) return;
+    if (!cloudBase || !cloudUser) return;
+    if (!strictUsernamesEqual(user?.username, cloudUser?.username)) return;
     checkedSessionRef.current = true;
     let cancelled = false;
     (async () => {
@@ -48,7 +54,7 @@ export const CloudSyncManager: React.FC = () => {
         const { toast: showToast, confirm: ask, refreshData: refresh } = stateRef.current;
         showToast({
           title: 'Cloud backup available',
-          description: `PythonAnywhere snapshot from ${formatCloudDate(meta.exportedAt)}. Load it to sync this device?`,
+          description: `Snapshot from ${formatCloudDate(meta.exportedAt)} (${meta.ownerUsername || cloudUser.username}). Load it to sync this device?`,
           tone: 'info',
           durationMs: 12000,
           action: {
@@ -63,11 +69,11 @@ export const CloudSyncManager: React.FC = () => {
                 });
                 if (!ok) return;
                 try {
-                  await restoreCloudBackup();
+                  await restoreCloudBackup(user?.username || null, cloudUser?.username || null);
                   await refresh();
-                  showToast({ title: 'Workspace synced from PythonAnywhere.', tone: 'success' });
+                  showToast({ title: 'Workspace synced from cloud.', tone: 'success' });
                 } catch {
-                  showToast({ title: 'Load from PythonAnywhere failed.', tone: 'error' });
+                  showToast({ title: 'Load from cloud failed.', tone: 'error' });
                 }
               })();
             },
@@ -80,10 +86,10 @@ export const CloudSyncManager: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, isAuthenticated]);
+  }, [authLoading, isAuthenticated, cloudBase, cloudUser, user?.username]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !cloudBase || !cloudUser) return;
     const poll = async () => {
       try {
         const meta = await fetchCloudMeta();
@@ -94,14 +100,16 @@ export const CloudSyncManager: React.FC = () => {
     };
     const timer = window.setInterval(poll, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, cloudBase, cloudUser]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    const onUnload = () => bestEffortPushOnUnload();
+    if (!isAuthenticated || !cloudBase || !cloudUser) return;
+    const localName = user?.username || null;
+    const cloudName = cloudUser?.username || null;
+    const onUnload = () => bestEffortPushOnUnload(localName, cloudName);
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, cloudBase, cloudUser, user?.username]);
 
   return null;
 };

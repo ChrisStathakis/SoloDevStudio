@@ -42,9 +42,13 @@ import {
   isAutoPushEnabled,
   setAutoPushEnabled,
   setLastSeenRemoteAt,
+  describeCloudError,
   formatCloudDate,
+  strictUsernamesEqual,
   type CloudBackupMeta,
 } from '../services/cloudBackup';
+import { useCloudAuth } from '../context/CloudAuthContext';
+import { normalizeCloudBase, testCloudConnection } from '../services/cloudApi';
 import { PageHeader } from './ui';
 import { DocEditor } from './DocEditor';
 import { FilterManager } from './FilterManager';
@@ -124,28 +128,98 @@ export const SettingsView: React.FC = () => {
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [localDirty, setLocalDirty] = useState<boolean>(false);
   const [autoPush, setAutoPush] = useState<boolean>(true);
+  const { cloudUser, cloudBase, login: cloudLogin, register: cloudRegister, logout: cloudLogout, saveServerUrl, refresh: refreshCloudAuth } = useCloudAuth();
+  const [serverUrlDraft, setServerUrlDraft] = useState('');
+  const [serverUrlStatus, setServerUrlStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [serverUrlBusy, setServerUrlBusy] = useState(false);
+  const [cloudFormUser, setCloudFormUser] = useState('');
+  const [cloudFormPass, setCloudFormPass] = useState('');
+  const [cloudFormEmail, setCloudFormEmail] = useState('');
+  const [cloudFormMode, setCloudFormMode] = useState<'login' | 'register'>('login');
+
+  const strictMismatch = Boolean(
+    user?.username && cloudUser?.username
+    && !strictUsernamesEqual(user.username, cloudUser.username),
+  );
+
+  useEffect(() => {
+    if (section === 'data' && cloudBase && !serverUrlDraft) setServerUrlDraft(cloudBase);
+  }, [section, cloudBase, serverUrlDraft]);
 
   const refreshCloudMeta = useCallback(async () => {
+    if (!cloudBase) {
+      setCloudMeta(null);
+      setCloudError(null);
+      setLastPushAt(getLastPushAt());
+      setLastSyncAt(getLastSyncAt());
+      setLocalDirty(isLocalDirty());
+      setAutoPush(isAutoPushEnabled());
+      return;
+    }
     try {
       const meta = await fetchCloudMeta();
       setCloudMeta(meta);
       setCloudError(null);
       if (meta?.exists && meta.exportedAt) setLastSeenRemoteAt(meta.exportedAt);
-    } catch {
-      setCloudError('PythonAnywhere is unreachable. Local data is unaffected.');
+    } catch (e) {
+      setCloudError(describeCloudError(e) + ' Local data is unaffected.');
     } finally {
       setLastPushAt(getLastPushAt());
       setLastSyncAt(getLastSyncAt());
       setLocalDirty(isLocalDirty());
       setAutoPush(isAutoPushEnabled());
     }
-  }, []);
+  }, [cloudBase]);
 
   useEffect(() => {
     if (section === 'data') void refreshCloudMeta();
   }, [section, refreshCloudMeta]);
 
+  const saveServerUrlFromDraft = async () => {
+    const raw = serverUrlDraft.trim();
+    if (!raw) {
+      try {
+        setServerUrlBusy(true);
+        await saveServerUrl(null);
+        setServerUrlStatus({ ok: true, msg: 'Cloud server cleared. Sync is disabled.' });
+        setCloudMeta(null);
+      } catch (e) {
+        setServerUrlStatus({ ok: false, msg: e instanceof Error ? e.message : 'Could not clear server URL.' });
+      } finally {
+        setServerUrlBusy(false);
+      }
+      return;
+    }
+    try {
+      normalizeCloudBase(raw);
+    } catch (e) {
+      setServerUrlStatus({ ok: false, msg: e instanceof Error ? e.message : 'Invalid server URL.' });
+      return;
+    }
+    try {
+      setServerUrlBusy(true);
+      setServerUrlStatus(null);
+      const saved = await saveServerUrl(raw);
+      if (saved) await testCloudConnection(saved);
+      setServerUrlStatus({ ok: true, msg: `Saved. Cloud server: ${saved || 'cleared'}. Sign in below.` });
+      await refreshCloudAuth();
+      await refreshCloudMeta();
+    } catch (e) {
+      setServerUrlStatus({ ok: false, msg: e instanceof Error ? e.message : 'Server unreachable. URL was saved; check CORS/HTTPS.' });
+    } finally {
+      setServerUrlBusy(false);
+    }
+  };
+
   const handleCloudPush = async () => {
+    if (!cloudBase) {
+      setCloudError('Set your cloud server URL first.');
+      return;
+    }
+    if (strictMismatch) {
+      setCloudError(`Account mismatch: local "${user?.username}" vs cloud "${cloudUser?.username}". Sign in as the same username on both sides.`);
+      return;
+    }
     if (cloudMeta?.exists && cloudMeta.exportedAt && lastSyncAt && cloudMeta.exportedAt > lastSyncAt) {
       const ok = await confirm({
         title: `Overwrite cloud backup from ${formatCloudDate(cloudMeta.exportedAt)}?`,
@@ -158,12 +232,12 @@ export const SettingsView: React.FC = () => {
     setCloudBusy(true);
     setCloudError(null);
     try {
-      const meta = await pushCloudBackup();
+      const meta = await pushCloudBackup(user?.username || null, cloudUser?.username || null);
       setCloudMeta(meta?.exists === false ? { exists: false } : { exists: true, ...meta });
-      setBackupStatus({ ok: true, msg: 'Workspace saved to PythonAnywhere.' });
+      setBackupStatus({ ok: true, msg: 'Workspace saved to cloud.' });
       setTimeout(() => setBackupStatus(null), 4000);
-    } catch {
-      setCloudError('Save to PythonAnywhere failed. Check your connection and try again.');
+    } catch (e) {
+      setCloudError(describeCloudError(e));
     } finally {
       setCloudBusy(false);
       setLastPushAt(getLastPushAt());
@@ -174,6 +248,10 @@ export const SettingsView: React.FC = () => {
 
   const handleCloudPull = async () => {
     if (!cloudMeta?.exists) return;
+    if (strictMismatch) {
+      setCloudError(`Account mismatch: local "${user?.username}" vs cloud "${cloudUser?.username}". Sign in as the same username on both sides.`);
+      return;
+    }
     const ok = await confirm({
       title: `Replace local workspace with cloud backup from ${formatCloudDate(cloudMeta.exportedAt)}?`,
       description: 'Local changes since your last sync will be lost. This cannot be undone.',
@@ -184,17 +262,43 @@ export const SettingsView: React.FC = () => {
     setCloudBusy(true);
     setCloudError(null);
     try {
-      await restoreCloudBackup();
+      await restoreCloudBackup(user?.username || null, cloudUser?.username || null);
       await refreshData();
-      setBackupStatus({ ok: true, msg: 'Workspace loaded from PythonAnywhere.' });
+      setBackupStatus({ ok: true, msg: 'Workspace loaded from cloud.' });
       setTimeout(() => setBackupStatus(null), 4000);
-    } catch {
-      setCloudError('Load from PythonAnywhere failed. Local data is unchanged.');
+    } catch (e) {
+      setCloudError(describeCloudError(e) + ' Local data is unchanged.');
     } finally {
       setCloudBusy(false);
       setLastPushAt(getLastPushAt());
       setLastSyncAt(getLastSyncAt());
       setLocalDirty(isLocalDirty());
+    }
+  };
+
+  const handleCloudAuthSubmit = async () => {
+    if (!cloudFormUser.trim() || !cloudFormPass) {
+      setCloudError('Enter cloud username and password.');
+      return;
+    }
+    setCloudBusy(true);
+    setCloudError(null);
+    try {
+      if (cloudFormMode === 'login') await cloudLogin(cloudFormUser, cloudFormPass);
+      else {
+        if (!cloudFormEmail.trim()) {
+          setCloudError('Email is required to create a cloud account.');
+          return;
+        }
+        await cloudRegister(cloudFormUser, cloudFormEmail, cloudFormPass);
+      }
+      setCloudFormPass('');
+      await refreshCloudMeta();
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: Record<string, unknown> } })?.response?.data;
+      setCloudError(typeof detail === 'object' && detail ? JSON.stringify(detail) : (e instanceof Error ? e.message : 'Cloud sign-in failed.'));
+    } finally {
+      setCloudBusy(false);
     }
   };
 
@@ -870,14 +974,54 @@ export const SettingsView: React.FC = () => {
             <div>
               <h3 className="text-sm font-black text-content">PythonAnywhere Sync</h3>
               <p className="text-xs text-content-faint mt-0.5">
-                Share one workspace between devices. Saving overwrites the single cloud snapshot; loading replaces this device&apos;s workspace.
+                Share one workspace between devices. Strict mode: local and cloud usernames must match. Saving overwrites your cloud snapshot; loading replaces this device&apos;s workspace.
               </p>
             </div>
 
-            <div className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-[11px] font-mono text-content-faint space-y-0.5">
-              <div>Cloud snapshot: {cloudMeta?.exists ? formatCloudDate(cloudMeta.exportedAt) : 'none yet'}</div>
-              <div>Last saved: {formatCloudDate(lastPushAt)}{localDirty ? ' · unsaved local changes' : ''}</div>
+            <div className="space-y-2">
+              <label className="block space-y-1.5">
+                <span className="text-[10px] uppercase tracking-wider font-black text-content-faint">Cloud server URL</span>
+                <div className="flex gap-2">
+                  <input
+                    value={serverUrlDraft}
+                    onChange={e => setServerUrlDraft(e.target.value)}
+                    placeholder="https://username.pythonanywhere.com"
+                    inputMode="url"
+                    className="min-w-0 flex-1 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content"
+                  />
+                  <button type="button" onClick={() => void saveServerUrlFromDraft()} disabled={serverUrlBusy} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Save</button>
+                </div>
+                <span className="block text-[11px] text-content-faint">Current: {cloudBase || 'not set'}. Stored in the desktop app settings.</span>
+              </label>
+              {serverUrlStatus && <p className={`text-xs ${serverUrlStatus.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`} role="status">{serverUrlStatus.msg}</p>}
             </div>
+
+            <div className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-[11px] font-mono text-content-faint space-y-0.5">
+              <div>Local: {user?.username || 'signed out'} · Cloud: {cloudUser?.username || 'signed out'}</div>
+              <div>Cloud snapshot: {cloudMeta?.exists ? `${formatCloudDate(cloudMeta.exportedAt)}${cloudMeta.ownerUsername ? ` · ${cloudMeta.ownerUsername}` : ''}` : 'none yet'}</div>
+              <div>Last saved: {formatCloudDate(lastPushAt)}{localDirty ? ' · unsaved local changes' : ''}</div>
+              {strictMismatch && <div className="text-rose-700 dark:text-rose-300">Blocked: usernames must match to sync.</div>}
+            </div>
+
+            {!cloudUser ? (
+              <div className="space-y-2 rounded-xl border border-line bg-surface-2 p-3">
+                <div className="flex gap-1.5">
+                  <button type="button" onClick={() => setCloudFormMode('login')} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-bold ${cloudFormMode === 'login' ? 'bg-surface text-content shadow-sm' : 'text-content-muted'}`}>Cloud log in</button>
+                  <button type="button" onClick={() => setCloudFormMode('register')} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-bold ${cloudFormMode === 'register' ? 'bg-surface text-content shadow-sm' : 'text-content-muted'}`}>Create cloud account</button>
+                </div>
+                <input value={cloudFormUser} onChange={e => setCloudFormUser(e.target.value)} placeholder="Cloud username (must match local)" className="w-full rounded-xl bg-surface border border-line px-3 py-2 text-xs text-content" />
+                {cloudFormMode === 'register' && <input value={cloudFormEmail} onChange={e => setCloudFormEmail(e.target.value)} placeholder="Email" className="w-full rounded-xl bg-surface border border-line px-3 py-2 text-xs text-content" />}
+                <input value={cloudFormPass} onChange={e => setCloudFormPass(e.target.value)} type="password" placeholder="Password" className="w-full rounded-xl bg-surface border border-line px-3 py-2 text-xs text-content" />
+                <button type="button" onClick={() => void handleCloudAuthSubmit()} disabled={cloudBusy || !cloudBase} className="w-full rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">
+                  {!cloudBase ? 'Set server URL first' : cloudFormMode === 'login' ? 'Sign in to cloud' : 'Create cloud account'}
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface-2 px-3 py-2">
+                <span className="text-xs font-bold text-content">Cloud: {cloudUser.username}</span>
+                <button type="button" onClick={() => { cloudLogout(); setCloudMeta(null); }} className="text-xs font-bold text-content-faint hover:text-content">Sign out</button>
+              </div>
+            )}
 
             {cloudError && (
               <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{cloudError}</p>
@@ -885,7 +1029,7 @@ export const SettingsView: React.FC = () => {
 
             <button
               type="button"
-              disabled={isBusy || cloudBusy}
+              disabled={isBusy || cloudBusy || !cloudBase || !cloudUser || strictMismatch}
               onClick={handleCloudPush}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-2 border border-line hover:border-indigo-700 text-left transition-all disabled:opacity-40"
             >
@@ -898,7 +1042,7 @@ export const SettingsView: React.FC = () => {
 
             <button
               type="button"
-              disabled={isBusy || cloudBusy || !cloudMeta?.exists}
+              disabled={isBusy || cloudBusy || !cloudMeta?.exists || !cloudUser || strictMismatch}
               onClick={handleCloudPull}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-2 border border-line hover:border-emerald-700 text-left transition-all disabled:opacity-40"
             >

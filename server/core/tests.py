@@ -794,3 +794,49 @@ class ImageUploadTests(APITestCase):
         response = self.client.post('/api/uploads/image/', {'image': self._png()}, format='multipart')
 
         self.assertIn(response.status_code, (401, 403))
+
+
+class CloudBackupStrictTests(APITestCase):
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username='alice',
+            email='alice@example.com',
+            password='test-password-123',
+        )
+        self.bob = User.objects.create_user(
+            username='bob',
+            email='bob@example.com',
+            password='test-password-123',
+        )
+
+    def _payload(self, owner='alice'):
+        return {'version': '1.0', 'exportedAt': '2026-09-15T00:00:00+00:00', 'ownerUsername': owner, 'projects': []}
+
+    def test_push_and_meta_include_owner(self):
+        self.client.force_authenticate(self.alice)
+        response = self.client.post('/api/cloud-backup/push/', self._payload('alice'), format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('ownerUsername'), 'alice')
+
+    def test_users_are_isolated(self):
+        self.client.force_authenticate(self.alice)
+        self.client.post('/api/cloud-backup/push/', self._payload('alice'), format='json')
+        self.client.force_authenticate(self.bob)
+        latest = self.client.get('/api/cloud-backup/latest/', {'meta': 1})
+        self.assertEqual(latest.data, {'exists': False})
+        restore = self.client.post('/api/cloud-backup/restore/')
+        self.assertEqual(restore.status_code, 404)
+
+    def test_push_rejects_other_username(self):
+        self.client.force_authenticate(self.bob)
+        response = self.client.post('/api/cloud-backup/push/', self._payload('alice'), format='json')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data.get('code'), 'USER_MISMATCH')
+
+    def test_push_rejects_local_header_mismatch(self):
+        self.client.force_authenticate(self.alice)
+        response = self.client.post(
+            '/api/cloud-backup/push/', self._payload('alice'), format='json',
+            HTTP_X_LOCAL_USERNAME='bob',
+        )
+        self.assertEqual(response.status_code, 403)

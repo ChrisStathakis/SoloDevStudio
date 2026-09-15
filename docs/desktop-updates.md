@@ -31,7 +31,7 @@ installer and have users run it.
 
 ## Shipping a manual update
 
-1. Bump `version` in the root `package.json` (currently `1.0.2`).
+1. Bump `version` in the root `package.json` (currently `1.1.0`).
 2. Build everything (frontend bundle → PyInstaller backend → NSIS installer):
 
    ```powershell

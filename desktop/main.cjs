@@ -26,16 +26,45 @@ function settingsPath() {
   return path.join(app.getPath('userData'), 'desktop-settings.json');
 }
 
+function normalizeCloudApiUrl(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (raw.length > 500) throw new Error('Server URL is too long (max 500 characters).');
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('Enter a full server URL, e.g. https://username.pythonanywhere.com');
+  }
+  if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
+    throw new Error('Server URL must use https:// (http is only allowed for localhost).');
+  }
+  parsed.hash = '';
+  let pathname = parsed.pathname.replace(/\/+$/, '');
+  if (!pathname || pathname === '/') pathname = '/api';
+  else if (!pathname.endsWith('/api')) pathname += '/api';
+  parsed.pathname = pathname;
+  return parsed.toString().replace(/\/+$/, '');
+}
+
 function readSettings() {
   try {
     const data = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+    let cloudApiUrl = null;
+    try {
+      cloudApiUrl = normalizeCloudApiUrl(data.cloudApiUrl || null);
+    } catch {
+      cloudApiUrl = null;
+    }
     return {
       backendPort: Number.isInteger(data.backendPort) ? data.backendPort : null,
       companionEnabled: data.companionEnabled !== false,
       companionPosition: data.companionPosition && Number.isFinite(data.companionPosition.x) && Number.isFinite(data.companionPosition.y) ? data.companionPosition : null,
+      cloudApiUrl,
     };
   } catch {
-    return { backendPort: null, companionEnabled: true, companionPosition: null };
+    return { backendPort: null, companionEnabled: true, companionPosition: null, cloudApiUrl: null };
   }
 }
 
@@ -205,6 +234,11 @@ ipcMain.handle('desktop:set-backend-port', (_event, value) => {
   const backendPort = validatePort(value);
   writeSettings({ backendPort });
   return { backendPort, restartRequired: true };
+});
+ipcMain.handle('desktop:set-cloud-url', (_event, value) => {
+  const cloudApiUrl = normalizeCloudApiUrl(value);
+  writeSettings({ cloudApiUrl });
+  return { cloudApiUrl };
 });
 ipcMain.handle('desktop:set-companion-enabled', (_event, value) => { const companionEnabled = Boolean(value); writeSettings({ companionEnabled }); if (!companionEnabled) hideCompanion(); return { companionEnabled }; });
 ipcMain.on('desktop:update-companion-state', (_event, state) => { companionState = state && typeof state === 'object' ? state : null; if (companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:state', companionState); });
