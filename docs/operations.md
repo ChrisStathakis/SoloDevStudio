@@ -12,7 +12,7 @@ Backend settings use `python-decouple` and read these environment variables:
 | `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API. |
 | `APP_URL` | Application base URL used by local configuration. |
 
-The frontend reads `VITE_API_URL` for the Django API base and `GEMINI_API_KEY` only for research calls made by `frontend/server.ts`. Do not commit `.env` files or expose keys in logs.
+The frontend reads `VITE_API_URL` for the Django API base. Research calls are served by Django (`/api/search/market/`, `/api/search/tech-stack/`) using `ddgs` — no key needed. Do not commit `.env` files or expose keys in logs.
 
 ## Database and migrations
 
@@ -61,5 +61,5 @@ The configured output directory is `site/`, with pages such as `site/index.html`
 
 - CMD, script execution, PTY input, and Explorer opening depend on Windows capabilities and local permissions.
 - Saved paths are configuration strings; existence is checked only when an action uses the path.
-- Research endpoints need a configured Gemini key and an available upstream service; core project management does not.
+- Research endpoints use the free `ddgs` web search with local summarization; core project management does not need any external key.
 - The application uses local SQLite persistence and is not documented here as a multi-instance production deployment.

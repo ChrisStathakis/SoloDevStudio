@@ -32,7 +32,7 @@ Copy-Item server\.env.example server\.env
 Copy-Item frontend\.env.example frontend\.env
 ```
 
-The backend reads `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `APP_URL`. The frontend reads `VITE_API_URL`; the checked-in example points to `http://localhost:8001/api`. The optional Gemini-powered research endpoints read `GEMINI_API_KEY` from the frontend server environment. Never place real credentials in documentation or source control.
+The backend reads `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, and `APP_URL`. The frontend reads `VITE_API_URL`; the checked-in example points to `http://localhost:8001/api`. Research endpoints are served by Django using the free `ddgs` search library — no API key needed. Never place real credentials in documentation or source control.
 
 ## Start the application
 

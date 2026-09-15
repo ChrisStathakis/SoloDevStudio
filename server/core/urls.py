@@ -14,6 +14,7 @@ from .terminal_views import (
     terminal_input, terminal_output, terminal_resize,
 )
 from .upload_views import upload_image
+from .search_views import market_research_view, tech_research_view
 
 router = DefaultRouter()
 router.register(r'projects', ProjectViewSet, basename='project')
@@ -46,6 +47,8 @@ urlpatterns = [
     path('settings/checklist-defaults/', checklist_defaults_view, name='checklist-defaults'),
     path('settings/checklist-defaults/<str:stage>/', checklist_default_stage_view, name='checklist-default-stage'),
     path('daily-focus/', daily_focus_view, name='daily-focus'),
+    path('search/market/', market_research_view, name='search-market'),
+    path('search/tech-stack/', tech_research_view, name='search-tech-stack'),
     # Pasted-image uploads (consoles consume them as file paths)
     path('uploads/image/', upload_image, name='upload-image'),
     # In-app terminal sessions

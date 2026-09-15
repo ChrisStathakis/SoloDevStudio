@@ -14,6 +14,9 @@ hiddenimports = (
     # ``terminal_manager`` imports this inside a guarded try/except, so make
     # the dependency explicit for the frozen backend.
     + collect_submodules("winpty")
+    # Free web-search backend (ddgs + httpx) for /api/search/*.
+    + collect_submodules("ddgs")
+    + collect_submodules("httpx")
 )
 
 datas = (

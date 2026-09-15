@@ -41,7 +41,7 @@ The API uses JWT bearer authentication. The frontend sends `Authorization: Beare
 
 ## Frontend server and research endpoints
 
-`frontend/server.ts` serves the Vite application in development and exposes the optional Gemini-backed market and tech-stack research endpoints. Those endpoints require `GEMINI_API_KEY`; the Django API does not need that key for normal project management.
+`frontend/server.ts` serves the Vite application in development and proxies `/api/*` to Django. Market and tech-stack research lives in Django (`server/core/search_views.py`) using the free `ddgs` web-search library with a small Python summarizer — no API key required. The Django API does not need any research key for normal project management.
 
 ## Persistence and migrations
 

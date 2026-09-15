@@ -4,5 +4,6 @@ djangorestframework-simplejwt>=5.3
 django-cors-headers>=4.3
 django-filter>=24
 python-decouple>=3.8
+ddgs>=9.1
 pywinpty>=2.0.13,<3; sys_platform == "win32"
 reportlab>=4.2,<5
