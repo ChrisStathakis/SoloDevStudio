@@ -333,6 +333,41 @@ class ProjectDriveSettingsTests(APITestCase):
         self.assertEqual(self.second_project.drive, 'C')
 
 
+class FilesystemBrowseTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='filesystem-owner',
+            email='filesystem-owner@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_missing_drive_returns_roots_and_warning_without_probing_path(self):
+        missing_path = r'E:\projects\potential_projects\rag_systems'
+        with patch('core.views._list_drive_roots', return_value=['C:\\', 'D:\\']) as roots:
+            with patch('core.views.os.name', 'nt'):
+                with patch('core.views.os.path.abspath', return_value=missing_path):
+                    with patch('core.views.os.path.exists') as exists:
+                        response = self.client.get('/api/filesystem/', {'path': missing_path})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['is_roots'])
+        self.assertEqual(response.data['path'], '')
+        self.assertIn('E:', response.data['warning'])
+        self.assertEqual([entry['path'] for entry in response.data['entries']], ['C:\\', 'D:\\'])
+        roots.assert_called_once()
+        exists.assert_not_called()
+
+    def test_root_listing_uses_drive_helper(self):
+        with patch('core.views._list_drive_roots', return_value=['C:\\']) as roots:
+            response = self.client.get('/api/filesystem/', {'path': ''})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['is_roots'])
+        self.assertEqual(response.data['entries'][0]['path'], 'C:\\')
+        roots.assert_called_once()
+
+
 class ProjectDuplicateTests(APITestCase):
     def test_duplicate_uses_requested_title_and_copies_source_folder(self):
         with TemporaryDirectory() as temp_dir:

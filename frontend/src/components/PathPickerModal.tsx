@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Folder, File as FileIcon, ChevronUp, ChevronDown, X, Loader2, HardDrive, Copy, Check } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -17,6 +17,8 @@ interface FsEntry {
   is_dir: boolean;
 }
 
+const FILESYSTEM_REQUEST_TIMEOUT_MS = 5000;
+
 export const PathPickerModal: React.FC<PathPickerModalProps> = ({
   mode,
   fileFilter,
@@ -31,9 +33,15 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
   const [isRoots, setIsRoots] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [crumbOpen, setCrumbOpen] = useState<boolean>(false);
   const [copiedPath, setCopiedPath] = useState<boolean>(false);
+  const requestIdRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  // Callers often provide an inline filter array. A primitive key prevents
+  // parent refreshes from restarting the initial browse request.
+  const fileFilterKey = (fileFilter || []).map(ext => ext.toLowerCase()).join('|');
 
   const copyText = useCallback(async (text: string) => {
     if (!text) return;
@@ -79,31 +87,57 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
   }, [currentPath]);
 
   const browse = useCallback(async (path: string) => {
+    const requestId = ++requestIdRef.current;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setLoading(true);
     setError(null);
+    setWarning(null);
     setSelected(null);
     try {
-      const res = await api.get('/filesystem/', { params: { path } });
+      const res = await api.get('/filesystem/', {
+        params: { path },
+        timeout: FILESYSTEM_REQUEST_TIMEOUT_MS,
+        signal: controller.signal,
+      });
+      if (requestId !== requestIdRef.current) return;
       const data = res.data;
       setCurrentPath(data.path || '');
       setParent(data.parent ?? null);
       setIsRoots(Boolean(data.is_roots));
+      setWarning(data.warning || null);
       let list: FsEntry[] = data.entries || [];
-      if (mode === 'file' && fileFilter && fileFilter.length) {
-        const lowers = fileFilter.map(f => f.toLowerCase());
+      if (mode === 'file' && fileFilterKey) {
+        const lowers = fileFilterKey.split('|');
         list = list.filter(e => e.is_dir || lowers.some(ext => e.name.toLowerCase().endsWith(ext)));
       }
       setEntries(list);
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Failed to browse filesystem.');
+      if (requestId !== requestIdRef.current || controller.signal.aborted) return;
+      const timedOut = e?.code === 'ECONNABORTED' || e?.code === 'ETIMEDOUT';
+      if (timedOut) {
+        setCurrentPath('');
+        setParent(null);
+        setIsRoots(true);
+        setEntries([]);
+        setError('This location did not respond in time.');
+      } else {
+        setError(e?.response?.data?.error || 'Failed to browse filesystem.');
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
-  }, [mode, fileFilter]);
+  }, [mode, fileFilterKey]);
 
+  const initialBrowsePath = initialPath || '';
   useEffect(() => {
-    browse(currentPath);
-  }, [browse]); // eslint-disable-line react-hooks/exhaustive-deps
+    void browse(initialBrowsePath);
+    return () => {
+      requestIdRef.current += 1;
+      requestControllerRef.current?.abort();
+    };
+  }, [browse, initialBrowsePath]);
 
   const handleEntryClick = (entry: FsEntry) => {
     if (entry.is_dir) {
@@ -219,7 +253,17 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
           )}
           {!loading && error && (
             <div className="px-3 py-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs font-bold text-rose-700 dark:text-rose-300">
-              {error}
+              <div>{error}</div>
+              {isRoots && (
+                <button type="button" onClick={() => void browse('')} className="mt-2 underline underline-offset-2 hover:no-underline">
+                  Show This PC
+                </button>
+              )}
+            </div>
+          )}
+          {!loading && warning && (
+            <div className="mx-1 mb-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs font-bold text-amber-800 dark:text-amber-200">
+              {warning}
             </div>
           )}
           {!loading && !error && entries.length === 0 && (

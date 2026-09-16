@@ -1,6 +1,7 @@
 import os
-import json
+import ctypes
 import re
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -1908,16 +1909,45 @@ def timeline_view(request):
 
 # ---------- Filesystem browser (local dev tool) ----------
 def _list_drive_roots():
-    """Return a list of available drive root paths (Windows)."""
-    roots = []
-    if os.name == 'nt':
-        for d in range(ord('A'), ord('Z') + 1):
-            drive = f"{chr(d)}:\\"
-            if os.path.exists(drive):
-                roots.append(drive)
-    else:
-        roots.append(os.path.sep)
-    return roots
+    """Return mounted drive roots without touching removable media.
+
+    ``os.path.exists('E:\\')`` can block for a surprisingly long time when a
+    USB volume has disappeared or a mapped volume is offline.  The Windows
+    logical-drive bitmask is a metadata query and does not perform that I/O.
+    """
+    if os.name != 'nt':
+        return [os.path.sep]
+
+    try:
+        mask = int(ctypes.windll.kernel32.GetLogicalDrives())
+    except (AttributeError, OSError, TypeError, ValueError):
+        # Do not fall back to probing every drive: that is the operation this
+        # endpoint must avoid when a removable volume is unavailable.
+        return []
+    return [f"{chr(ord('A') + bit)}:\\" for bit in range(26) if mask & (1 << bit)]
+
+
+def _drive_root_for_path(path):
+    """Return a normalized drive root for a Windows drive-letter path."""
+    match = re.match(r'^([A-Za-z]):(?:[\\/]|$)', path or '')
+    return f"{match.group(1).upper()}:\\" if match else None
+
+
+def _filesystem_roots_response(warning=None, roots=None):
+    if roots is None:
+        roots = _list_drive_roots()
+    payload = {
+        "path": "",
+        "parent": None,
+        "entries": [
+            {"name": root, "path": root, "is_dir": True}
+            for root in roots
+        ],
+        "is_roots": True,
+    }
+    if warning:
+        payload["warning"] = warning
+    return Response(payload)
 
 
 @api_view(['GET'])
@@ -1928,26 +1958,29 @@ def filesystem_browse(request):
     GET /api/filesystem/?path=<dir>
       - path omitted  -> user home directory
       - path=""       -> list drive roots
-    Returns: { path, parent, entries:[{name, path, is_dir}] }
+    Returns: { path, parent, entries:[{name, path, is_dir}], warning? }
     Read-only; no writes. Safe for a local single-user dev tool.
     """
     raw_path = (request.query_params.get('path') or '').strip()
     if raw_path == '':
         # Show drive roots (computer view)
-        entries = [
-            {"name": r, "path": r, "is_dir": True}
-            for r in _list_drive_roots()
-        ]
-        return Response({"path": "", "parent": None, "entries": entries, "is_roots": True})
+        return _filesystem_roots_response()
 
     current = os.path.abspath(os.path.expanduser(raw_path))
+    drive_root = _drive_root_for_path(current)
+    mounted_roots = _list_drive_roots() if drive_root else None
+    if drive_root and drive_root not in mounted_roots:
+        return _filesystem_roots_response(
+            f"The drive {drive_root[:2]} is unavailable. Reconnect it or choose another location.",
+            mounted_roots,
+        )
     if not os.path.exists(current):
         return Response({"error": f"Path does not exist: {current}"}, status=400)
     if not os.path.isdir(current):
         # If a file path was given, browse its parent instead
         current = os.path.dirname(current)
 
-    parent = os.path.dirname(current) if current not in _list_drive_roots() else None
+    parent = os.path.dirname(current) if current != drive_root else None
     try:
         names = os.listdir(current)
     except PermissionError:
