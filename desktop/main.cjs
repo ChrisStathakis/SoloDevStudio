@@ -60,11 +60,12 @@ function readSettings() {
     return {
       backendPort: Number.isInteger(data.backendPort) ? data.backendPort : null,
       companionEnabled: data.companionEnabled !== false,
+      companionPinned: data.companionPinned === true,
       companionPosition: data.companionPosition && Number.isFinite(data.companionPosition.x) && Number.isFinite(data.companionPosition.y) ? data.companionPosition : null,
       cloudApiUrl,
     };
   } catch {
-    return { backendPort: null, companionEnabled: true, companionPosition: null, cloudApiUrl: null };
+    return { backendPort: null, companionEnabled: true, companionPinned: false, companionPosition: null, cloudApiUrl: null };
   }
 }
 
@@ -194,7 +195,9 @@ function createWindow() {
   });
   mainWindow.loadURL(`${DESKTOP_ORIGIN}/index.html`);
   mainWindow.on('minimize', () => { companionDismissed = false; showCompanion(); });
-  mainWindow.on('restore', hideCompanion);
+  // A pinned companion stays visible even with the main window open; only an
+  // unpinned one hides on restore.
+  mainWindow.on('restore', () => { if (readSettings().companionPinned !== true) hideCompanion(); });
   mainWindow.on('closed', () => { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.close(); mainWindow = null; });
   return mainWindow;
 }
@@ -202,26 +205,49 @@ function createWindow() {
 function clampCompanionPosition(x, y) {
   const display = screen.getDisplayNearestPoint({ x, y });
   const area = display.workArea;
-  const width = 330; const height = 250;
+  const width = 330; const height = 380;
   return { x: Math.max(area.x, Math.min(Math.round(x), area.x + area.width - width)), y: Math.max(area.y, Math.min(Math.round(y), area.y + area.height - height)) };
+}
+
+function applyCompanionLevel() {
+  if (!companionWindow || companionWindow.isDestroyed()) return;
+  const pinned = readSettings().companionPinned === true;
+  try {
+    if (pinned) {
+      // 'screen-saver' floats above borderless/windowed fullscreen games.
+      // (Nothing can overlay DirectX exclusive-fullscreen mode.)
+      companionWindow.setAlwaysOnTop(true, 'screen-saver');
+      companionWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } else {
+      companionWindow.setAlwaysOnTop(true, 'floating');
+      companionWindow.setVisibleOnAllWorkspaces(true);
+    }
+  } catch {
+    /* level unsupported on this platform: keep the default always-on-top */
+  }
+}
+
+function sendCompanionPin() {
+  if (!companionWindow || companionWindow.isDestroyed()) return;
+  companionWindow.webContents.send('companion:pin', readSettings().companionPinned === true);
 }
 
 function showCompanion() {
   const settings = readSettings();
   if (!settings.companionEnabled || companionDismissed || !mainWindow) return;
   if (!companionWindow) {
-    companionWindow = new BrowserWindow({ width: 330, height: 250, frame: false, transparent: true, resizable: false, alwaysOnTop: true, skipTaskbar: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'companion-preload.cjs') } });
-    companionWindow.setAlwaysOnTop(true, 'floating');
-    companionWindow.setVisibleOnAllWorkspaces(true);
+    companionWindow = new BrowserWindow({ width: 330, height: 380, frame: false, transparent: true, resizable: false, alwaysOnTop: true, fullscreenable: false, skipTaskbar: true, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'companion-preload.cjs') } });
     companionWindow.loadFile(path.join(__dirname, 'companion.html'));
-    companionWindow.webContents.on('did-finish-load', () => { if (companionState && companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:state', companionState); });
+    companionWindow.webContents.on('did-finish-load', () => { if (companionWindow && !companionWindow.isDestroyed()) { applyCompanionLevel(); sendCompanionPin(); if (companionState) companionWindow.webContents.send('companion:state', companionState); } });
     companionWindow.on('closed', () => { companionWindow = null; });
   }
+  applyCompanionLevel();
   const display = screen.getDisplayMatching(mainWindow.getBounds());
-  const saved = settings.companionPosition || { x: display.workArea.x + display.workArea.width - 350, y: display.workArea.y + display.workArea.height - 270 };
+  const saved = settings.companionPosition || { x: display.workArea.x + display.workArea.width - 350, y: display.workArea.y + display.workArea.height - 400 };
   const position = clampCompanionPosition(saved.x, saved.y);
   companionWindow.setPosition(position.x, position.y);
   companionWindow.showInactive();
+  sendCompanionPin();
   if (companionState) companionWindow.webContents.send('companion:state', companionState);
 }
 function hideCompanion() { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); }
@@ -240,9 +266,61 @@ ipcMain.handle('desktop:set-cloud-url', (_event, value) => {
   writeSettings({ cloudApiUrl });
   return { cloudApiUrl };
 });
-ipcMain.handle('desktop:set-companion-enabled', (_event, value) => { const companionEnabled = Boolean(value); writeSettings({ companionEnabled }); if (!companionEnabled) hideCompanion(); return { companionEnabled }; });
+ipcMain.handle('desktop:set-companion-enabled', (_event, value) => { const companionEnabled = Boolean(value); writeSettings({ companionEnabled }); if (!companionEnabled) hideCompanion(); else if (readSettings().companionPinned === true) { companionDismissed = false; showCompanion(); } return { companionEnabled }; });
+ipcMain.handle('desktop:set-companion-pinned', (_event, value) => {
+  const companionPinned = Boolean(value);
+  writeSettings({ companionPinned });
+  applyCompanionLevel();
+  sendCompanionPin();
+  if (companionPinned) {
+    companionDismissed = false;
+    showCompanion();
+  } else if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
+    // Back to minimize-only behavior: hide while the main window is open.
+    hideCompanion();
+  }
+  return { companionPinned };
+});
 ipcMain.on('desktop:update-companion-state', (_event, state) => { companionState = state && typeof state === 'object' ? state : null; if (companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:state', companionState); });
-ipcMain.on('desktop:companion-command', (_event, command) => { const allowed = new Set(['restore', 'pause', 'resume', 'start-focus', 'restore-task']); if (!allowed.has(command) || !mainWindow || mainWindow.isDestroyed()) return; if (command === 'restore') { mainWindow.restore(); mainWindow.focus(); hideCompanion(); } else mainWindow.webContents.send('desktop:companion-command', command); });
+function sanitizeSessionId(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 200) return null;
+  return trimmed;
+}
+
+ipcMain.on('desktop:companion-command', (_event, command) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (typeof command === 'string') {
+    const allowed = new Set(['restore', 'pause', 'resume', 'start-focus', 'restore-task']);
+    if (!allowed.has(command)) return;
+    if (command === 'restore') { mainWindow.restore(); mainWindow.focus(); if (readSettings().companionPinned !== true) hideCompanion(); }
+    else mainWindow.webContents.send('desktop:companion-command', command);
+    return;
+  }
+  if (!command || typeof command !== 'object') return;
+  // Pet-originated terminal commands: validated here, executed in the main
+  // window (which owns auth) via the same channel.
+  if (command.type === 'set-watched') {
+    const sessionId = command.sessionId == null ? null : sanitizeSessionId(command.sessionId);
+    if (command.sessionId != null && sessionId === null) return;
+    mainWindow.webContents.send('desktop:companion-command', { type: 'set-watched', sessionId });
+    return;
+  }
+  if (command.type === 'pet-interrupt') {
+    const sessionId = sanitizeSessionId(command.sessionId);
+    if (!sessionId) return;
+    mainWindow.webContents.send('desktop:companion-command', { type: 'pet-interrupt', sessionId });
+    return;
+  }
+  if (command.type === 'pet-input') {
+    const sessionId = sanitizeSessionId(command.sessionId);
+    if (!sessionId || typeof command.text !== 'string') return;
+    const text = command.text.slice(0, 4000);
+    if (!text.trim()) return;
+    mainWindow.webContents.send('desktop:companion-command', { type: 'pet-input', sessionId, text });
+  }
+});
 ipcMain.on('desktop:companion-dismiss', () => { companionDismissed = true; hideCompanion(); });
 ipcMain.on('desktop:companion-position', (_event, position) => { if (!companionWindow || !position) return; const x = Number(position.x); const y = Number(position.y); if (!Number.isFinite(x) || !Number.isFinite(y)) return; const next = clampCompanionPosition(x, y); companionWindow.setPosition(next.x, next.y); writeSettings({ companionPosition: next }); });
 
@@ -251,6 +329,8 @@ app.whenReady().then(async () => {
   try {
     await startBackend();
     createWindow();
+    // A pinned companion is always visible, including right after launch.
+    if (readSettings().companionPinned === true) showCompanion();
   } catch (error) {
     dialog.showErrorBox('SoloDev Studio could not start', error.message || String(error));
     app.quit();

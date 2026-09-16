@@ -60,24 +60,31 @@ export const Navigation: React.FC<{ collapsed: boolean; onToggle: () => void }> 
           <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-content-muted transition-transform ${liveOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
         </button>
         {liveOpen && <ul role="listbox" aria-label="Live project consoles" className="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
-          {liveProjects.map(g => (
+          {liveProjects.map(g => {
+            // Sessions outlive deleted/recreated projects: their stored
+            // projectId matches nothing open. Mark them stale instead of
+            // navigating to a void detail view.
+            const stale = !projects.some(p => p.id === g.projectId);
+            return (
             <li key={g.projectId}>
               <button
                 type="button"
                 role="option"
                 aria-selected={false}
-                aria-label={`Open project ${g.projectTitle} (live console)`}
-                title={`${g.projectTitle} — ${g.count} live console${g.count > 1 ? 's' : ''}`}
-                onClick={() => openLiveProject(g.projectId)}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400"
+                aria-disabled={stale}
+                aria-label={stale ? `${g.projectTitle} (stale console — project record missing)` : `Open project ${g.projectTitle} (live console)`}
+                title={stale ? `${g.projectTitle} — project record missing; adopt it from a project's stale-consoles row` : `${g.projectTitle} — ${g.count} live console${g.count > 1 ? 's' : ''}`}
+                onClick={() => { if (!stale) openLiveProject(g.projectId); }}
+                className={`flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400 ${stale ? 'opacity-60' : 'hover:bg-surface-2'}`}
               >
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: projects.find(p => p.id === g.projectId)?.color || '#6366f1' }} aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate text-xs font-bold text-content">{g.projectTitle}</span>
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: stale ? '#f59e0b' : projects.find(p => p.id === g.projectId)?.color || '#6366f1' }} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-xs font-bold text-content">{g.projectTitle}{stale && <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-black uppercase tracking-wide text-amber-700 dark:text-amber-300">stale</span>}</span>
                 {g.hasCmd && <span title="CMD console" className="flex shrink-0 items-center gap-0.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-black text-sky-700 dark:text-sky-300"><TerminalIcon className="h-3 w-3" />CMD</span>}
                 {g.hasScript && <span title="Run Server console" className="flex shrink-0 items-center gap-0.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] font-black text-emerald-700 dark:text-emerald-300"><Zap className="h-3 w-3" />{g.hasCmd && g.count > 1 ? `×${g.count}` : 'SRV'}</span>}
               </button>
             </li>
-          ))}
+            );
+          })}
         </ul>}
       </div>}<div className="relative hidden w-64 lg:block"><label htmlFor="global-search-input" className="sr-only">Search workspace</label><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-content-muted" aria-hidden="true" /><input id="global-search-input" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search workspace" className="w-full rounded-xl border border-line bg-surface-2 py-2 pl-9 pr-3 text-xs text-content outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20" /></div><Button size="sm" onClick={() => openQuickAdd('task')}><Plus className="h-4 w-4" />New action</Button></header>
     <header className="fixed inset-x-0 top-0 z-30 flex h-16 items-center justify-between gap-2 border-b border-line bg-surface/90 dark:bg-surface-inverse/90 px-4 backdrop-blur-xl md:hidden"><button type="button" onClick={() => navigate('dashboard')} className="flex shrink-0 items-center gap-2 rounded-lg text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500 text-white"><Layers className="h-4 w-4" /></span><span className="text-sm font-extrabold">SoloDev Studio</span></button>{mobileSearchOpen ? <><label htmlFor="mobile-search-input" className="sr-only">Search workspace</label><input autoFocus id="mobile-search-input" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search" className="min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-2.5 py-2 text-xs text-content outline-none focus:border-indigo-400" /></> : <span className="min-w-0 flex-1" /> }<div className="flex shrink-0 items-center gap-1"><IconButton label={mobileSearchOpen ? 'Close search' : 'Search workspace'} onClick={() => setMobileSearchOpen(v => !v)}>{mobileSearchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}</IconButton><IconButton label="New action" onClick={() => openQuickAdd('task')}><Plus className="h-4 w-4" /></IconButton></div></header>

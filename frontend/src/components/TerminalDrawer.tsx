@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -13,7 +14,8 @@ import '@xterm/xterm/css/xterm.css';
 import { Zap, Terminal as TerminalIcon, X, Square, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { api, authedFetch } from '../services/api';
 import { scanOutputMarkers } from '../services/initialization';
-import { notifyTerminalsChanged, TERMINAL_OPEN_EVENT } from '../hooks/useLiveTerminals';
+import { notifyTerminalsChanged, TERMINAL_OPEN_EVENT, useLiveTerminals } from '../hooks/useLiveTerminals';
+import { useApp } from '../context/AppContext';
 import { clearTerminalPetSnapshot, publishTerminalPetSnapshot } from '../services/terminalPetFeed';
 import { extractImageFiles, fileToDownscaledDataUrl } from '../services/imagePaste';
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, splitInputChunks } from '../services/terminalInput';
@@ -334,8 +336,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         mode: session.mode,
         alive: opts?.alive ?? session.alive,
         exitCode: opts?.exitCode !== undefined ? opts.exitCode : session.exitCode,
-        tailText: stripped.slice(-600),
-        promptReady: CMD_PROMPT_RE.test(stripped.slice(-512)),
+        tailText: stripped.slice(-4000),
+        promptReady: CMD_PROMPT_RE.test(stripped.slice(-1024)),
         lastOutputAt: rt.lastOutputAt,
         revision: rt.outputRevision,
         updatedAt: now,
@@ -709,8 +711,25 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             .catch((error: any) => {
               if (rt.pumpStopped) return;
               const detail = error?.response?.data?.error || error?.message || 'Unable to synchronize terminal size.';
-              setTerminalError(detail);
-              setConnState('error');
+              // Size is cosmetic: ConPTY keeps working at its previous
+              // dimensions, so never leave input disabled over a resize
+              // failure. Re-enable immediately and retry the sync once.
+              setTerminalError(`Console size sync failed (${detail}); input re-enabled at the previous size.`);
+              if (!rt.pumpStopped) {
+                rt.inputReady = true;
+                setTerminalReady(true);
+                attachInput();
+              }
+              if (resizeRetryTimer === null && !rt.pumpStopped) {
+                resizeRetryTimer = window.setTimeout(() => {
+                  resizeRetryTimer = null;
+                  const t3 = rt.term;
+                  if (!t3 || rt.pumpStopped) return;
+                  void syncBackendSize(activeId, t3.cols, t3.rows, true).catch(() => {
+                    /* banner from the first attempt already explains it */
+                  });
+                }, 2000);
+              }
             });
         }, 120);
       };
@@ -730,6 +749,8 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       let initialOutputSeen = false;
       let initialQuietTimer: number | null = null;
       let initialFallbackTimer: number | null = null;
+      let resizeRetryTimer: number | null = null;
+      let watchdogTimer: number | null = null;
 
       const clearInitialTimers = () => {
         if (initialQuietTimer !== null) {
@@ -740,10 +761,25 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           window.clearTimeout(initialFallbackTimer);
           initialFallbackTimer = null;
         }
+        if (resizeRetryTimer !== null) {
+          window.clearTimeout(resizeRetryTimer);
+          resizeRetryTimer = null;
+        }
+        if (watchdogTimer !== null) {
+          window.clearTimeout(watchdogTimer);
+          watchdogTimer = null;
+        }
       };
 
       const enableInputAfterInitialRender = () => {
-        if (stopped() || session?.alive === false || rt.inputReady) return;
+        if (stopped() || rt.inputReady) return;
+        if (session?.alive === false) {
+          // Silent early-return used to wedge the console in "waiting for
+          // prompt" with no error shown. Log it so the next occurrence is
+          // diagnosable instead of mysterious.
+          console.warn('[TerminalDrawer] input enable skipped: session snapshot reports alive=false', { activeId });
+          return;
+        }
         clearInitialTimers();
         rt.inputReady = true;
         setTerminalReady(true);
@@ -880,20 +916,35 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           }
         }
       };
+      // Emergency fallback, armed unconditionally at mount: input must never
+      // stay gated behind the resize handshake or the prompt regex. Enabling
+      // is idempotent, and typing into a not-yet-prompted ConPTY simply
+      // buffers server-side until the shell reads it.
+      initialFallbackTimer = window.setTimeout(() => {
+        initialFallbackTimer = null;
+        enableInputAfterInitialRender();
+      }, 1800);
+      // Watchdog: a live stream that already rendered output must never leave
+      // input disabled. If the prompt gate somehow never opens, force it open
+      // and log the sub-state instead of wedging on "waiting for prompt".
+      watchdogTimer = window.setTimeout(() => {
+        watchdogTimer = null;
+        if (stopped() || rt.inputReady) return;
+        if (connStateRef.current === 'live' && rt.outputRevision > 0) {
+          console.warn('[TerminalDrawer] forcing input ready: live stream with rendered output but prompt gate never opened', { activeId });
+          enableInputAfterInitialRender();
+        }
+      }, 5000);
       const startConsole = async () => {
-        try {
-          // CMD starts with the backend's default dimensions. Synchronize to
-          // xterm before attaching input or reading the first prompt.
-          await syncBackendSize(activeId, term.cols, term.rows, true);
+        // Fire-and-forget: ConPTY works at its default size until the backend
+        // acknowledges the new dimensions. A slow/failing resize must not
+        // block the output pump or input readiness (handled independently).
+        void syncBackendSize(activeId, term.cols, term.rows, true).catch((error: any) => {
           if (stopped()) return;
-          if (!waitsForCmdPrompt) {
-            // Existing interactive sessions become usable once their retained
-            // screen has been parsed; fresh CMD sessions wait for the prompt.
-            initialFallbackTimer = window.setTimeout(() => {
-              initialFallbackTimer = null;
-              enableInputAfterInitialRender();
-            }, 1800);
-          }
+          const detail = error?.response?.data?.error || error?.message || 'Unable to synchronize terminal size.';
+          setTerminalError(`Console size sync failed (${detail}); continuing at the backend default size.`);
+        });
+        try {
           await runPump();
         } catch (error: any) {
           if (stopped()) return;
@@ -1204,6 +1255,35 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
 
     const anyLive = sessions.some(s => s.alive);
     const activeSession = sessions.find(s => s.id === activeId) ?? null;
+    const { projects } = useApp();
+    const { sessions: liveAllSessions } = useLiveTerminals();
+    // Consoles the live pill reports that belong to no known project record
+    // (deleted/recreated projects leave such ghosts). Offered for adoption
+    // in the empty state below instead of a dead-end message.
+    const staleCandidates = useMemo(
+      () =>
+        liveAllSessions.filter(
+          s =>
+            s.alive &&
+            !sessions.some(local => local.id === s.id) &&
+            !projects.some(p => p.id === s.projectId),
+        ),
+      [liveAllSessions, sessions, projects],
+    );
+    const adoptStaleSession = useCallback(
+      async (sessionId: string) => {
+        if (!projectId) return;
+        setTerminalError(null);
+        try {
+          await api.post(`/terminals/${sessionId}/adopt/`, { project_id: projectId });
+          await refreshSessions();
+          notifyTerminalsChanged();
+        } catch (error: any) {
+          setTerminalError(error?.response?.data?.error || error?.message || 'Could not adopt that console.');
+        }
+      },
+      [projectId, refreshSessions],
+    );
     const effectiveHeight = fullscreen ? Math.floor(window.innerHeight * FULLSCREEN_RATIO) : heightPx;
 
     return (
@@ -1443,8 +1523,42 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             {activeSession && open ? (
               <div key={activeSession.id} ref={containerRef} className="w-full h-full" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-xs font-mono text-content-faint">
-                No active console — press Run Server or CMD to open one.
+              <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 text-xs font-mono text-content-faint">
+                <span>No active console — press Run Server or CMD to open one.</span>
+                {open && staleCandidates.length > 0 && (
+                  <div className="w-full max-w-xl rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5" role="group" aria-label="Stale consoles">
+                    <p className="font-sans text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                      {staleCandidates.length} live console{staleCandidates.length > 1 ? 's' : ''} belong{staleCandidates.length > 1 ? '' : 's'} to a missing project record
+                    </p>
+                    <ul className="mt-2 space-y-1.5">
+                      {staleCandidates.map(s => (
+                        <li key={s.id} className="flex items-center gap-2 rounded-lg border border-line bg-surface px-2 py-1.5">
+                          <TerminalIcon className="h-3.5 w-3.5 shrink-0 text-content-faint" />
+                          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-content" title={`${s.projectTitle || 'Console'} · ${s.mode}`}>
+                            {s.projectTitle || 'Console'} · {s.mode}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void adoptStaleSession(s.id)}
+                            disabled={!projectId}
+                            title="Move this console into the open project"
+                            className="shrink-0 rounded-md bg-indigo-600 px-2 py-1 font-sans text-[10px] font-black text-white hover:bg-indigo-500 disabled:opacity-40"
+                          >
+                            Adopt
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => stopSession(s.id)}
+                            title="Stop this console"
+                            className="shrink-0 rounded-md border border-rose-500/30 px-2 py-1 font-sans text-[10px] font-black text-rose-300 hover:bg-rose-500/10"
+                          >
+                            Stop
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1473,11 +1587,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               {activeSession && (
                 <span
                   className={
-                    !terminalReady
-                      ? 'text-amber-400'
-                      : connState === 'error'
+                    connState === 'error'
                       ? 'text-rose-400'
-                      : connState === 'connecting'
+                      : !terminalReady || connState === 'connecting'
                       ? 'text-amber-400'
                       : connState === 'live'
                       ? 'text-emerald-400'
@@ -1485,9 +1597,18 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                       ? 'text-emerald-400'
                       : 'text-slate-500'
                   }
+                  title={
+                    !terminalReady && connState === 'error'
+                      ? 'Input not ready and the connection reported an error — see the banner above.'
+                      : undefined
+                  }
                 >
                   {!terminalReady
-                    ? '◌ waiting for prompt'
+                    ? connState === 'error'
+                      ? '◌ waiting for prompt (connection error)'
+                      : connState === 'connecting'
+                      ? '◌ waiting for prompt (connecting…)'
+                      : '◌ waiting for prompt'
                     : connState === 'error'
                     ? '● error'
                     : connState === 'connecting'

@@ -8,7 +8,7 @@ export interface TerminalPetSnapshot {
   /** Last-known liveness from the drawer (corrected by the live list in App). */
   alive: boolean;
   exitCode: number | null;
-  /** ANSI-stripped tail of streamed output, capped (~600 chars). */
+  /** ANSI-stripped tail of streamed output, capped (~4000 chars to support expanded view). */
   tailText: string;
   /** True when the stripped tail ends at a CMD prompt (command finished). */
   promptReady: boolean;
@@ -19,13 +19,24 @@ export interface TerminalPetSnapshot {
 
 export const TERMINAL_PET_EVENT = 'solodev:terminal-pet';
 
-type Listener = (snapshot: TerminalPetSnapshot | null) => void;
+type Listener = (snapshot: TerminalPetSnapshot | null, all?: Record<string, TerminalPetSnapshot>) => void;
 
+const bySession: Record<string, TerminalPetSnapshot> = {};
 let current: TerminalPetSnapshot | null = null;
 const listeners = new Set<Listener>();
 
 export function getTerminalPetSnapshot(): TerminalPetSnapshot | null {
   return current;
+}
+
+/** All known per-session snapshots, keyed by sessionId. */
+export function getPetSnapshots(): Record<string, TerminalPetSnapshot> {
+  return { ...bySession };
+}
+
+/** Snapshot for one session (drawer stream or watched-tail poller). */
+export function getPetSnapshotFor(sessionId: string): TerminalPetSnapshot | null {
+  return bySession[sessionId] ?? null;
 }
 
 export function subscribeTerminalPetSnapshot(listener: Listener): () => void {
@@ -35,37 +46,43 @@ export function subscribeTerminalPetSnapshot(listener: Listener): () => void {
   };
 }
 
-export function publishTerminalPetSnapshot(snapshot: TerminalPetSnapshot): void {
-  current = snapshot;
+function notify(detail: TerminalPetSnapshot | null): void {
+  const all = { ...bySession };
   listeners.forEach((listener) => {
     try {
-      listener(snapshot);
+      listener(detail, all);
     } catch {
       /* subscriber must never break the stream pump */
     }
   });
   try {
-    window.dispatchEvent(new CustomEvent(TERMINAL_PET_EVENT, { detail: snapshot }));
+    window.dispatchEvent(new CustomEvent(TERMINAL_PET_EVENT, { detail }));
   } catch {
     /* non-DOM environment */
   }
 }
 
+export function publishTerminalPetSnapshot(snapshot: TerminalPetSnapshot): void {
+  bySession[snapshot.sessionId] = snapshot;
+  if (!current || snapshot.updatedAt >= current.updatedAt) current = snapshot;
+  // If the latest session was cleared elsewhere, re-point current at the
+  // freshest remaining snapshot so subscribers keep a valid default.
+  notify(snapshot);
+}
+
 export function clearTerminalPetSnapshot(sessionId?: string): void {
-  if (sessionId && current?.sessionId !== sessionId) return;
-  current = null;
-  listeners.forEach((listener) => {
-    try {
-      listener(null);
-    } catch {
-      /* ignore */
+  if (sessionId) {
+    delete bySession[sessionId];
+    if (current?.sessionId === sessionId) {
+      const rest = Object.values(bySession).sort((a, b) => b.updatedAt - a.updatedAt);
+      current = rest[0] ?? null;
     }
-  });
-  try {
-    window.dispatchEvent(new CustomEvent(TERMINAL_PET_EVENT, { detail: null }));
-  } catch {
-    /* non-DOM environment */
+    notify(current ? bySession[current.sessionId] ?? current : null);
+    return;
   }
+  for (const key of Object.keys(bySession)) delete bySession[key];
+  current = null;
+  notify(null);
 }
 
 /** Last non-empty lines of stripped output, each truncated for the pet bubble. */

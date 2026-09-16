@@ -141,6 +141,27 @@ def terminal_input(request, session_id=None):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+def adopt_terminal(request, session_id=None):
+    """Retag a live session to one of the requester's projects.
+
+    Rescues orphaned consoles whose project record was deleted or recreated
+    (the header pill still lists them, but no project drawer claims them).
+    """
+    session = terminal_manager.get_for_user(session_id, request.user.id)
+    if session is None:
+        return Response({'error': 'Terminal session not found.'}, status=status.HTTP_404_NOT_FOUND)
+    data = request.data if isinstance(request.data, dict) else {}
+    project = _get_owned_project(request, data.get('project_id'))
+    if project is None:
+        return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+    adopted = terminal_manager.relink_for_user(session_id, request.user.id, project.id, project.title)
+    if adopted is None:
+        return Response({'error': 'Session already exited.'}, status=status.HTTP_409_CONFLICT)
+    return Response(_serialize([adopted])[0])
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
 def terminal_resize(request, session_id=None):
     session = terminal_manager.get_for_user(session_id, request.user.id)
     if session is None:

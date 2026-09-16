@@ -115,6 +115,7 @@ export const SettingsView: React.FC = () => {
   const [desktopPortStatus, setDesktopPortStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [desktopPortBusy, setDesktopPortBusy] = useState(false);
   const [companionEnabled, setCompanionEnabled] = useState(true);
+  const [companionPinned, setCompanionPinned] = useState(false);
 
   // Data & backup state
   const [backupStatus, setBackupStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -358,6 +359,7 @@ export const SettingsView: React.FC = () => {
       setBackendPortDraft(settings.backendPort ? String(settings.backendPort) : '');
       setActiveApiBase(settings.apiBase || '');
       setCompanionEnabled(settings.companionEnabled !== false);
+      setCompanionPinned(settings.companionPinned === true);
       setDesktopPortStatus(null);
     }).catch(() => setDesktopPortStatus({ ok: false, msg: 'Unable to load desktop settings.' }));
   }, [section]);
@@ -809,6 +811,7 @@ export const SettingsView: React.FC = () => {
               <p className="text-xs text-content-faint mt-1">Save reusable OpenCode and Codex launch configurations with a model, effort, and mode (build/plan).</p>
             </div>
             <label className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 py-3 text-xs font-bold text-content"><input type="checkbox" checked={companionEnabled} onChange={async e => { const enabled = e.target.checked; setCompanionEnabled(enabled); try { await window.solodevDesktop?.setCompanionEnabled(enabled); } catch { setCompanionEnabled(!enabled); } }} className="h-4 w-4 accent-indigo-600" /> <span><span className="block">Show companion when minimized</span><span className="mt-0.5 block text-[11px] font-normal text-content-faint">A small SoloDev robot appears near the bottom-right while this window is minimized.</span></span></label>
+            <label className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 py-3 text-xs font-bold text-content"><input type="checkbox" checked={companionPinned} disabled={!companionEnabled} onChange={async e => { const pinned = e.target.checked; setCompanionPinned(pinned); try { await window.solodevDesktop?.setCompanionPinned(pinned); } catch { setCompanionPinned(!pinned); } }} className="h-4 w-4 accent-indigo-600" /> <span><span className="block">Keep companion always on top</span><span className="mt-0.5 block text-[11px] font-normal text-content-faint">The robot stays visible above other windows, including borderless games. Dismissing it with × still hides it until the next minimize.</span></span></label>
             <div className="flex flex-wrap items-stretch gap-2">
               <select value={newModelTool} onChange={e => { setNewModelTool(e.target.value as 'opencode' | 'codex'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
                 <option value="opencode">OpenCode</option><option value="codex">Codex</option>

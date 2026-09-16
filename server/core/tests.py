@@ -748,6 +748,109 @@ class TerminalOutputTests(APITestCase):
         self.assertEqual(response.content, b'{"error":"Terminal session not found."}\n')
 
 
+class TerminalAdoptTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='adopt-owner',
+            email='adopt-owner@example.com',
+            password='test-password-123',
+        )
+        self.other = User.objects.create_user(
+            username='adopt-stranger',
+            email='adopt-stranger@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+        self.project = Project.objects.create(
+            owner=self.user,
+            title='Adopt target',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        from unittest.mock import Mock
+
+        from .services.terminal_manager import terminal_manager
+        self.manager = terminal_manager
+        # In-memory stub session (no PTY required): simulates an orphaned
+        # console whose project record is gone.
+        self.session = Mock()
+        self.session.id = 'adopt-session-1'
+        self.session.owner_id = self.user.id
+        self.session.project_id = 'deleted-project-id'
+        self.session.project_title = 'Ghost project'
+        self.session.exited_at = None
+        self.session.exit_code = None
+        self.session.finalize_if_dead = lambda: None
+        self.session.to_dict = lambda: {
+            'id': self.session.id,
+            'projectId': self.session.project_id,
+            'projectTitle': self.session.project_title,
+            'mode': 'cmd',
+            'title': 'CMD',
+            'cwd': '',
+            'alive': True,
+            'exitedAt': None,
+            'exitCode': None,
+        }
+        self.manager._sessions[self.session.id] = self.session
+        self.addCleanup(self.manager._sessions.pop, self.session.id, None)
+
+    def test_adopt_relinks_session_to_owned_project(self):
+        response = self.client.post(
+            f'/api/terminals/{self.session.id}/adopt/',
+            {'project_id': str(self.project.pk)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['projectId'], str(self.project.pk))
+        self.assertEqual(response.data['projectTitle'], 'Adopt target')
+        self.assertEqual(self.session.project_id, str(self.project.pk))
+
+    def test_adopt_missing_session_returns_404(self):
+        response = self.client.post('/api/terminals/nope/adopt/', {'project_id': str(self.project.pk)}, format='json')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_adopt_foreign_project_returns_404(self):
+        foreign = Project.objects.create(
+            owner=self.other,
+            title='Not mine',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        response = self.client.post(
+            f'/api/terminals/{self.session.id}/adopt/',
+            {'project_id': str(foreign.pk)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.session.project_id, 'deleted-project-id')
+
+    def test_adopt_foreign_session_returns_404(self):
+        self.client.force_authenticate(self.other)
+        response = self.client.post(
+            f'/api/terminals/{self.session.id}/adopt/',
+            {'project_id': str(self.project.pk)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_adopt_exited_session_returns_409(self):
+        from django.utils import timezone
+
+        self.session.exited_at = timezone.now()
+        response = self.client.post(
+            f'/api/terminals/{self.session.id}/adopt/',
+            {'project_id': str(self.project.pk)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 409)
+
+
 class ImageUploadTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(

@@ -5,4 +5,6 @@ contextBridge.exposeInMainWorld('soloDevCompanion', {
   command: (command) => ipcRenderer.send('desktop:companion-command', command),
   dismiss: () => ipcRenderer.send('desktop:companion-dismiss'),
   move: (position) => ipcRenderer.send('desktop:companion-position', position),
+  setPinned: (pinned) => ipcRenderer.invoke('desktop:set-companion-pinned', pinned),
+  onPinState: (callback) => { const listener = (_event, pinned) => callback(Boolean(pinned)); ipcRenderer.on('companion:pin', listener); return () => ipcRenderer.removeListener('companion:pin', listener); },
 });

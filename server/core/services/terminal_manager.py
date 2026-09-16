@@ -461,6 +461,23 @@ class TerminalManager:
             self._sessions.pop(session_id, None)
             return session
 
+    def relink_for_user(self, session_id, owner_id, project_id, project_title):
+        """Retag a live session to another project of the same owner.
+
+        Used to adopt orphaned consoles whose project record was deleted or
+        recreated. Returns the session, or None when it does not exist,
+        belongs to someone else, or already exited.
+        """
+        with self._lock:
+            session = self.get_for_user(session_id, owner_id)
+            if session is None:
+                return None
+            if session.exited_at is not None:
+                return None
+            session.project_id = str(project_id)
+            session.project_title = project_title or session.project_title
+            return session
+
     def list_for_user(self, owner_id, project_id=None, alive_only=False):
         with self._lock:
             sessions = []

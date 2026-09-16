@@ -21,6 +21,9 @@ export const ActiveTerminalsPill: React.FC = () => {
     projects.find(p => p.id === projectId)?.color || '#6366f1';
 
   const openProject = (projectId: string) => {
+    // Stale groups (deleted/recreated projects) have nowhere to navigate;
+    // they are adopted or stopped from a project's stale-consoles row.
+    if (!projects.some(p => p.id === projectId)) return;
     setSelectedProjectId(projectId);
     setCurrentView('projects');
     requestTerminalOpen(projectId);
@@ -51,8 +54,9 @@ export const ActiveTerminalsPill: React.FC = () => {
                 type="button"
                 role="option"
                 aria-selected="false"
-                aria-label={`Open project ${g.projectTitle} (live console)`}
-                title={`${g.projectTitle} — ${g.count} live console${g.count > 1 ? 's' : ''}`}
+                aria-disabled={!projects.some(p => p.id === g.projectId)}
+                aria-label={projects.some(p => p.id === g.projectId) ? `Open project ${g.projectTitle} (live console)` : `${g.projectTitle} (stale console — project record missing)`}
+                title={projects.some(p => p.id === g.projectId) ? `${g.projectTitle} — ${g.count} live console${g.count > 1 ? 's' : ''}` : `${g.projectTitle} — project record missing; adopt it from a project's stale-consoles row`}
                 onClick={() => openProject(g.projectId)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -69,6 +73,9 @@ export const ActiveTerminalsPill: React.FC = () => {
                 />
                 <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-100">
                   {g.projectTitle}
+                  {!projects.some(p => p.id === g.projectId) && (
+                    <span className="ml-1.5 rounded bg-amber-500/20 px-1 py-px text-[9px] font-black uppercase tracking-wide text-amber-300">stale</span>
+                  )}
                 </span>
                 {g.hasCmd && (
                   <span

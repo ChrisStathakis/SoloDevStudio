@@ -11,7 +11,7 @@ from .views import (
 )
 from .terminal_views import (
     create_project_terminal, list_terminals, kill_terminal,
-    terminal_input, terminal_output, terminal_resize,
+    terminal_input, terminal_output, terminal_resize, adopt_terminal,
 )
 from .upload_views import upload_image
 from .search_views import market_research_view, tech_research_view
@@ -56,6 +56,7 @@ urlpatterns = [
     path('terminals/<str:session_id>/output/', terminal_output, name='terminal-output'),
     path('terminals/<str:session_id>/input/', terminal_input, name='terminal-input'),
     path('terminals/<str:session_id>/resize/', terminal_resize, name='terminal-resize'),
+    path('terminals/<str:session_id>/adopt/', adopt_terminal, name='terminal-adopt'),
     path('terminals/<str:session_id>/', kill_terminal, name='terminal-kill'),
     path('projects/<uuid:pk>/terminals/', create_project_terminal, name='project-terminal-create'),
     path('', include(router.urls)),
