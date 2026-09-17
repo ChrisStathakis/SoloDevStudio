@@ -8,7 +8,8 @@ from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
     Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault,
-    ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode
+    ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode,
+    OrchestratorRun, OrchestratorStep,
 )
 from .stage_workspaces import checklist_ids, builtin_checklists, stage_guidance, initialize_project_workspaces, STAGE_WORKSPACE_CONFIG
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
@@ -683,3 +684,27 @@ class TimeEntrySerializer(serializers.ModelSerializer):
             entry.task.time_spent_minutes = round(total / 60)
             entry.task.save(update_fields=['time_spent_minutes'])
         return entry
+
+
+class OrchestratorStepSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrchestratorStep
+        fields = [
+            'id', 'run', 'task', 'title', 'tool', 'model_id', 'reasoning_effort',
+            'mode', 'skill_ids', 'terminal_id', 'status', 'attempt',
+            'verification_command', 'output_tail', 'approval_reason',
+            'order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class OrchestratorRunSerializer(serializers.ModelSerializer):
+    steps = OrchestratorStepSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = OrchestratorRun
+        fields = [
+            'id', 'project', 'goal', 'status', 'plan', 'max_parallel',
+            'steps', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']

@@ -15,6 +15,10 @@ from .terminal_views import (
 )
 from .upload_views import upload_image
 from .search_views import market_research_view, tech_research_view
+from .orchestrator_views import (
+    orchestrator_runs, orchestrator_approve_plan, orchestrator_cancel_run,
+    orchestrator_step_detail, orchestrator_step_prompt, orchestrator_step_action,
+)
 
 router = DefaultRouter()
 router.register(r'projects', ProjectViewSet, basename='project')
@@ -59,5 +63,11 @@ urlpatterns = [
     path('terminals/<str:session_id>/adopt/', adopt_terminal, name='terminal-adopt'),
     path('terminals/<str:session_id>/', kill_terminal, name='terminal-kill'),
     path('projects/<uuid:pk>/terminals/', create_project_terminal, name='project-terminal-create'),
+    path('projects/<uuid:pk>/orchestrator/runs/', orchestrator_runs, name='orchestrator-runs'),
+    path('orchestrator/runs/<uuid:run_id>/approve-plan/', orchestrator_approve_plan, name='orchestrator-approve-plan'),
+    path('orchestrator/runs/<uuid:run_id>/cancel/', orchestrator_cancel_run, name='orchestrator-cancel-run'),
+    path('orchestrator/steps/<uuid:step_id>/prompt/', orchestrator_step_prompt, name='orchestrator-step-prompt'),
+    path('orchestrator/steps/<uuid:step_id>/action/', orchestrator_step_action, name='orchestrator-step-action'),
+    path('orchestrator/steps/<uuid:step_id>/', orchestrator_step_detail, name='orchestrator-step-detail'),
     path('', include(router.urls)),
 ]

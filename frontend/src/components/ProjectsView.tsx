@@ -37,6 +37,7 @@ import {
   Zap,
   Terminal,
   Boxes,
+  Bot,
   X,
   Clipboard,
   ClipboardPlus,
@@ -59,6 +60,7 @@ import { ProjectStageStepper } from './ProjectStageStepper';
 import { ProjectRuntimeErrors } from './ProjectRuntimeErrors';
 import { ProjectTasksTab } from './ProjectTasksTab';
 import { ProjectPromptTab } from './ProjectPromptTab';
+import { OrchestratorTab } from './OrchestratorTab';
 import { useToast } from './Toaster';
 import { useConsoleRowLayout, type ConsoleRowId } from '../hooks/useConsoleRowLayout';
 import { buildInitializationCommand, CODEX_PLAN_COMMAND, formatBracketedPaste, CODEX_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
@@ -149,7 +151,7 @@ export const ProjectsView: React.FC = () => {
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [completedExpanded, setCompletedExpanded] = useState(false);
-  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'workspace' | 'docs' | 'prompt'>('tasks');
+  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'workspace' | 'docs' | 'prompt' | 'orchestrator'>('tasks');
   const [taskFilterStage, setTaskFilterStage] = useState<string>('all');
   const [taskFilterCategory, setTaskFilterCategory] = useState<string>('all');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState<{ [taskId: string]: string }>({});
@@ -2150,6 +2152,20 @@ export const ProjectsView: React.FC = () => {
                 <Clipboard className="w-3.5 h-3.5" />
                 Prompt
               </button>
+
+              <button
+                type="button"
+                id="btn-tab-orchestrator"
+                onClick={() => setActiveDetailTab('orchestrator')}
+                className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
+                  activeDetailTab === 'orchestrator'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
+                }`}
+              >
+                <Bot className="w-3.5 h-3.5" />
+                Orchestrator
+              </button>
             </div>
 
             {/* TAB: TASKS */}
@@ -2379,6 +2395,11 @@ export const ProjectsView: React.FC = () => {
                 handleStartInitialization={handleStartInitialization}
                 copyPreviewedPrompt={copyPreviewedPrompt}
               />
+            )}
+
+            {/* TAB: ORCHESTRATOR */}
+            {activeDetailTab === 'orchestrator' && (
+              <OrchestratorTab projectId={activeProject.id} terminalRef={terminalDrawerRef} />
             )}
           </div>
         </div>

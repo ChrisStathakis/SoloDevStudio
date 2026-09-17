@@ -308,6 +308,56 @@ export interface TimeEntry {
   timestamp: string; // ISO timestamp
 }
 
+export type OrchestratorRunStatus =
+  | 'planning'
+  | 'awaiting_plan'
+  | 'running'
+  | 'paused'
+  | 'needs_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type OrchestratorStepStatus =
+  | 'queued'
+  | 'awaiting_approval'
+  | 'sending'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'skipped';
+
+export interface OrchestratorStep {
+  id: string;
+  run: string;
+  task?: string | null;
+  title: string;
+  tool: 'opencode' | 'codex';
+  model_id: string;
+  reasoning_effort: 'low' | 'medium' | 'high';
+  mode: 'build' | 'plan';
+  skill_ids: string[];
+  terminal_id: string;
+  status: OrchestratorStepStatus;
+  attempt: number;
+  verification_command: string;
+  output_tail: string;
+  approval_reason: string;
+  order: number;
+}
+
+export interface OrchestratorRun {
+  id: string;
+  project: string;
+  goal: string;
+  status: OrchestratorRunStatus;
+  plan: Array<{ title: string; task_id?: string | null; category?: string }>;
+  max_parallel: number;
+  steps: OrchestratorStep[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ActiveTimerState {
   isRunning: boolean;
   mode: 'pomodoro' | 'stopwatch';

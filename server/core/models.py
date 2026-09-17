@@ -460,3 +460,89 @@ class CloudBackup(models.Model):
 
     def __str__(self):
         return f"Cloud backup {self.name} ({self.owner})"
+
+
+class OrchestratorRun(models.Model):
+    """A goal-driven autonomous run scoped to one project."""
+
+    PLANNING = 'planning'
+    AWAITING_PLAN = 'awaiting_plan'
+    RUNNING = 'running'
+    PAUSED = 'paused'
+    NEEDS_APPROVAL = 'needs_approval'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+    CANCELLED = 'cancelled'
+    STATUS_CHOICES = [
+        (PLANNING, 'Planning'),
+        (AWAITING_PLAN, 'Awaiting plan approval'),
+        (RUNNING, 'Running'),
+        (PAUSED, 'Paused'),
+        (NEEDS_APPROVAL, 'Needs approval'),
+        (COMPLETED, 'Completed'),
+        (FAILED, 'Failed'),
+        (CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='orchestrator_runs')
+    goal = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PLANNING)
+    plan = models.JSONField(default=list, blank=True)
+    max_parallel = models.PositiveIntegerField(default=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['project', 'status', 'created_at'])]
+
+    def __str__(self):
+        return f"Run {str(self.id)[:8]} — {self.project.title}"
+
+
+class OrchestratorStep(models.Model):
+    """One dispatched unit inside an OrchestratorRun, optionally linked to a Task."""
+
+    QUEUED = 'queued'
+    AWAITING_APPROVAL = 'awaiting_approval'
+    SENDING = 'sending'
+    RUNNING = 'running'
+    PASSED = 'passed'
+    FAILED = 'failed'
+    SKIPPED = 'skipped'
+    STATUS_CHOICES = [
+        (QUEUED, 'Queued'),
+        (AWAITING_APPROVAL, 'Awaiting approval'),
+        (SENDING, 'Sending'),
+        (RUNNING, 'Running'),
+        (PASSED, 'Passed'),
+        (FAILED, 'Failed'),
+        (SKIPPED, 'Skipped'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    run = models.ForeignKey(OrchestratorRun, on_delete=models.CASCADE, related_name='steps')
+    task = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name='orchestrator_steps')
+    title = models.CharField(max_length=400)
+    tool = models.CharField(max_length=20, choices=InitializationTool.choices, default=InitializationTool.OPENCODE)
+    model_id = models.CharField(max_length=200, blank=True, default='')
+    reasoning_effort = models.CharField(max_length=10, choices=ReasoningEffort.choices, default=ReasoningEffort.MEDIUM)
+    mode = models.CharField(max_length=10, choices=InitializationMode.choices, default=InitializationMode.BUILD)
+    skill_ids = models.JSONField(default=list, blank=True)
+    terminal_id = models.CharField(max_length=64, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=QUEUED)
+    attempt = models.PositiveIntegerField(default=0)
+    verification_command = models.CharField(max_length=500, blank=True, default='')
+    output_tail = models.TextField(blank=True, default='')
+    approval_reason = models.TextField(blank=True, default='')
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        indexes = [models.Index(fields=['run', 'status', 'order'])]
+
+    def __str__(self):
+        return f"{self.title} ({self.status})"

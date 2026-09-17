@@ -138,9 +138,10 @@ function registerAppProtocol() {
 
 async function waitForBackend(port) {
   const health = `http://127.0.0.1:${port}/api/health/`;
-  // A one-file PyInstaller executable may need a few seconds to extract on
-  // first launch before Django can run migrations.
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  // A one-file PyInstaller executable may need well over 30s to extract on
+  // first launch before Django can run migrations (measured ~42s cold).
+  // Give it up to ~120s so the app opens instead of erroring.
+  for (let attempt = 0; attempt < 1200; attempt += 1) {
     try {
       const response = await fetch(health);
       if (response.ok) return;
