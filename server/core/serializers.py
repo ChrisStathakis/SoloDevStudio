@@ -693,7 +693,11 @@ class OrchestratorStepSerializer(serializers.ModelSerializer):
             'id', 'run', 'task', 'title', 'tool', 'model_id', 'reasoning_effort',
             'mode', 'skill_ids', 'terminal_id', 'status', 'attempt',
             'verification_command', 'output_tail', 'approval_reason',
-            'order', 'created_at', 'updated_at',
+            'order', 'instructions', 'dependencies', 'expected_files',
+            'worktree_path', 'branch_name', 'completion_report', 'check_results',
+            'review_status', 'failure_reason', 'started_at', 'finished_at',
+            'launch_phase', 'last_output_at',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -705,6 +709,9 @@ class OrchestratorRunSerializer(serializers.ModelSerializer):
         model = OrchestratorRun
         fields = [
             'id', 'project', 'goal', 'status', 'plan', 'max_parallel',
-            'steps', 'created_at', 'updated_at',
+            'integration_branch', 'integration_worktree', 'base_branch',
+            'original_head', 'snapshot_commit', 'workspace_fingerprint', 'index_fingerprint', 'dirty_files',
+            'snapshot_started_at', 'snapshot_created_at', 'snapshot_finished_at',
+            'autonomous', 'failure_reason', 'last_event', 'steps', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

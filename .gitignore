@@ -3,6 +3,8 @@ node_modules/
 backend-dist/
 .desktop-build/
 release/
+desktop/build-identity.cjs
+desktop/build-identity.json
 
 # Scratch / test output
 output/

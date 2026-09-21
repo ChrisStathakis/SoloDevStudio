@@ -344,6 +344,19 @@ export interface OrchestratorStep {
   output_tail: string;
   approval_reason: string;
   order: number;
+  instructions: string;
+  dependencies: string[];
+  expected_files: string[];
+  worktree_path: string;
+  branch_name: string;
+  completion_report: Record<string, unknown>;
+  check_results: Array<Record<string, unknown>>;
+  review_status: string;
+  failure_reason: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  launch_phase: string;
+  last_output_at?: string | null;
 }
 
 export interface OrchestratorRun {
@@ -353,6 +366,20 @@ export interface OrchestratorRun {
   status: OrchestratorRunStatus;
   plan: Array<{ title: string; task_id?: string | null; category?: string }>;
   max_parallel: number;
+  integration_branch: string;
+  integration_worktree: string;
+  base_branch: string;
+  original_head: string;
+  snapshot_commit: string;
+  workspace_fingerprint: string;
+  index_fingerprint: string;
+  dirty_files: string[];
+  snapshot_started_at?: string | null;
+  snapshot_created_at?: string | null;
+  snapshot_finished_at?: string | null;
+  autonomous: boolean;
+  failure_reason: string;
+  last_event: Record<string, unknown>;
   steps: OrchestratorStep[];
   created_at: string;
   updated_at: string;

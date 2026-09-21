@@ -206,7 +206,14 @@ def _stream_events(session, start_offset):
     last_emitted = time.monotonic()
     started = time.monotonic()
 
-    yield _ndjson({'hello': True, 't': cursor})
+    yield _ndjson({
+        'hello': True,
+        't': cursor,
+        'alive': session.is_alive(),
+        'mode': session.mode,
+        'detachedLauncher': session.detached_launcher,
+        'childProcesses': session.to_dict().get('childProcesses', []),
+    })
 
     while True:
         payload_sent = False

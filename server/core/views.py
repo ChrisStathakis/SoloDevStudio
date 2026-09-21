@@ -33,6 +33,7 @@ from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 from .pdf_exports import idea_pdf, project_pdf
 from .stage_workspaces import STAGE_WORKSPACE_CONFIG, checklist_ids, builtin_checklists, effective_checklists, stage_guidance, initialize_project_workspaces
 from .services.terminal_manager import TerminalError, terminal_manager
+from .version import APP_VERSION, BUILD_ID
 
 User = get_user_model()
 
@@ -43,6 +44,8 @@ User = get_user_model()
 def health_view(request):
     return Response({
         "status": "ok",
+        "version": APP_VERSION,
+        "build_id": BUILD_ID,
     })
 
 @api_view(['POST'])

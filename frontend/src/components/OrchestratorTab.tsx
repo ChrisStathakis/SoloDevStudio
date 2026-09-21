@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Bot, Play, Check, X, RotateCcw, Terminal as TerminalIcon, ShieldAlert } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bot, Play, Check, X, RotateCcw, Terminal as TerminalIcon, ShieldAlert, Trash2 } from 'lucide-react';
 import { api, unwrapPaginated } from '../services/api';
-import { formatBracketedPaste } from '../services/initialization';
+import { buildInitializationCommand, formatBracketedPaste, CODEX_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
 import type { OrchestratorRun, OrchestratorStep } from '../types';
 import type { TerminalDrawerHandle } from './TerminalDrawer';
+import { useToast } from './Toaster';
+import { FRONTEND_BUILD_ID } from '../services/buildIdentity';
 
 interface Props {
   projectId: string;
@@ -27,18 +29,75 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyStep, setBusyStep] = useState<string | null>(null);
+  const [cleaningPrevious, setCleaningPrevious] = useState(false);
   const [presets, setPresets] = useState<Array<{ tool: string; modelId: string; label: string }>>([]);
+  const [buildMismatch, setBuildMismatch] = useState(false);
+  const refreshInFlight = useRef(false);
+  const seenTerminalIds = useRef<Set<string>>(new Set());
+  const { confirm } = useToast();
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     try {
       const res = await api.get<OrchestratorRun[]>(`/projects/${projectId}/orchestrator/runs/`);
-      setRuns(Array.isArray(res.data) ? res.data : []);
+      const nextRuns = Array.isArray(res.data) ? res.data : [];
+      setRuns(nextRuns);
+      const activeSteps = nextRuns.flatMap(r => r.steps || []).filter(s => ['sending', 'running'].includes(s.status) && s.terminal_id);
+      if (activeSteps.length && terminalRef.current) {
+        try {
+          const terminals = await api.get('/terminals/', { params: { alive: 'true', project: projectId } });
+          const liveSessions = Array.isArray(terminals.data) ? terminals.data as any[] : [];
+          const byId = new Map<string, any>(liveSessions.map((item: any) => [String(item.id), item]));
+          activeSteps.forEach(step => {
+            const session = byId.get(step.terminal_id);
+            if (session) terminalRef.current?.register({ ...session, mode: 'cmd' });
+          });
+          const candidate = activeSteps.find(step => step.status === 'sending' && !seenTerminalIds.current.has(step.terminal_id))
+            || activeSteps.find(step => !seenTerminalIds.current.has(step.terminal_id));
+          if (candidate) {
+            const session = byId.get(candidate.terminal_id);
+            if (session) {
+              seenTerminalIds.current.add(candidate.terminal_id);
+              await terminalRef.current.adopt({ ...session, mode: 'cmd' });
+            }
+          }
+        } catch (e: any) {
+          setError(e?.response?.data?.error || e?.message || 'Unable to attach the orchestrator terminal.');
+        }
+      }
     } catch (e: any) {
       setError(e?.response?.data?.error || e?.message || 'Unable to load orchestrator runs.');
+    } finally {
+      refreshInFlight.current = false;
     }
-  }, [projectId]);
+  }, [projectId, terminalRef]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [healthResponse, desktopSettings] = await Promise.all([
+          api.get('/health/'),
+          window.solodevDesktop ? window.solodevDesktop.getSettings() : Promise.resolve(null),
+        ]);
+        const ids = [
+          FRONTEND_BUILD_ID,
+          String(healthResponse.data?.build_id || ''),
+          String(desktopSettings?.buildId || ''),
+        ].filter(Boolean);
+        if (!cancelled) setBuildMismatch(new Set(ids).size > 1);
+      } catch {
+        if (!cancelled) setBuildMismatch(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => { void refresh(); }, 2500);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +133,10 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
 
   const createRun = async () => {
     if (!goal.trim() || loading) return;
+    if (buildMismatch) {
+      setError('The desktop, frontend, and backend builds do not match. Restart or reinstall the desktop app before starting a plan.');
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -88,8 +151,34 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
     }
   };
 
+  const clearPreviousPlans = async () => {
+    const olderCount = Math.max(0, runs.length - 1);
+    if (olderCount < 1 || cleaningPrevious) return;
+    const ok = await confirm({
+      title: `Clear ${olderCount} previous orchestrator plan${olderCount === 1 ? '' : 's'}?`,
+      description: 'The newest plan will remain. Older plan history and any active terminals attached to those plans will be removed. Project files and Git worktrees will not be changed.',
+      confirmLabel: 'Clear previous plans',
+      danger: true,
+    });
+    if (!ok) return;
+    setCleaningPrevious(true);
+    setError(null);
+    try {
+      await api.delete(`/projects/${projectId}/orchestrator/runs/previous/`);
+      await refresh();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e?.message || 'Unable to clear previous plans.');
+    } finally {
+      setCleaningPrevious(false);
+    }
+  };
+
   const mutateRun = async (runId: string, suffix: string) => {
     setError(null);
+    if (buildMismatch && (suffix === 'approve-plan' || suffix === 'resume')) {
+      setError('The desktop, frontend, and backend builds do not match. Restart or reinstall the desktop app before starting this run.');
+      return;
+    }
     try {
       await api.post(`/orchestrator/runs/${runId}/${suffix}/`);
       await refresh();
@@ -109,19 +198,39 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
         const sessionId = res.data?.id as string | undefined;
         const prompt = res.data?.prompt as string | undefined;
         if (sessionId && prompt && terminalRef?.current) {
-          try {
-            // TerminalDrawer owns xterm rendering; adopt by refreshing live list.
-            // Paste bracketed so multi-line prompts arrive as one draft.
-            await terminalRef.current.sendPastedText(formatBracketedPaste(prompt) + '\r', sessionId);
-          } catch {
-            // Paste is best-effort: session exists, user can paste manually.
+          const drawer = terminalRef.current;
+          await drawer.adopt({ ...res.data, mode: 'cmd' });
+          const initialRevision = await drawer.waitForOutputIdle(sessionId);
+          const command = buildInitializationCommand({
+            tool: step.tool === 'codex' ? 'codex' : 'opencode',
+            model: step.model_id || 'default',
+            reasoningEffort: step.reasoning_effort,
+            mode: step.mode,
+          });
+          await drawer.sendInput(`${command}\r`, sessionId);
+          const ready = step.tool === 'codex' ? CODEX_READY_PATTERNS : OPENCODE_READY_PATTERNS;
+          const marker = await drawer.waitForOutputMarker(sessionId, {
+            afterRevision: initialRevision,
+            ready,
+            blocked: step.tool === 'codex' ? CODEX_TRUST_PATTERNS : [],
+            timeoutMs: 90000,
+          });
+          if (marker === 'blocked') {
+            throw new Error('The agent is waiting for trust approval in the terminal. Approve it, then retry this step.');
           }
+          await drawer.sendPastedText(formatBracketedPaste(prompt), sessionId);
+          await new Promise(resolve => window.setTimeout(resolve, 450));
+          await drawer.sendInput('\r', sessionId);
+          await api.post(`/orchestrator/steps/${step.id}/action/`, { op: 'submitted' });
         }
       } else {
         await api.post(`/orchestrator/steps/${step.id}/action/`, { op });
       }
       await refresh();
     } catch (e: any) {
+      if (op === 'dispatch') {
+        try { await api.post(`/orchestrator/steps/${step.id}/action/`, { op: 'retry' }); } catch { /* preserve original delivery error */ }
+      }
       setError(e?.response?.data?.error || `Step ${op} failed.`);
     } finally {
       setBusyStep(null);
@@ -131,13 +240,28 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
   return (
     <div className="space-y-4">
       <div className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-3">
-        <div className="flex items-center gap-2">
-          <Bot className="w-4 h-4 text-indigo-500" />
-          <h3 className="text-xs font-black uppercase tracking-[0.2em] font-mono">Step launcher</h3>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Bot className="w-4 h-4 text-indigo-500" />
+            <h3 className="text-xs font-black uppercase tracking-[0.2em] font-mono">Step launcher</h3>
+          </div>
+          {runs.length > 1 && (
+            <button
+              type="button"
+              onClick={() => void clearPreviousPlans()}
+              disabled={cleaningPrevious}
+              className="px-2.5 py-1.5 rounded-lg border border-rose-300 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 disabled:opacity-50 text-[11px] font-bold flex items-center gap-1"
+              title="Delete older orchestrator plans and preserve the newest plan"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {cleaningPrevious ? 'Clearing…' : 'Clear previous plans'}
+            </button>
+          )}
         </div>
         <p className="text-xs text-content-faint font-mono">
-          Goal → plan you approve → one visible terminal per step (max 2/run, 6/user). You pick the model per step, press Send, and judge each step yourself. High-risk steps pause for approval. Nothing runs hidden.
+          Goal → review the proposed graph → approve once → isolated agents run automatically (up to the configured parallelism). The app verifies their reports and checks, pauses on risk or failure, and shows every terminal and merge decision.
         </p>
+        {buildMismatch && <div className="rounded-xl border border-rose-500/40 bg-rose-950/20 px-3 py-2 text-xs text-rose-300" role="alert">Desktop, frontend, and backend build IDs do not match. Restart or reinstall the desktop app before starting or resuming an orchestrator run.</div>}
         <div className="flex gap-2">
           <input
             value={goal}
@@ -157,19 +281,33 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
         {error && <div className="text-xs text-rose-500 font-mono">{error}</div>}
       </div>
 
-      {runs.map(run => (
+      {runs.map(run => {
+        const runCanChange = !['completed', 'cancelled'].includes(run.status);
+        const coordinatorStarting = run.status === 'running'
+          && run.steps.some(step => step.status === 'queued')
+          && !run.steps.some(step => ['sending', 'running'].includes(step.status));
+        return (
         <div key={run.id} className="p-5 rounded-3xl bg-surface border border-line shadow-xl space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <div className="text-sm font-bold">{run.goal}</div>
-              <div className="text-[11px] font-mono text-content-faint">{STATUS_LABEL[run.status] || run.status} · {run.steps.length} steps</div>
+              <div className="text-[11px] font-mono text-content-faint">{coordinatorStarting ? 'Starting coordinator' : STATUS_LABEL[run.status] || run.status} · {run.steps.length} steps</div>
+              {run.failure_reason && <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 font-mono">{run.failure_reason}</div>}
             </div>
             <div className="flex gap-2">
-              {(run.status === 'awaiting_plan' || run.status === 'paused') && (
+              {run.status === 'awaiting_plan' && runCanChange && (
                 <button type="button" onClick={() => mutateRun(run.id, 'approve-plan')}
                   className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1">
                   <Play className="w-3.5 h-3.5" /> Approve plan
                 </button>
+              )}
+              {['running', 'needs_approval'].includes(run.status) && (
+                <button type="button" onClick={() => mutateRun(run.id, 'pause')}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-black">Pause</button>
+              )}
+              {run.status === 'paused' && runCanChange && (
+                <button type="button" onClick={() => mutateRun(run.id, 'resume')}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black">{run.failure_reason?.toLowerCase().includes('uncommitted') ? 'Continue with isolated snapshot' : run.failure_reason ? 'Retry start' : 'Resume'}</button>
               )}
               {!['completed', 'cancelled', 'failed'].includes(run.status) && (
                 <button type="button" onClick={() => mutateRun(run.id, 'cancel')}
@@ -187,15 +325,21 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
                   <div className="text-xs font-bold truncate">{s.title}</div>
                   <div className="text-[11px] font-mono text-content-faint">
                     {s.status} · {s.tool}{s.model_id ? ` / ${s.model_id}` : ''} · attempt {s.attempt}
+                    {s.launch_phase ? ` · ${s.launch_phase}` : ''}
                     {s.verification_command ? ` · verify: ${s.verification_command}` : ''}
                     {s.terminal_id ? ` · term ${s.terminal_id.slice(0, 8)}` : ''}
+                    {s.review_status ? ` · review: ${s.review_status}` : ''}
+                    {s.dependencies?.length ? ` · after: ${s.dependencies.length} step${s.dependencies.length === 1 ? '' : 's'}` : ''}
                   </div>
-                  {s.status === 'awaiting_approval' && (
+                  {(s.worktree_path || s.branch_name) && <div className="text-[10px] font-mono text-content-faint truncate" title={s.worktree_path}>{s.branch_name || s.worktree_path}</div>}
+                  {s.failure_reason && <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 font-mono">{s.failure_reason}</div>}
+                  {s.completion_report?.summary && <div className="mt-1 text-[11px] text-content-faint">{String(s.completion_report.summary)}</div>}
+                  {s.status === 'awaiting_approval' && runCanChange && (
                     <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-mono">
                       <ShieldAlert className="w-3.5 h-3.5" /> {s.approval_reason || 'Needs approval'}
                     </div>
                   )}
-                  {['queued', 'awaiting_approval'].includes(s.status) && (
+                  {['queued', 'awaiting_approval'].includes(s.status) && runCanChange && (
                     <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={e => e.stopPropagation()}>
                       <select
                         aria-label="Agent"
@@ -247,29 +391,27 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
                   )}
                 </div>
                 <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
-                  {s.status === 'awaiting_approval' && (
+                  {s.status === 'awaiting_approval' && runCanChange && (
                     <button type="button" disabled={busyStep === s.id} onClick={() => stepAction(s, 'approve')}
                       className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold">Approve</button>
                   )}
-                  {['queued', 'failed'].includes(s.status) && (
-                    <button type="button" disabled={busyStep === s.id} onClick={() => stepAction(s, 'dispatch')}
+                  {s.status === 'failed' && runCanChange && (
+                    <button type="button" disabled={busyStep === s.id} onClick={() => stepAction(s, 'retry')}
                       className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1">
-                      <TerminalIcon className="w-3 h-3" /> {busyStep === s.id ? 'Sending…' : s.status === 'failed' ? 'Retry send' : 'Send'}
+                      <TerminalIcon className="w-3 h-3" /> {busyStep === s.id ? 'Retrying…' : 'Retry'}
                     </button>
                   )}
-                  {s.status === 'running' && (
+                  {s.status === 'running' && runCanChange && (
                     <>
+                      <button type="button" disabled={busyStep === s.id} onClick={() => stepAction(s, 'resend')}
+                        className="px-2.5 py-1 rounded-lg bg-surface border border-line text-[11px] font-bold">Resend prompt</button>
                       <button type="button" onClick={() => stepAction(s, 'pass')}
                         className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-[11px] font-bold flex items-center gap-1"><Check className="w-3 h-3" /> Pass</button>
                       <button type="button" onClick={() => stepAction(s, 'fail')}
                         className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 text-[11px] font-bold flex items-center gap-1"><X className="w-3 h-3" /> Fail</button>
                     </>
                   )}
-                  {s.status === 'failed' && (
-                    <button type="button" onClick={() => stepAction(s, 'retry')}
-                      className="px-2.5 py-1 rounded-lg bg-surface border border-line text-[11px] font-bold flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Requeue</button>
-                  )}
-                  {!['passed', 'skipped', 'running'].includes(s.status) && s.status !== 'failed' && (
+                  {!['passed', 'skipped', 'running', 'sending'].includes(s.status) && s.status !== 'failed' && runCanChange && (
                     <button type="button" onClick={() => stepAction(s, 'skip')}
                       className="px-2.5 py-1 rounded-lg bg-surface border border-line text-[11px]">Skip</button>
                   )}
@@ -279,7 +421,8 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
             {run.steps.length === 0 && <div className="text-xs font-mono text-content-faint">No steps yet.</div>}
           </div>
         </div>
-      ))}
+        );
+      })}
       {runs.length === 0 && <div className="text-center text-xs font-mono text-content-faint py-6">No orchestrator runs yet. Enter a goal above.</div>}
     </div>
   );

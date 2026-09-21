@@ -1,9 +1,23 @@
 const { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const netModule = require('net');
 const path = require('path');
 const { pathToFileURL } = require('url');
+
+let buildIdentity = { version: '1.1.3', buildId: 'dev' };
+try {
+  buildIdentity = require('./build-identity.cjs');
+} catch {
+  // Development checkouts do not have a generated release identity.
+}
+const APP_VERSION = buildIdentity.version || '1.1.3';
+const BUILD_ID = buildIdentity.buildId || 'dev';
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 const APP_SCHEME = 'app';
 const APP_HOST = 'solodev';
@@ -21,6 +35,15 @@ let mainWindow = null;
 let companionWindow = null;
 let companionDismissed = false;
 let companionState = null;
+
+if (gotSingleInstanceLock) {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
 
 function settingsPath() {
   return path.join(app.getPath('userData'), 'desktop-settings.json');
@@ -136,12 +159,16 @@ function registerAppProtocol() {
   });
 }
 
-async function waitForBackend(port) {
+async function waitForBackend(port, child, getStartupError) {
   const health = `http://127.0.0.1:${port}/api/health/`;
   // A one-file PyInstaller executable may need well over 30s to extract on
   // first launch before Django can run migrations (measured ~42s cold).
   // Give it up to ~120s so the app opens instead of erroring.
   for (let attempt = 0; attempt < 1200; attempt += 1) {
+    if (child && child.exitCode !== null) {
+      const detail = getStartupError ? getStartupError() : '';
+      throw new Error(detail || `The local API stopped during startup (exit code ${child.exitCode}).`);
+    }
     try {
       const response = await fetch(health);
       if (response.ok) return;
@@ -151,6 +178,22 @@ async function waitForBackend(port) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error('The local API did not become ready. Check the backend log and try again.');
+}
+
+async function verifyRendererPreflight(port) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/auth/login/`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: DESKTOP_ORIGIN,
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type,x-solodev-frontend-build',
+    },
+  });
+  const allowOrigin = response.headers.get('access-control-allow-origin') || '';
+  const allowHeaders = (response.headers.get('access-control-allow-headers') || '').toLowerCase();
+  if (!response.ok || allowOrigin !== DESKTOP_ORIGIN || !allowHeaders.includes('x-solodev-frontend-build')) {
+    throw new Error('The local API is running but its desktop CORS handshake is incomplete. Reinstall the matching SoloDev Studio build.');
+  }
 }
 
 async function startBackend() {
@@ -165,18 +208,30 @@ async function startBackend() {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let startupError = '';
   backendProcess.stdout.on('data', (data) => console.log(`[backend] ${data}`));
-  backendProcess.stderr.on('data', (data) => console.error(`[backend] ${data}`));
+  backendProcess.stderr.on('data', (data) => {
+    startupError += String(data);
+    if (startupError.length > 8000) startupError = startupError.slice(-8000);
+    console.error(`[backend] ${data}`);
+  });
   backendProcess.once('exit', (code) => {
     if (code && app.isReady()) console.error(`Desktop backend exited with code ${code}`);
   });
-  await waitForBackend(port);
+  await waitForBackend(port, backendProcess, () => startupError.trim());
+  await verifyRendererPreflight(port);
   activeApiBase = `http://127.0.0.1:${port}/api`;
   return port;
 }
 
 function stopBackend() {
-  if (backendProcess && !backendProcess.killed) backendProcess.kill();
+  if (backendProcess && !backendProcess.killed) {
+    if (process.platform === 'win32' && backendProcess.pid) {
+      spawnSync('taskkill', ['/PID', String(backendProcess.pid), '/T', '/F'], { windowsHide: true });
+    } else {
+      backendProcess.kill();
+    }
+  }
   backendProcess = null;
 }
 
@@ -253,7 +308,7 @@ function showCompanion() {
 }
 function hideCompanion() { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); }
 
-ipcMain.handle('desktop:get-settings', () => ({ ...readSettings(), apiBase: activeApiBase }));
+ipcMain.handle('desktop:get-settings', () => ({ ...readSettings(), apiBase: activeApiBase, appVersion: APP_VERSION, buildId: BUILD_ID }));
 ipcMain.on('desktop:get-api-base', (event) => {
   event.returnValue = activeApiBase;
 });
@@ -325,7 +380,7 @@ ipcMain.on('desktop:companion-command', (_event, command) => {
 ipcMain.on('desktop:companion-dismiss', () => { companionDismissed = true; hideCompanion(); });
 ipcMain.on('desktop:companion-position', (_event, position) => { if (!companionWindow || !position) return; const x = Number(position.x); const y = Number(position.y); if (!Number.isFinite(x) || !Number.isFinite(y)) return; const next = clampCompanionPosition(x, y); companionWindow.setPosition(next.x, next.y); writeSettings({ companionPosition: next }); });
 
-app.whenReady().then(async () => {
+if (gotSingleInstanceLock) app.whenReady().then(async () => {
   registerAppProtocol();
   try {
     await startBackend();
@@ -333,6 +388,7 @@ app.whenReady().then(async () => {
     // A pinned companion is always visible, including right after launch.
     if (readSettings().companionPinned === true) showCompanion();
   } catch (error) {
+    stopBackend();
     dialog.showErrorBox('SoloDev Studio could not start', error.message || String(error));
     app.quit();
   }

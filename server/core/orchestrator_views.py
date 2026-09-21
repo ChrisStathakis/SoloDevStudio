@@ -1,5 +1,6 @@
 """P1 orchestrator API: goal -> approvable plan -> semi-auto terminal dispatch."""
 from django.db import transaction
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
@@ -16,6 +17,7 @@ from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 from .services.terminal_manager import terminal_manager, TerminalError
 from .pathutils import normalize_path
 from .views import compose_project_initialization_prompt, compose_task_prompt
+from .version import BUILD_ID
 
 
 def _owned_project(request, pk):
@@ -24,6 +26,11 @@ def _owned_project(request, pk):
 
 def _run_owned(request, run_id):
     return get_object_or_404(OrchestratorRun, pk=run_id, project__owner=request.user)
+
+
+def _build_mismatch(request):
+    frontend_id = (request.headers.get('X-SoloDev-Frontend-Build') or '').strip()
+    return bool(frontend_id and frontend_id != BUILD_ID)
 
 
 def _compose_step_prompt(step, user):
@@ -60,6 +67,13 @@ def orchestrator_runs(request, pk=None):
     project = _owned_project(request, pk)
     if request.method == 'GET':
         runs = OrchestratorRun.objects.filter(project=project).prefetch_related('steps')
+        try:
+            from .services.orchestrator_coordinator import coordinator
+            coordinator.recover_active_runs(project.id)
+        except Exception:
+            # The persisted run state remains authoritative; the coordinator
+            # will expose a pause reason if recovery itself cannot start.
+            pass
         return Response(OrchestratorRunSerializer(runs, many=True).data)
     goal = (request.data.get('goal') or '').strip()
     if len(goal) < 4:
@@ -85,7 +99,7 @@ def orchestrator_runs(request, pk=None):
             task_ref = None
             if item.get('task_id'):
                 task_ref = Task.objects.filter(pk=item['task_id'], project=project).first()
-            is_risky, reason = classify_risk(item['title'] + '\n' + goal)
+            is_risky, reason = classify_risk('\n'.join([item['title'], item.get('instructions') or '', item.get('verification_command') or '', goal]))
             OrchestratorStep.objects.create(
                 run=run, task=task_ref, title=item['title'],
                 tool=project.initialization_tool or 'opencode',
@@ -94,6 +108,9 @@ def orchestrator_runs(request, pk=None):
                 mode=project.initialization_mode or 'build',
                 skill_ids=item.get('skill_ids') or [],
                 verification_command=item.get('verification_command') or '',
+                instructions=item.get('instructions') or item.get('title') or '',
+                dependencies=item.get('dependencies') or [],
+                expected_files=item.get('expected_files') or [],
                 status=OrchestratorStep.AWAITING_APPROVAL if is_risky else OrchestratorStep.QUEUED,
                 approval_reason=reason,
                 order=i,
@@ -102,14 +119,48 @@ def orchestrator_runs(request, pk=None):
     return Response(OrchestratorRunSerializer(run).data, status=status.HTTP_201_CREATED)
 
 
+@api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def orchestrator_clear_previous_runs(request, pk=None):
+    """Delete older orchestrator history while preserving the newest run."""
+    project = _owned_project(request, pk)
+    runs = list(OrchestratorRun.objects.filter(project=project).order_by('-created_at', '-id'))
+    if not runs:
+        return Response({'deleted_count': 0, 'preserved_run_id': None})
+    preserved = runs[0]
+    older = runs[1:]
+    for run in older:
+        for step in run.steps.filter(status__in=[OrchestratorStep.SENDING, OrchestratorStep.RUNNING]):
+            if step.terminal_id:
+                terminal_manager.remove_for_user(step.terminal_id, request.user.id)
+    deleted_count = len(older)
+    if older:
+        OrchestratorRun.objects.filter(pk__in=[run.pk for run in older]).delete()
+    return Response({'deleted_count': deleted_count, 'preserved_run_id': str(preserved.id)})
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def orchestrator_approve_plan(request, run_id=None):
     run = _run_owned(request, run_id)
+    if _build_mismatch(request):
+        return Response({'error': 'Frontend and backend build IDs do not match. Restart or reinstall the desktop app.'}, status=status.HTTP_409_CONFLICT)
     if run.status not in (OrchestratorRun.AWAITING_PLAN, OrchestratorRun.PAUSED):
         return Response({'error': 'Plan is not awaiting approval.'}, status=status.HTTP_409_CONFLICT)
+    if run.status in (OrchestratorRun.CANCELLED, OrchestratorRun.COMPLETED, OrchestratorRun.FAILED):
+        return Response({'error': 'This run cannot be started from its current state.'}, status=status.HTTP_409_CONFLICT)
     run.status = OrchestratorRun.RUNNING
-    run.save(update_fields=['status', 'updated_at'])
+    run.last_event = {'type': 'run_started', 'at': timezone.now().isoformat()}
+    run.save(update_fields=['status', 'last_event', 'updated_at'])
+    # The coordinator is deliberately imported lazily so Django startup and
+    # migrations never start worker threads.
+    try:
+        from .services.orchestrator_coordinator import coordinator
+        coordinator.kick(run.id, request.user.id)
+    except Exception as exc:
+        run.status = OrchestratorRun.PAUSED
+        run.failure_reason = f'Unable to start coordinator: {exc}'
+        run.save(update_fields=['status', 'failure_reason', 'updated_at'])
     return Response(OrchestratorRunSerializer(run).data)
 
 
@@ -117,8 +168,91 @@ def orchestrator_approve_plan(request, run_id=None):
 @permission_classes([permissions.IsAuthenticated])
 def orchestrator_cancel_run(request, run_id=None):
     run = _run_owned(request, run_id)
+    if run.status == OrchestratorRun.CANCELLED:
+        return Response(OrchestratorRunSerializer(run).data)
+    for step in run.steps.filter(status__in=[OrchestratorStep.RUNNING, OrchestratorStep.SENDING]):
+        if step.terminal_id:
+            terminal_manager.remove_for_user(step.terminal_id, request.user.id)
+            step.terminal_id = ''
+        step.status = OrchestratorStep.SKIPPED
+        step.failure_reason = 'Run cancelled.'
+        step.launch_phase = 'cancelled'
+        step.finished_at = timezone.now()
+        step.save(update_fields=['status', 'failure_reason', 'finished_at', 'terminal_id', 'launch_phase', 'updated_at'])
     run.status = OrchestratorRun.CANCELLED
-    run.save(update_fields=['status', 'updated_at'])
+    run.last_event = {'type': 'run_cancelled', 'at': timezone.now().isoformat()}
+    run.save(update_fields=['status', 'last_event', 'updated_at'])
+    return Response(OrchestratorRunSerializer(run).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def orchestrator_pause_run(request, run_id=None):
+    run = _run_owned(request, run_id)
+    if run.status not in (OrchestratorRun.RUNNING, OrchestratorRun.NEEDS_APPROVAL):
+        return Response({'error': 'Only a running run can be paused.'}, status=status.HTTP_409_CONFLICT)
+    run.status = OrchestratorRun.PAUSED
+    run.last_event = {'type': 'run_paused', 'at': timezone.now().isoformat()}
+    run.save(update_fields=['status', 'last_event', 'updated_at'])
+    return Response(OrchestratorRunSerializer(run).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def orchestrator_resume_run(request, run_id=None):
+    run = _run_owned(request, run_id)
+    if _build_mismatch(request):
+        return Response({'error': 'Frontend and backend build IDs do not match. Restart or reinstall the desktop app.'}, status=status.HTTP_409_CONFLICT)
+    if run.status != OrchestratorRun.PAUSED:
+        return Response({'error': 'Only a paused run can be resumed.'}, status=status.HTTP_409_CONFLICT)
+    run.status = OrchestratorRun.RUNNING
+    run.last_event = {'type': 'run_resumed', 'at': timezone.now().isoformat()}
+    run.save(update_fields=['status', 'last_event', 'updated_at'])
+    from .services.orchestrator_coordinator import coordinator
+    coordinator.kick(run.id, request.user.id)
+    return Response(OrchestratorRunSerializer(run).data)
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def orchestrator_plan_edit(request, run_id=None):
+    """Edit the proposed graph before execution starts."""
+    run = _run_owned(request, run_id)
+    if run.status not in (OrchestratorRun.AWAITING_PLAN, OrchestratorRun.PAUSED):
+        return Response({'error': 'Only an unstarted plan can be edited.'}, status=status.HTTP_409_CONFLICT)
+    raw_steps = request.data.get('steps') if isinstance(request.data, dict) else None
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return Response({'steps': 'Provide a non-empty list of steps.'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(raw_steps) > 32:
+        return Response({'steps': 'A run may contain at most 32 steps.'}, status=status.HTTP_400_BAD_REQUEST)
+    with transaction.atomic():
+        run.steps.all().delete()
+        normalized = []
+        for index, item in enumerate(raw_steps):
+            if not isinstance(item, dict) or len(str(item.get('title') or '').strip()) < 4:
+                transaction.set_rollback(True)
+                return Response({'steps': f'Step {index + 1} needs a title.'}, status=status.HTTP_400_BAD_REQUEST)
+            title = str(item.get('title')).strip()[:400]
+            is_risky, reason = classify_risk('\n'.join([title, str(item.get('instructions') or ''), str(item.get('verification_command') or ''), run.goal]))
+            normalized.append({
+                'title': title,
+                'instructions': str(item.get('instructions') or title)[:10000],
+                'dependencies': item.get('dependencies') if isinstance(item.get('dependencies'), list) else [],
+                'expected_files': item.get('expected_files') if isinstance(item.get('expected_files'), list) else [],
+                'verification_command': str(item.get('verification_command') or '')[:500],
+                'status': OrchestratorStep.AWAITING_APPROVAL if is_risky else OrchestratorStep.QUEUED,
+                'approval_reason': reason,
+                'order': index,
+            })
+        for item in normalized:
+            OrchestratorStep.objects.create(run=run, title=item['title'], instructions=item['instructions'],
+                dependencies=item['dependencies'], expected_files=item['expected_files'],
+                verification_command=item['verification_command'], status=item['status'],
+                approval_reason=item['approval_reason'], order=item['order'], tool=run.project.initialization_tool or 'opencode',
+                model_id=run.project.initialization_model or '', reasoning_effort=run.project.initialization_reasoning_effort or 'medium',
+                mode=run.project.initialization_mode or 'build')
+        run.plan = normalized
+        run.save(update_fields=['plan', 'updated_at'])
     return Response(OrchestratorRunSerializer(run).data)
 
 
@@ -187,16 +321,25 @@ def orchestrator_step_action(request, step_id=None):
     project = run.project
     op = (request.data.get('op') or '').strip().lower()
     if op == 'approve':
+        if run.status not in (OrchestratorRun.NEEDS_APPROVAL, OrchestratorRun.PAUSED, OrchestratorRun.RUNNING):
+            return Response({'error': 'The run is not awaiting step approval.'}, status=status.HTTP_409_CONFLICT)
         step.status = OrchestratorStep.QUEUED
         step.approval_reason = ''
         step.save(update_fields=['status', 'approval_reason', 'updated_at'])
         if run.status == OrchestratorRun.NEEDS_APPROVAL and not run.steps.filter(status=OrchestratorStep.AWAITING_APPROVAL).exists():
             run.status = OrchestratorRun.RUNNING
             run.save(update_fields=['status', 'updated_at'])
+        try:
+            from .services.orchestrator_coordinator import coordinator
+            coordinator.kick(run.id, request.user.id)
+        except Exception:
+            pass
         return Response(OrchestratorStepSerializer(step).data)
     if op == 'dispatch':
         # P1 semi-auto: server creates a dedicated visible terminal; the
         # frontend pastes the prompt (same handshake as Prompt tab).
+        if run.status != OrchestratorRun.RUNNING:
+            return Response({'error': 'Approve the plan before dispatching steps.'}, status=status.HTTP_409_CONFLICT)
         if step.status == OrchestratorStep.AWAITING_APPROVAL:
             return Response({'error': 'Approve this high-risk step first.'}, status=status.HTTP_409_CONFLICT)
         alive = terminal_manager.count_alive_for_user(request.user.id)
@@ -217,34 +360,79 @@ def orchestrator_step_action(request, step_id=None):
         except TerminalError as e:
             return Response({'error': e.message}, status=e.http_status)
         step.terminal_id = session.id
-        step.status = OrchestratorStep.RUNNING
+        step.status = OrchestratorStep.SENDING
         step.attempt = (step.attempt or 0) + 1
-        step.save(update_fields=['terminal_id', 'status', 'attempt', 'updated_at'])
+        step.started_at = timezone.now()
+        step.failure_reason = ''
+        step.launch_phase = 'launching_cli'
+        step.last_output_at = timezone.now()
+        step.save(update_fields=['terminal_id', 'status', 'attempt', 'started_at', 'failure_reason', 'launch_phase', 'last_output_at', 'updated_at'])
         prompt = _compose_step_prompt(step, request.user)
         payload = session.to_dict()
         payload['prompt'] = prompt
         return Response(payload, status=status.HTTP_201_CREATED)
+    if op == 'submitted':
+        if step.status != OrchestratorStep.SENDING:
+            return Response({'error': 'This step is not awaiting submission confirmation.'}, status=status.HTTP_409_CONFLICT)
+        step.status = OrchestratorStep.RUNNING
+        step.launch_phase = 'waiting_for_response'
+        step.save(update_fields=['status', 'launch_phase', 'updated_at'])
+        return Response(OrchestratorStepSerializer(step).data)
+    if op == 'resend':
+        if run.status != OrchestratorRun.RUNNING:
+            return Response({'error': 'The run is not active.'}, status=status.HTTP_409_CONFLICT)
+        if step.status != OrchestratorStep.RUNNING:
+            return Response({'error': 'Only a running step can resend its prompt.'}, status=status.HTTP_409_CONFLICT)
+        try:
+            from .services.orchestrator_coordinator import coordinator
+            coordinator.resend(step, request.user.id)
+        except TerminalError as exc:
+            return Response({'error': exc.message}, status=exc.http_status)
+        return Response(OrchestratorStepSerializer(step).data)
     if op in ('pass', 'fail'):
+        if step.status != OrchestratorStep.RUNNING:
+            return Response({'error': 'A step must be running before it can be marked passed or failed.'}, status=status.HTTP_409_CONFLICT)
         step.status = OrchestratorStep.PASSED if op == 'pass' else OrchestratorStep.FAILED
         tail = request.data.get('output_tail')
         if isinstance(tail, str):
             step.output_tail = tail[-4000:]
-        step.save(update_fields=['status', 'output_tail', 'updated_at'])
+        step.finished_at = timezone.now()
+        step.save(update_fields=['status', 'output_tail', 'finished_at', 'updated_at'])
         _rollup_run(run)
         return Response(OrchestratorStepSerializer(step).data)
     if op == 'retry':
-        is_risky, reason = classify_risk(step.title)
+        if run.status in (OrchestratorRun.CANCELLED, OrchestratorRun.COMPLETED):
+            return Response({'error': 'This run cannot be restarted from its current state.'}, status=status.HTTP_409_CONFLICT)
+        if step.status not in (OrchestratorStep.FAILED, OrchestratorStep.QUEUED, OrchestratorStep.AWAITING_APPROVAL):
+            return Response({'error': 'Only a failed or queued step can be requeued.'}, status=status.HTTP_409_CONFLICT)
+        if step.terminal_id:
+            terminal_manager.remove_for_user(step.terminal_id, request.user.id)
+            step.terminal_id = ''
+        is_risky, reason = classify_risk('\n'.join([step.title, step.instructions or '', step.verification_command or '']))
         step.status = OrchestratorStep.AWAITING_APPROVAL if is_risky else OrchestratorStep.QUEUED
         step.approval_reason = reason
-        step.save(update_fields=['status', 'approval_reason', 'updated_at'])
+        step.save(update_fields=['status', 'approval_reason', 'terminal_id', 'updated_at'])
         if run.status in (OrchestratorRun.FAILED, OrchestratorRun.COMPLETED):
             run.status = OrchestratorRun.RUNNING
             run.save(update_fields=['status', 'updated_at'])
+        if run.status == OrchestratorRun.RUNNING:
+            try:
+                from .services.orchestrator_coordinator import coordinator
+                coordinator.kick(run.id, request.user.id)
+            except Exception:
+                pass
         return Response(OrchestratorStepSerializer(step).data)
     if op == 'skip':
+        if run.status in (OrchestratorRun.CANCELLED, OrchestratorRun.COMPLETED, OrchestratorRun.FAILED):
+            return Response({'error': 'This run cannot be changed from its current state.'}, status=status.HTTP_409_CONFLICT)
+        if step.status not in (OrchestratorStep.QUEUED, OrchestratorStep.AWAITING_APPROVAL, OrchestratorStep.FAILED):
+            return Response({'error': 'Only a queued, approval, or failed step can be skipped.'}, status=status.HTTP_409_CONFLICT)
         step.status = OrchestratorStep.SKIPPED
         step.save(update_fields=['status', 'updated_at'])
-        _rollup_run(run)
+        # Skipping while the plan is still being reviewed must not approve or
+        # start the run implicitly; approval remains the explicit transition.
+        if run.status != OrchestratorRun.AWAITING_PLAN:
+            _rollup_run(run)
         return Response(OrchestratorStepSerializer(step).data)
     return Response({'error': "op must be approve|dispatch|pass|fail|retry|skip."}, status=status.HTTP_400_BAD_REQUEST)
 

@@ -5,6 +5,7 @@ import type { LauncherModelPreset, ProjectDoc } from '../types';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { useAgentFilters } from '../hooks/useAgentFilters';
+import { FRONTEND_BUILD_ID } from '../services/buildIdentity';
 import {
   FileText,
   Plus,
@@ -112,6 +113,9 @@ export const SettingsView: React.FC = () => {
   const isDesktop = Boolean(window.solodevDesktop?.isDesktop);
   const [backendPortDraft, setBackendPortDraft] = useState('');
   const [activeApiBase, setActiveApiBase] = useState('');
+  const [appVersion, setAppVersion] = useState('');
+  const [buildId, setBuildId] = useState('');
+  const [backendBuild, setBackendBuild] = useState<{ version?: string; build_id?: string } | null>(null);
   const [desktopPortStatus, setDesktopPortStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [desktopPortBusy, setDesktopPortBusy] = useState(false);
   const [companionEnabled, setCompanionEnabled] = useState(true);
@@ -358,6 +362,9 @@ export const SettingsView: React.FC = () => {
     window.solodevDesktop.getSettings().then(settings => {
       setBackendPortDraft(settings.backendPort ? String(settings.backendPort) : '');
       setActiveApiBase(settings.apiBase || '');
+      setAppVersion(settings.appVersion || '');
+      setBuildId(settings.buildId || '');
+      api.get('/health/').then(res => setBackendBuild(res.data || null)).catch(() => setBackendBuild(null));
       setCompanionEnabled(settings.companionEnabled !== false);
       setCompanionPinned(settings.companionPinned === true);
       setDesktopPortStatus(null);
@@ -899,6 +906,12 @@ export const SettingsView: React.FC = () => {
               <p className="text-xs text-content-faint mt-1">The desktop window loads its interface directly, so it does not need a frontend port. The private local API uses an available loopback port automatically.</p>
             </div>
             {activeApiBase && <div className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-[11px] font-mono text-content-faint">Current API: {activeApiBase}</div>}
+            <div className="rounded-xl bg-surface-2 border border-line px-3 py-2 text-[11px] font-mono text-content-faint">
+              <div>App version: {appVersion || 'unknown'} · desktop build: {buildId || 'unknown'}</div>
+              <div>Frontend build: {FRONTEND_BUILD_ID}</div>
+              <div>Backend: {backendBuild?.version || 'unknown'} · build: {backendBuild?.build_id || 'unknown'}</div>
+              {backendBuild?.build_id && new Set([FRONTEND_BUILD_ID, buildId, backendBuild.build_id].filter(Boolean)).size > 1 && <div className="mt-1 text-rose-400">Build mismatch — restart/reinstall the desktop app.</div>}
+            </div>
             <label className="block space-y-1.5">
               <span className="text-[10px] uppercase tracking-wider font-black text-content-faint">API port override (optional)</span>
               <input

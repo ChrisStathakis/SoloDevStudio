@@ -4,6 +4,7 @@ P1 is deliberately deterministic (no LLM call): it turns a high-level goal
 plus existing project context into an approvable step plan. Later phases can
 swap propose_plan() for an LLM-backed decomposer without changing the API.
 """
+import os
 import re
 
 DESTRUCTIVE_PATTERNS = [
@@ -28,6 +29,23 @@ VERIFY_BY_CATEGORY = {
 }
 
 
+def _verification_for(project, category='feature'):
+    """Choose a check from the actual project, never from task category alone."""
+    root = str(getattr(project, 'directory_path', '') or '')
+    if root:
+        direct_manage = os.path.join(root, 'manage.py')
+        if os.path.isfile(direct_manage):
+            return 'python manage.py test'
+        for current, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in {'.git', '.orchestrator', 'node_modules', 'venv', '.venv'}]
+            if 'manage.py' in files:
+                relative = os.path.relpath(os.path.join(current, 'manage.py'), root).replace(os.sep, '/')
+                return f'python {relative} test'
+    if root and os.path.isfile(os.path.join(root, 'package.json')):
+        return 'npm test -- --watchAll=false'
+    return VERIFY_BY_CATEGORY.get(category, '')
+
+
 def classify_risk(text):
     """Return (is_high_risk, reason). Anything destructive needs human approval."""
     hay = str(text or '')
@@ -48,7 +66,7 @@ def propose_plan(*, goal, project, open_tasks, active_skills, mvp_features):
     steps = []
     seen_titles = set()
 
-    def push(title, task_id=None, category='feature'):
+    def push(title, task_id=None, category='feature', instructions='', expected_files=None, dependencies=None):
         title = (title or '').strip()
         if not title or title.lower() in seen_titles:
             return
@@ -59,7 +77,10 @@ def propose_plan(*, goal, project, open_tasks, active_skills, mvp_features):
             'task_id': str(task_id) if task_id else None,
             'category': category,
             'skill_ids': skill_ids,
-            'verification_command': VERIFY_BY_CATEGORY.get(category, ''),
+            'instructions': instructions or title,
+            'expected_files': expected_files or [],
+            'dependencies': dependencies or [],
+            'verification_command': _verification_for(project, category),
         })
 
     # 1. Goal text becomes steps. Split on newlines plus common inline
@@ -83,24 +104,17 @@ def propose_plan(*, goal, project, open_tasks, active_skills, mvp_features):
             steps_src.append(cleaned)
     for line in steps_src:
         push(line)
-    # 2. Incomplete project tasks that look related (title words overlap goal).
-    # Fall back to the newest open tasks when nothing overlaps, so runs on
-    # goals with novel wording still ground in real project work.
-    goal_words = set(re.findall(r'[a-z0-9]{3,}', str(goal or '').lower()))
+    # 2. Include only explicitly related open tasks. Never inject arbitrary
+    # newest tasks into a run: unrelated work makes the plan unsafe to trust.
+    stop_words = {'the', 'and', 'for', 'with', 'from', 'into', 'that', 'this', 'create', 'build', 'make', 'add'}
+    goal_words = {w for w in re.findall(r'[a-z0-9]{3,}', str(goal or '').lower()) if w not in stop_words}
     matched_any = False
     for t in (open_tasks or [])[:20]:
         title = str(t.get('title') or '')
-        words = set(re.findall(r'[a-z0-9]{3,}', title.lower()))
+        words = {w for w in re.findall(r'[a-z0-9]{3,}', title.lower()) if w not in stop_words}
         if goal_words and words and len(goal_words & words) >= 1:
             push(title, task_id=t.get('id'), category=t.get('category') or 'feature')
             matched_any = True
-    if not matched_any:
-        for t in (open_tasks or [])[:3]:
-            if len(steps) >= 8:
-                break
-            title = str(t.get('title') or '').strip()
-            if title:
-                push(title, task_id=t.get('id'), category=t.get('category') or 'feature')
     # 3. MVP features overlap as fallback steps (cap total at 8 for P1).
     for feat in (mvp_features or [])[:8]:
         if len(steps) >= 8:

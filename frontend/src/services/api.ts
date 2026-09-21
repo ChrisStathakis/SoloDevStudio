@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { FRONTEND_BUILD_ID } from './buildIdentity';
 
 // Electron supplies the loopback API URL at runtime after it has selected a
 // free port. Browser/development builds continue to use VITE_API_URL.
@@ -23,6 +24,7 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  config.headers['X-SoloDev-Frontend-Build'] = FRONTEND_BUILD_ID;
   return config;
 });
 

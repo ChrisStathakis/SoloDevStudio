@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config as env_config
+from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -99,17 +100,9 @@ CORS_ALLOWED_ORIGINS = _parse_origins(env_config(
 # frontend runs on an origin missing from .env.
 CORS_ALLOW_ALL_ORIGINS = env_config('CORS_ALLOW_ALL_ORIGINS', default=DEBUG, cast=bool)
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
-]
+# Keep the package's supported defaults in sync with django-cors-headers and
+# explicitly permit the desktop build identity header used for mismatch checks.
+CORS_ALLOW_HEADERS = [*default_headers, 'x-solodev-frontend-build']
 CORS_ALLOW_METHODS = ['DELETE', 'GET', 'OPTIONS', 'PATCH', 'POST', 'PUT']
 
 REST_FRAMEWORK = {

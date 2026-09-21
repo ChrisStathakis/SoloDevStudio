@@ -34,6 +34,10 @@ export interface TerminalSessionDto {
   exitedAt: string | null;
   exitCode: number | null;
   reused?: boolean;
+  connectionState?: string;
+  detachedLauncher?: boolean;
+  detachedReason?: string;
+  childProcesses?: Array<{ pid: number; name: string }>;
 }
 
 export interface OutputMarkerWait {
@@ -47,6 +51,8 @@ export type OutputMarkerResult = 'ready' | 'blocked';
 
 export interface TerminalDrawerHandle {
   create: (mode: TerminalMode, options?: { forceNew?: boolean }) => Promise<TerminalSessionDto>;
+  register: (session: TerminalSessionDto) => void;
+  adopt: (session: TerminalSessionDto) => Promise<void>;
   restartIfRunning: (mode: TerminalMode) => Promise<TerminalSessionDto | null>;
   sendInput: (data: string, sessionId?: string) => Promise<void>;
   sendPastedText: (data: string, sessionId?: string) => Promise<void>;
@@ -181,13 +187,17 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const [activeId, setActiveId] = useState<string | null>(null);
     const [loadingCreate, setLoadingCreate] = useState<TerminalMode | null>(null);
     const [activeSize, setActiveSize] = useState<{ cols: number; rows: number } | null>(null);
-    const [connState, setConnState] = useState<'idle' | 'connecting' | 'live' | 'error'>('idle');
+    const [connState, setConnState] = useState<'idle' | 'connecting' | 'connected' | 'detached' | 'live' | 'error'>('idle');
+    const [connectionAttempt, setConnectionAttempt] = useState(0);
+    const [reconnectNonce, setReconnectNonce] = useState(0);
     const [terminalReady, setTerminalReady] = useState(false);
     const [terminalError, setTerminalError] = useState<string | null>(null);
     const [pasteProgress, setPasteProgress] = useState<{ sent: number; total: number } | null>(null);
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
     const [isDragging, setIsDragging] = useState<boolean>(false);
-    const connStateRef = useRef<'idle' | 'connecting' | 'live' | 'error'>('idle');
+    const connStateRef = useRef<'idle' | 'connecting' | 'connected' | 'detached' | 'live' | 'error'>('idle');
+    const connectionGenerationRef = useRef(0);
+    const streamCursorsRef = useRef<Map<string, number>>(new Map());
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
     const activeIdRef = useRef<string | null>(null);
@@ -567,6 +577,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     }, []);
     const teardownRuntime = useCallback(() => {
       const rt = runtimeRef.current;
+      connectionGenerationRef.current += 1;
       rt.pumpStopped = true;
       if (rt.abort) {
         rt.abort.abort();
@@ -609,6 +620,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
 
       const container = containerRef.current;
       const session = sessionsRef.current.find(s => s.id === activeId);
+      const connectionGeneration = ++connectionGenerationRef.current;
 
       const term = new Terminal({
         theme: XTERM_THEME,
@@ -743,31 +755,18 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       const ctrl = new AbortController();
       rt.abort = ctrl;
       rt.pumpStopped = false;
-      const stopped = () => rt.pumpStopped || ctrl.signal.aborted;
-      const waitsForCmdPrompt = session?.mode === 'cmd' && session.reused === false;
-      let initialOutputTail = '';
-      let initialOutputSeen = false;
-      let initialQuietTimer: number | null = null;
-      let initialFallbackTimer: number | null = null;
+      const stopped = () => rt.pumpStopped || ctrl.signal.aborted || connectionGeneration !== connectionGenerationRef.current;
       let resizeRetryTimer: number | null = null;
-      let watchdogTimer: number | null = null;
+      let handshakeTimer: number | null = null;
 
       const clearInitialTimers = () => {
-        if (initialQuietTimer !== null) {
-          window.clearTimeout(initialQuietTimer);
-          initialQuietTimer = null;
-        }
-        if (initialFallbackTimer !== null) {
-          window.clearTimeout(initialFallbackTimer);
-          initialFallbackTimer = null;
-        }
         if (resizeRetryTimer !== null) {
           window.clearTimeout(resizeRetryTimer);
           resizeRetryTimer = null;
         }
-        if (watchdogTimer !== null) {
-          window.clearTimeout(watchdogTimer);
-          watchdogTimer = null;
+        if (handshakeTimer !== null) {
+          window.clearTimeout(handshakeTimer);
+          handshakeTimer = null;
         }
       };
 
@@ -780,60 +779,42 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           console.warn('[TerminalDrawer] input enable skipped: session snapshot reports alive=false', { activeId });
           return;
         }
-        clearInitialTimers();
         rt.inputReady = true;
         setTerminalReady(true);
         attachInput();
         term.focus();
       };
 
-      const scheduleCustomPromptFallback = () => {
-        if (!initialOutputSeen || stopped()) return;
-        if (initialQuietTimer !== null) window.clearTimeout(initialQuietTimer);
-        initialQuietTimer = window.setTimeout(() => {
-          initialQuietTimer = null;
-          enableInputAfterInitialRender();
-        }, 400);
-        if (initialFallbackTimer === null) {
-          initialFallbackTimer = window.setTimeout(() => {
-            initialFallbackTimer = null;
-            enableInputAfterInitialRender();
-          }, 1800);
-        }
-      };
-
-      const handleInitialOutputRendered = (text: string) => {
-        if (rt.inputReady || !text) return;
-        initialOutputSeen = true;
-        initialOutputTail = `${initialOutputTail}${text}`.slice(-4096);
-        const normalizedTail = initialOutputTail.replace(ANSI_SEQUENCE_RE, '');
-        if (!waitsForCmdPrompt || CMD_PROMPT_RE.test(normalizedTail)) {
-          enableInputAfterInitialRender();
-          return;
-        }
-        // Custom PROMPT values may not match the standard drive/path form.
-        // Wait for a quiet period, with a hard upper bound, before enabling.
-        scheduleCustomPromptFallback();
-      };
       // Keep the server cursor across the stream's periodic reconnects. The
       // terminal component can still start at zero when it is newly mounted,
       // but a reconnect must never replay from zero or clear the live screen.
-      let streamCursor = 0;
+      let streamCursor = streamCursorsRef.current.get(activeId) ?? 0;
+      let attemptHandshakeReceived = false;
 
       const pumpStreamOnce = async (): Promise<void> => {
+        if (stopped()) return;
         setConnState('connecting');
-        const res = await authedFetch(
-          `/terminals/${activeId}/output/?after=${streamCursor}`,
-          { method: 'GET', headers: { Accept: 'application/x-ndjson' }, signal: ctrl.signal },
-        );
-        if (!res.ok || !res.body) {
+        const requestCtrl = new AbortController();
+        const abortRequest = () => requestCtrl.abort();
+        ctrl.signal.addEventListener('abort', abortRequest, { once: true });
+        let handshakeReceived = false;
+        attemptHandshakeReceived = false;
+        handshakeTimer = window.setTimeout(() => requestCtrl.abort(), 7000);
+        let res: Response;
+        let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+        try {
+          res = await authedFetch(
+            `/terminals/${activeId}/output/?after=${streamCursor}`,
+            { method: 'GET', headers: { Accept: 'application/x-ndjson' }, signal: requestCtrl.signal },
+          );
+          if (!res.ok || !res.body) {
           const status = `HTTP ${res.status}`;
           console.error('[TerminalDrawer] stream failed:', status);
           term.write(`\x1b[31m\r\n[stream error: ${status}] — is the backend running and restarted after the terminal update?\x1b[0m\r\n`);
           setConnState('error');
           throw new Error(status);
-        }
-        const reader = res.body.getReader();
+          }
+          reader = res.body.getReader();
         const decoder = new TextDecoder();
         let carry = '';
         let finished = false;
@@ -852,8 +833,23 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             } catch {
               continue;
             }
+            if (stopped() || connectionGeneration !== connectionGenerationRef.current || activeIdRef.current !== activeId) return;
             if (typeof evt.t === 'number' && Number.isFinite(evt.t)) {
               streamCursor = evt.t;
+              streamCursorsRef.current.set(activeId, streamCursor);
+            }
+            if (evt.hello === true) {
+              handshakeReceived = true;
+              attemptHandshakeReceived = true;
+              if (handshakeTimer !== null) {
+                window.clearTimeout(handshakeTimer);
+                handshakeTimer = null;
+              }
+              const detached = evt.detachedLauncher === true;
+              setConnState(detached ? 'detached' : 'connected');
+              setTerminalError(null);
+              setConnectionAttempt(0);
+              enableInputAfterInitialRender();
             }
             if (evt.reset) term.reset();
             if (typeof evt.d === 'string' && evt.d) {
@@ -863,12 +859,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               rt.outputTail = `${rt.outputTail}${output}`.slice(-8192);
               publishPetSnapshot();
               await new Promise<void>(resolve => {
-                term.write(output, () => {
-                  handleInitialOutputRendered(output);
-                  resolve();
-                });
+                term.write(output, resolve);
               });
-              if (connStateRef.current !== 'live') setConnState('live');
+              if (connStateRef.current !== 'detached') setConnState('live');
             }
             if (evt.e === true) {
               markExitedAndPublish(activeId, (evt.c as number | null) ?? null);
@@ -882,19 +875,28 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           }
           if (finished) break;
         }
-        try {
-          await reader.cancel();
-        } catch {
-          /* stream already closed */
+          if (!handshakeReceived && !stopped()) throw new Error('Console handshake did not include a hello event.');
+        } finally {
+          if (handshakeTimer !== null) {
+            window.clearTimeout(handshakeTimer);
+            handshakeTimer = null;
+          }
+          ctrl.signal.removeEventListener('abort', abortRequest);
+          try { await reader?.cancel(); } catch { /* stream already closed */ }
         }
       };
 
       const runPump = async () => {
         let failures = 0;
         while (!stopped()) {
+          const attempt = failures + 1;
+          setConnectionAttempt(attempt);
           try {
             await pumpStreamOnce();
-            failures = 0;
+            if (attemptHandshakeReceived) {
+              failures = 0;
+              setConnectionAttempt(0);
+            }
             if (stopped()) break;
             // 'k' cutoffs reconnect; exits leave nothing alive to follow.
             const rec = sessionsRef.current.find(s => s.id === activeId);
@@ -912,29 +914,15 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             console.error('[TerminalDrawer] stream error:', e);
             setConnState('error');
             failures += 1;
+            setConnectionAttempt(Math.min(failures, 3));
+            if (failures >= 3) {
+              setTerminalError('Console connection failed after 3 attempts. Retry connection to reconnect to this terminal.');
+              break;
+            }
             await sleep(Math.min(500 * failures, 3000), ctrl.signal);
           }
         }
       };
-      // Emergency fallback, armed unconditionally at mount: input must never
-      // stay gated behind the resize handshake or the prompt regex. Enabling
-      // is idempotent, and typing into a not-yet-prompted ConPTY simply
-      // buffers server-side until the shell reads it.
-      initialFallbackTimer = window.setTimeout(() => {
-        initialFallbackTimer = null;
-        enableInputAfterInitialRender();
-      }, 1800);
-      // Watchdog: a live stream that already rendered output must never leave
-      // input disabled. If the prompt gate somehow never opens, force it open
-      // and log the sub-state instead of wedging on "waiting for prompt".
-      watchdogTimer = window.setTimeout(() => {
-        watchdogTimer = null;
-        if (stopped() || rt.inputReady) return;
-        if (connStateRef.current === 'live' && rt.outputRevision > 0) {
-          console.warn('[TerminalDrawer] forcing input ready: live stream with rendered output but prompt gate never opened', { activeId });
-          enableInputAfterInitialRender();
-        }
-      }, 5000);
       const startConsole = async () => {
         // Fire-and-forget: ConPTY works at its default size until the backend
         // acknowledges the new dimensions. A slow/failing resize must not
@@ -965,7 +953,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         teardownRuntime();
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, activeId]);
+    }, [open, activeId, reconnectNonce]);
 
     useEffect(
       () => () => {
@@ -1038,6 +1026,39 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       },
       [projectId]
     );
+
+    const register = useCallback((session: TerminalSessionDto): void => {
+      if (!session?.id) return;
+      setSessions(prev => [...prev.filter(s => s.id !== session.id), session]);
+      sessionsRef.current = [...sessionsRef.current.filter(s => s.id !== session.id), session];
+      notifyTerminalsChanged();
+    }, []);
+
+    const adopt = useCallback(async (session: TerminalSessionDto): Promise<void> => {
+      if (!session?.id) throw new Error('The orchestrator did not return a terminal session.');
+      register(session);
+      if (activeIdRef.current === session.id && runtimeRef.current.inputReady) return;
+      activeIdRef.current = session.id;
+      setActiveId(session.id);
+      persistMinimizedForProject(projectId, false);
+      setOpen(true);
+      notifyTerminalsChanged();
+      // Opening the drawer mounts xterm and starts the output pump on the
+      // next render. Wait briefly so callers can safely begin the launch
+      // handshake without racing that effect.
+      await new Promise<void>((resolve, reject) => {
+        const started = Date.now();
+        const timer = window.setInterval(() => {
+          if (runtimeRef.current.inputReady && activeIdRef.current === session.id) {
+            window.clearInterval(timer);
+            resolve();
+          } else if (Date.now() - started > 5000) {
+            window.clearInterval(timer);
+            reject(new Error('Terminal console did not become ready.'));
+          }
+        }, 50);
+      });
+    }, [projectId, register]);
 
     const restartIfRunning = useCallback(
       async (mode: TerminalMode): Promise<TerminalSessionDto | null> => {
@@ -1141,7 +1162,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       setOpen(false);
     }, [projectId]);
 
-    useImperativeHandle(ref, () => ({ create, restartIfRunning, sendInput, sendPastedText, waitForOutputIdle, waitForOutputMarker, minimize }), [create, restartIfRunning, sendInput, sendPastedText, waitForOutputIdle, waitForOutputMarker, minimize]);
+    useImperativeHandle(ref, () => ({ register, adopt, create, restartIfRunning, sendInput, sendPastedText, waitForOutputIdle, waitForOutputMarker, minimize }), [register, adopt, create, restartIfRunning, sendInput, sendPastedText, waitForOutputIdle, waitForOutputMarker, minimize]);
 
     // ---------- resize dragging ----------
 
@@ -1514,7 +1535,32 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           {terminalError && (
             <div className="mx-3 mt-2 flex items-start justify-between gap-3 rounded-xl border border-rose-900/60 bg-rose-950/40 px-3 py-2 text-xs text-rose-200" role="alert">
               <span className="break-words">{terminalError}</span>
-              <button type="button" onClick={() => setTerminalError(null)} className="shrink-0 text-rose-300 hover:text-white" aria-label="Dismiss terminal error">×</button>
+              <span className="flex items-center gap-2 shrink-0">
+                {activeSession?.alive && connState === 'error' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTerminalError(null);
+                      setConnectionAttempt(0);
+                      setReconnectNonce(value => value + 1);
+                    }}
+                    className="rounded-md border border-rose-300/50 px-2 py-1 text-[11px] font-bold text-rose-100 hover:bg-rose-500/20"
+                  >
+                    Retry connection
+                  </button>
+                )}
+                <button type="button" onClick={() => setTerminalError(null)} className="shrink-0 text-rose-300 hover:text-white" aria-label="Dismiss terminal error">×</button>
+              </span>
+            </div>
+          )}
+
+          {activeSession?.detachedLauncher && (
+            <div className="mx-3 mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200" role="status">
+              <div className="font-bold">Detached launcher detected</div>
+              <div className="mt-0.5">{activeSession.detachedReason || 'This script starts child processes separately, so their logs are not attached to this console.'}</div>
+              {activeSession.childProcesses && activeSession.childProcesses.length > 0 && (
+                <div className="mt-1 font-mono">Children: {activeSession.childProcesses.map(child => `${child.name} (${child.pid})`).join(', ')}</div>
+              )}
             </div>
           )}
 
@@ -1591,7 +1637,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                       ? 'text-rose-400'
                       : !terminalReady || connState === 'connecting'
                       ? 'text-amber-400'
-                      : connState === 'live'
+                      : connState === 'live' || connState === 'connected' || connState === 'detached'
                       ? 'text-emerald-400'
                       : activeSession.alive
                       ? 'text-emerald-400'
@@ -1605,14 +1651,22 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                 >
                   {!terminalReady
                     ? connState === 'error'
-                      ? '◌ waiting for prompt (connection error)'
+                      ? '◌ connection error'
                       : connState === 'connecting'
-                      ? '◌ waiting for prompt (connecting…)'
-                      : '◌ waiting for prompt'
+                      ? `◌ connecting${connectionAttempt ? ` — attempt ${connectionAttempt}/3` : ''}`
+                      : connState === 'detached'
+                      ? '◌ detached launcher — waiting for output'
+                      : connState === 'connected'
+                      ? '◌ connected — waiting for output'
+                      : '◌ preparing console'
                     : connState === 'error'
                     ? '● error'
                     : connState === 'connecting'
-                    ? '◌ connecting'
+                    ? `◌ connecting${connectionAttempt ? ` — attempt ${connectionAttempt}/3` : ''}`
+                    : connState === 'detached'
+                    ? '● detached launcher'
+                    : connState === 'connected'
+                    ? '● connected — waiting for output'
                     : activeSession.alive
                     ? '● running'
                     : `○ exited${activeSession.exitCode ? ` (${activeSession.exitCode})` : ''}`}

@@ -5,6 +5,7 @@ pseudo console owned by the Django process, buffers recent output in memory
 and lets HTTP clients consume it incrementally by byte/char offset.
 """
 import os
+import re
 import sys
 import ctypes
 from contextlib import contextmanager
@@ -36,6 +37,62 @@ STREAM_MAX_SECONDS = 540               # long-poll ceiling; client reconnects af
 _DLL_SEARCH_LOCK = threading.RLock()
 
 
+def _script_uses_detached_start(script_path):
+    """Detect the common batch pattern that launches child consoles with START."""
+    try:
+        with open(script_path, 'r', encoding='utf-8', errors='replace') as handle:
+            text = handle.read()
+    except OSError:
+        return False
+    return any(re.match(r'^\s*@?start(?:\s|$)', line, re.IGNORECASE) for line in text.splitlines())
+
+
+def _windows_process_tree(root_pid):
+    """Return lightweight child process summaries without adding psutil."""
+    if os.name != 'nt' or not root_pid:
+        return []
+    try:
+        from ctypes import wintypes
+        class Entry(ctypes.Structure):
+            _fields_ = [
+                ('size', wintypes.DWORD), ('usage', wintypes.DWORD), ('pid', wintypes.DWORD),
+                ('heap', ctypes.c_void_p), ('module', wintypes.DWORD), ('threads', wintypes.DWORD),
+                ('parent_pid', wintypes.DWORD), ('base', ctypes.c_long), ('flags', wintypes.DWORD),
+                ('exe', wintypes.WCHAR * 260),
+            ]
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)
+        if snapshot in (0, -1):
+            return []
+        try:
+            first = kernel.Process32FirstW
+            next_item = kernel.Process32NextW
+            first.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+            next_item.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+            entry = Entry(); entry.size = ctypes.sizeof(Entry)
+            rows = []
+            if first(snapshot, ctypes.byref(entry)):
+                while True:
+                    rows.append((int(entry.pid), int(entry.parent_pid), entry.exe))
+                    entry.size = ctypes.sizeof(Entry)
+                    if not next_item(snapshot, ctypes.byref(entry)):
+                        break
+            children = []
+            pending = {int(root_pid)}
+            while pending:
+                parent = pending.pop()
+                for pid, ppid, name in rows:
+                    if ppid == parent and pid not in {item['pid'] for item in children}:
+                        children.append({'pid': pid, 'name': name})
+                        pending.add(pid)
+            return children[:32]
+        finally:
+            kernel.CloseHandle(snapshot)
+    except Exception:
+        return []
+
+
 @contextmanager
 def external_program_libraries():
     """Prevent frozen-app DLLs from overriding a project tool's own runtime."""
@@ -64,7 +121,7 @@ class TerminalError(Exception):
 
 
 class TerminalSession:
-    def __init__(self, *, owner_id, project_id, project_title, mode, pty, title, cwd):
+    def __init__(self, *, owner_id, project_id, project_title, mode, pty, title, cwd, detached_launcher=False):
         self.id = uuid_lib.uuid4().hex
         self.owner_id = str(owner_id)
         self.project_id = str(project_id)
@@ -76,6 +133,8 @@ class TerminalSession:
         self.exited_at = None
         self.exit_code = None
         self.killed = False
+        self.detached_launcher = bool(detached_launcher)
+        self.detached_reason = 'This launcher starts child consoles; their output is not attached here.' if self.detached_launcher else ''
 
         self._pty = pty
         self._buf_lock = threading.Lock()
@@ -217,6 +276,7 @@ class TerminalSession:
 
     def to_dict(self):
         alive = self.is_alive()
+        children = _windows_process_tree(getattr(self._pty, 'pid', None)) if self.detached_launcher and alive else []
         return {
             'id': self.id,
             'projectId': self.project_id,
@@ -229,6 +289,10 @@ class TerminalSession:
             'exitedAt': self.exited_at.isoformat() if self.exited_at else None,
             'exitCode': self.exit_code,
             'replayChars': min(MAX_BUFFER_CHARS, self.stats()[0]),
+            'connectionState': 'connected' if alive else 'exited',
+            'detachedLauncher': self.detached_launcher,
+            'detachedReason': self.detached_reason,
+            'childProcesses': children,
         }
 
 
@@ -297,6 +361,7 @@ class TerminalManager:
             cols=cols,
             rows=rows,
             env=env,
+            detached_launcher=False,
         )
 
     def _resolve_cmd_cwd(self, directory, fallback_directory=None):
@@ -343,6 +408,7 @@ class TerminalManager:
             cols=cols,
             rows=rows,
             env=env,
+            detached_launcher=_script_uses_detached_start(script_path),
         )
 
     def _build_venv_env(self, python_env):
@@ -406,6 +472,7 @@ class TerminalManager:
                 pty=pty,
                 title=kw['title'],
                 cwd=kw['cwd'] or '',
+                detached_launcher=kw.get('detached_launcher', False),
             )
             self._sessions[session.id] = session
             return session

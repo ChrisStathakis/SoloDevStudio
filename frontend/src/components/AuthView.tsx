@@ -24,7 +24,10 @@ export const AuthView: React.FC = () => {
         await register(username.trim(), email.trim(), password);
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.detail
+      const networkFailure = !err?.response && (err?.message === 'Network Error' || err?.code === 'ERR_NETWORK');
+      const msg = networkFailure
+        ? 'Cannot reach the local SoloDev backend. Restart the desktop app and try again.'
+        : err?.response?.data?.detail
         || err?.response?.data?.error
         || err?.response?.data?.password?.[0]
         || err?.response?.data?.email?.[0]

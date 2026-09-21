@@ -20,6 +20,7 @@ hiddenimports = (
 )
 
 datas = (
+    [('../desktop/build-identity.json', '.')] +
     collect_data_files("django")
     + collect_data_files("rest_framework")
     + collect_data_files("rest_framework_simplejwt")

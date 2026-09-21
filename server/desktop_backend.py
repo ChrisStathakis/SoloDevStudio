@@ -8,12 +8,58 @@ start only a loopback API process with a per-user database.
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import threading
 from pathlib import Path
 from signal import SIGINT, SIGTERM, signal
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, make_server
+
+
+class BackendInstanceLock:
+    """Keep one packaged backend writer per per-user SQLite database."""
+
+    def __init__(self, db_path: Path):
+        self.path = Path(f'{db_path}.backend.lock')
+        self.handle = self.path.open('a+', encoding='utf-8')
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                # msvcrt.locking requires at least one byte in the file.  Do
+                # this before writing our PID so a rejected second backend
+                # cannot overwrite the first backend's diagnostic owner.
+                self.handle.seek(0, 2)
+                if self.handle.tell() == 0:
+                    self.handle.write('0')
+                    self.handle.flush()
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            self.handle.close()
+            raise SystemExit(f'Another SoloDev Studio backend already owns {db_path}. Close it before starting another instance.')
+        self.handle.seek(0)
+        self.handle.write(str(os.getpid()).ljust(32))
+        self.handle.truncate()
+        self.handle.flush()
+
+    def release(self):
+        if not self.handle or self.handle.closed:
+            return
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        self.handle.close()
 
 
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
@@ -46,6 +92,8 @@ def main() -> None:
 
     db_path = Path(args.db_path).expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    backend_lock = BackendInstanceLock(db_path)
+    atexit.register(backend_lock.release)
     project_root = db_path.parent / 'projects'
     project_root.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +123,8 @@ def main() -> None:
     from config.wsgi import application
 
     call_command("migrate", interactive=False, verbosity=0)
+    from core.services.orchestrator_coordinator import coordinator
+    coordinator.recover_active_runs()
     server = make_server(
         "127.0.0.1",
         args.port,
