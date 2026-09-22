@@ -246,6 +246,22 @@ class ProjectLaunchPromptTests(APITestCase):
         project.refresh_from_db()
         self.assertEqual(project.initialization_mode, 'plan')
 
+    def test_initialization_settings_accept_kilo(self):
+        self.client.force_authenticate(self.user)
+        project = Project.objects.create(
+            owner=self.user,
+            title='Kilo project',
+            target_deadline=date(2026, 12, 1),
+            start_date=date(2026, 1, 1),
+        )
+        response = self.client.patch(
+            f'/api/projects/{project.pk}/initialization-settings/',
+            {'tool': 'kilo', 'model_id': 'openai/gpt-5', 'reasoning_effort': 'high', 'mode': 'plan'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['tool'], 'kilo')
+
     def test_conversion_rolls_back_when_prompt_creation_fails(self):
         self.client.force_authenticate(self.user)
         with patch('core.views.ProjectLaunchPrompt.objects.create', side_effect=RuntimeError('prompt failed')):
@@ -744,6 +760,9 @@ class LauncherModelPresetTests(APITestCase):
         opencode_plan = self.client.post('/api/launcher-model-presets/', {**payload, 'tool': 'opencode', 'label': 'Open plan', 'mode': 'plan'}, format='json')
         self.assertEqual(opencode_plan.status_code, 201)
         self.assertEqual(opencode_plan.data['mode'], 'plan')
+
+        kilo_same_name = self.client.post('/api/launcher-model-presets/', {**payload, 'tool': 'kilo'}, format='json')
+        self.assertEqual(kilo_same_name.status_code, 201)
 
     def test_presets_are_private_to_the_owner(self):
         preset = LauncherModelPreset.objects.create(owner=self.other_user, tool='codex', model_id='gpt-5.6-terra', reasoning_effort='medium', label='Other')

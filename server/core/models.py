@@ -19,6 +19,7 @@ class ProjectStage(models.TextChoices):
 class InitializationTool(models.TextChoices):
     OPENCODE = 'opencode', 'OpenCode'
     CODEX = 'codex', 'Codex'
+    KILO = 'kilo', 'Kilo'
 
 
 class ReasoningEffort(models.TextChoices):

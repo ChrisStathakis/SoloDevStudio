@@ -264,8 +264,7 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        # Plan mode is supported by both Codex (read-only sandbox + /plan)
-        # and OpenCode (--agent plan). No tool-specific restriction.
+        # Every available CLI exposes plan mode. No tool-specific restriction.
         return attrs
 
     def create(self, validated_data):
@@ -346,7 +345,7 @@ class LauncherModelPresetSerializer(serializers.ModelSerializer):
 
     def validate_tool(self, value):
         if value not in InitializationTool.values:
-            raise serializers.ValidationError('Tool must be opencode or codex.')
+            raise serializers.ValidationError('Tool must be opencode, codex, or kilo.')
         return value
 
     def validate_reasoning_effort(self, value):
@@ -362,7 +361,7 @@ class LauncherModelPresetSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        # Plan mode is supported by both Codex and OpenCode (--agent plan).
+        # Every supported CLI exposes a named plan agent or plan mode.
         request = self.context.get('request')
         owner = getattr(request, 'user', None)
         if owner and getattr(owner, 'is_authenticated', False):

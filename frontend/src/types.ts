@@ -106,7 +106,7 @@ export interface Project {
   port?: string;
   notes?: string;
   initialPrompt?: string;
-  initializationTool?: 'opencode' | 'codex';
+  initializationTool?: 'opencode' | 'codex' | 'kilo';
   initializationModel?: string;
   initializationReasoningEffort?: 'low' | 'medium' | 'high';
   initializationMode?: 'build' | 'plan';
@@ -156,7 +156,7 @@ export interface StageReview {
 
 export interface LauncherModelPreset {
   id: string;
-  tool: 'opencode' | 'codex';
+  tool: 'opencode' | 'codex' | 'kilo';
   modelId: string;
   reasoningEffort: 'low' | 'medium' | 'high';
   mode: 'build' | 'plan';
@@ -332,7 +332,7 @@ export interface OrchestratorStep {
   run: string;
   task?: string | null;
   title: string;
-  tool: 'opencode' | 'codex';
+  tool: 'opencode' | 'codex' | 'kilo';
   model_id: string;
   reasoning_effort: 'low' | 'medium' | 'high';
   mode: 'build' | 'plan';

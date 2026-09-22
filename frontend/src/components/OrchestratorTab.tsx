@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Play, Check, X, RotateCcw, Terminal as TerminalIcon, ShieldAlert, Trash2 } from 'lucide-react';
 import { api, unwrapPaginated } from '../services/api';
-import { buildInitializationCommand, formatBracketedPaste, CODEX_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
+import { buildInitializationCommand, formatBracketedPaste, CODEX_READY_PATTERNS, KILO_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
 import type { OrchestratorRun, OrchestratorStep } from '../types';
 import type { TerminalDrawerHandle } from './TerminalDrawer';
 import { useToast } from './Toaster';
@@ -106,7 +106,7 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
         const res = await api.get('/launcher-model-presets/', { params: { page_size: 100 } });
         const rows = unwrapPaginated<any>(res.data as any).filter((p: any) => p?.enabled !== false);
         if (!cancelled) setPresets(rows.map((p: any) => ({
-          tool: p?.tool === 'codex' ? 'codex' : 'opencode',
+          tool: p?.tool === 'codex' || p?.tool === 'kilo' ? p.tool : 'opencode',
           modelId: String(p?.model_id || ''),
           label: String(p?.label || p?.model_id || ''),
         })).filter(p => p.modelId));
@@ -202,13 +202,15 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
           await drawer.adopt({ ...res.data, mode: 'cmd' });
           const initialRevision = await drawer.waitForOutputIdle(sessionId);
           const command = buildInitializationCommand({
-            tool: step.tool === 'codex' ? 'codex' : 'opencode',
+            tool: step.tool === 'codex' || step.tool === 'kilo' ? step.tool : 'opencode',
             model: step.model_id || 'default',
             reasoningEffort: step.reasoning_effort,
             mode: step.mode,
           });
           await drawer.sendInput(`${command}\r`, sessionId);
-          const ready = step.tool === 'codex' ? CODEX_READY_PATTERNS : OPENCODE_READY_PATTERNS;
+          const ready = step.tool === 'codex'
+            ? CODEX_READY_PATTERNS
+            : step.tool === 'kilo' ? KILO_READY_PATTERNS : OPENCODE_READY_PATTERNS;
           const marker = await drawer.waitForOutputMarker(sessionId, {
             afterRevision: initialRevision,
             ready,
@@ -350,6 +352,7 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
                       >
                         <option value="opencode">opencode</option>
                         <option value="codex">codex</option>
+                        <option value="kilo">kilo</option>
                       </select>
                       <input
                         aria-label="Model"

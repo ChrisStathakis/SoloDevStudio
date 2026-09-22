@@ -430,6 +430,15 @@ class TerminalManager:
                 if entry and not (os.path.normcase(os.path.abspath(entry)) == root
                                  or os.path.normcase(os.path.abspath(entry)).startswith(root + os.sep))
             )
+        # npm installs Windows CLIs as .cmd shims under %APPDATA%\npm. Frozen
+        # Electron backends can start without that user PATH entry, so make the
+        # standard global-bin location explicit for every project terminal.
+        appdata = env.get('APPDATA') or os.environ.get('APPDATA')
+        npm_bin = os.path.join(appdata, 'npm') if appdata else ''
+        if npm_bin and os.path.isdir(npm_bin):
+            path_entries = env.get('PATH', '').split(os.pathsep)
+            if not any(os.path.normcase(entry) == os.path.normcase(npm_bin) for entry in path_entries):
+                env['PATH'] = npm_bin + os.pathsep + env.get('PATH', '')
         if not scripts_dir:
             return env
         env.pop('PYTHONHOME', None)

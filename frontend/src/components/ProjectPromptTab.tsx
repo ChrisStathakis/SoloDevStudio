@@ -4,7 +4,7 @@ import { Project, Task, LauncherModelPreset } from '../types';
 import { Dialog } from './ui';
 
 export interface PromptToolAvailability {
-  tool: 'opencode' | 'codex';
+  tool: 'opencode' | 'codex' | 'kilo';
   available: boolean;
   npm_available: boolean;
   install_command: string;
@@ -22,7 +22,7 @@ interface Props {
   initializationStatus: string | null;
   copiedPrompt: boolean;
   hasGeneratedSkillContext: boolean;
-  launchTool: 'opencode' | 'codex';
+  launchTool: 'opencode' | 'codex' | 'kilo';
   launchModel: string;
   launchReasoningEffort: 'low' | 'medium' | 'high';
   launchMode: 'build' | 'plan';
@@ -45,7 +45,7 @@ interface Props {
   setPromptDraft: (v: string) => void;
   setIsEditingPrompt: (v: boolean) => void;
   setPromptSaveError: (v: string | null) => void;
-  setLaunchTool: (v: 'opencode' | 'codex') => void;
+  setLaunchTool: (v: 'opencode' | 'codex' | 'kilo') => void;
   setLaunchModel: (v: string) => void;
   setLaunchReasoningEffort: (v: 'low' | 'medium' | 'high') => void;
   setLaunchMode: (v: 'build' | 'plan') => void;
@@ -62,9 +62,9 @@ interface Props {
   saveInitializationSettings: () => void;
   handleClearInitialPrompt: () => void;
   handleSaveInitialPrompt: () => void;
-  checkToolAvailability: (tool: 'opencode' | 'codex') => void;
+  checkToolAvailability: (tool: 'opencode' | 'codex' | 'kilo') => void;
   installSelectedTool: () => void;
-  handleStartInitialization: (tool: 'opencode' | 'codex', model: string, reasoningEffort: 'low' | 'medium' | 'high', mode: 'build' | 'plan') => void;
+  handleStartInitialization: (tool: 'opencode' | 'codex' | 'kilo', model: string, reasoningEffort: 'low' | 'medium' | 'high', mode: 'build' | 'plan') => void;
   copyPreviewedPrompt: () => void;
 }
 
@@ -186,8 +186,8 @@ export const ProjectPromptTab: React.FC<Props> = ({
           </div>
           <div className="flex flex-wrap items-stretch gap-2">
             <label className="sr-only" htmlFor="prompt-launch-tool">Initialization tool</label>
-            <select id="prompt-launch-tool" value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); }} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content">
-              <option value="opencode">OpenCode</option><option value="codex">Codex</option>
+            <select id="prompt-launch-tool" value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex' | 'kilo'; setLaunchTool(next); setLaunchModel(''); }} className="w-full sm:w-36 rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content">
+              <option value="opencode">OpenCode</option><option value="codex">Codex</option><option value="kilo">Kilo</option>
             </select>
             <label className="sr-only" htmlFor="prompt-launch-model">Model</label>
             <input id="prompt-launch-model" list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface border border-line px-3 py-2 text-xs font-mono text-content" />
@@ -263,13 +263,14 @@ export const ProjectPromptTab: React.FC<Props> = ({
               const openTasks = tasks.filter(t => t.projectId === project.id && !t.completed);
               return <label className="block text-xs font-black text-content">Open task<select value={selectedPromptTaskId} onChange={e => setSelectedPromptTaskId(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose a task…</option>{openTasks.map(task => <option key={task.id} value={task.id}>{task.title}{task.subtasks.length ? ` (${task.subtasks.length} steps)` : ''}</option>)}</select>{openTasks.length === 0 && <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-300">There are no open tasks in this project.</span>}</label>;
             })()}
-            <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex'; setLaunchTool(next); setLaunchModel(''); setLaunchReasoningEffort('medium'); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
+            <label className="block text-xs font-black text-content">Tool<select value={launchTool} onChange={e => { const next = e.target.value as 'opencode' | 'codex' | 'kilo'; setLaunchTool(next); setLaunchModel(''); setLaunchReasoningEffort('medium'); setToolAvailability(null); void checkToolAvailability(next); }} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="opencode">OpenCode</option><option value="codex">Codex</option><option value="kilo">Kilo</option></select></label>
             <label className="block text-xs font-black text-content">Model<input list="project-model-presets" value={launchModel} onChange={e => setLaunchModel(e.target.value)} placeholder={launchTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" /></label>
             <label className="block text-xs font-black text-content">Saved preset<select value="" onChange={e => applyLauncherPreset(e.target.value)} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="">Choose…</option>{modelPresets.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label || p.modelId}</option>)}</select></label>
             <label className="block text-xs font-black text-content">Reasoning effort<select value={launchReasoningEffort} onChange={e => setLaunchReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
             <label className="block text-xs font-black text-content">Mode<select value={launchMode} onChange={e => setLaunchMode(e.target.value as 'build' | 'plan')} className="mt-1 w-full rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content"><option value="build">Build</option><option value="plan">Plan</option></select></label>
             {launchTool === 'opencode' && <p className="text-[11px] text-content-faint">OpenCode launches as <span className="font-mono">opencode --agent {launchMode}</span>. Effort is saved on the preset but the interactive CLI has no top-level variant flag.</p>}
-            {isCheckingTool && <p className="text-xs text-content-faint" role="status">Checking whether {launchTool === 'codex' ? 'Codex' : 'OpenCode'} is installed…</p>}
+            {launchTool === 'kilo' && <p className="text-[11px] text-content-faint">Kilo launches as <span className="font-mono">kilo --agent {launchMode}</span>. Choose the provider/model here; effort is stored with the preset.</p>}
+            {isCheckingTool && <p className="text-xs text-content-faint" role="status">Checking whether {launchTool === 'codex' ? 'Codex' : launchTool === 'kilo' ? 'Kilo' : 'OpenCode'} is installed…</p>}
             {!isCheckingTool && toolAvailability && !toolAvailability.available && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p className="text-xs font-bold text-amber-700 dark:text-amber-200">{toolAvailability.message || 'This CLI is not installed.'}</p><code className="block rounded-lg bg-black/20 p-2 text-[11px] text-amber-100 break-all">{toolAvailability.install_command}</code><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={async () => { await navigator.clipboard.writeText(toolAvailability.install_command); setInitializationStatus('Install command copied.'); }} className="rounded-lg border border-amber-500/30 px-2.5 py-1.5 text-[11px] font-black text-amber-700 dark:text-amber-200">Copy install command</button><button type="button" onClick={installSelectedTool} disabled={!toolAvailability.npm_available || isInstallingTool} className="rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-[11px] font-black text-amber-100 disabled:opacity-40">{isInstallingTool ? 'Installing…' : 'Install in terminal'}</button><button type="button" onClick={() => void checkToolAvailability(launchTool)} disabled={isCheckingTool} className="rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-black text-content-muted">Check again</button><a href={toolAvailability.documentation_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-700 dark:text-indigo-300 hover:text-indigo-200">Docs <ExternalLink className="w-3 h-3" /></a></div>{!toolAvailability.npm_available && <p className="text-[11px] text-rose-700 dark:text-rose-300">npm is unavailable. Install Node.js/npm first, then check again.</p>}</div>}
             <div className="flex items-center justify-end gap-2"><button type="button" onClick={() => setIsLaunchDialogOpen(false)} className="rounded-xl bg-surface-2 border border-line px-3.5 py-2 text-xs font-black text-content-muted">Cancel</button><button type="button" onClick={() => handleStartInitialization(launchTool, launchModel, launchReasoningEffort, launchMode)} disabled={!launchModel.trim() || (promptSource === 'task' && !selectedPromptTaskId)} className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-black text-white disabled:opacity-40">Prepare in terminal</button></div>
           </div>

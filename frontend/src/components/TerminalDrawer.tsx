@@ -151,6 +151,9 @@ interface TerminalRuntime {
   lastCols: number;
   lastRows: number;
   resizeTimer: number | null;
+  resizeInFlight: Promise<void> | null;
+  pendingResize: { sessionId: string; cols: number; rows: number } | null;
+  lastResizeSessionId: string | null;
   outputRevision: number;
   lastOutputAt: number;
   outputTail: string;
@@ -197,6 +200,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const connStateRef = useRef<'idle' | 'connecting' | 'connected' | 'detached' | 'live' | 'error'>('idle');
     const connectionGenerationRef = useRef(0);
+    const resizeGenerationRef = useRef(0);
     const streamCursorsRef = useRef<Map<string, number>>(new Map());
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
@@ -211,6 +215,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       lastCols: 0,
       lastRows: 0,
       resizeTimer: null,
+      resizeInFlight: null,
+      pendingResize: null,
+      lastResizeSessionId: null,
       outputRevision: 0,
       lastOutputAt: 0,
       outputTail: '',
@@ -555,10 +562,55 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const syncBackendSize = useCallback(async (sessionId: string, cols: number, rows: number, force = false) => {
       const rt = runtimeRef.current;
       if (!(cols > 2 && rows > 2)) return;
-      if (!force && cols === rt.lastCols && rows === rt.lastRows) return;
-      await api.post(`/terminals/${sessionId}/resize/`, { cols, rows });
-      rt.lastCols = cols;
-      rt.lastRows = rows;
+      if (!force && sessionId === rt.lastResizeSessionId && cols === rt.lastCols && rows === rt.lastRows) return;
+      const generation = resizeGenerationRef.current;
+      const request = { sessionId, cols, rows };
+
+      // ResizeObserver can fire several times while the drawer is animating.
+      // Serialize the requests and keep only the newest target so ConPTY does
+      // not receive a burst of redraw-inducing resize commands.
+      if (rt.resizeInFlight) {
+        rt.pendingResize = request;
+        try {
+          await rt.resizeInFlight;
+        } catch {
+          // The in-flight owner forwards the pending target and reports the
+          // original failure to its own caller.
+        }
+        return;
+      }
+
+      const inFlight = api.post(`/terminals/${sessionId}/resize/`, { cols, rows }).then(() => {
+        if (resizeGenerationRef.current === generation) {
+          rt.lastCols = cols;
+          rt.lastRows = rows;
+          rt.lastResizeSessionId = sessionId;
+        }
+      });
+      rt.resizeInFlight = inFlight;
+      let resizeError: unknown = null;
+      try {
+        await inFlight;
+      } catch (error) {
+        resizeError = error;
+      } finally {
+        if (rt.resizeInFlight === inFlight) rt.resizeInFlight = null;
+      }
+
+      const pending = rt.pendingResize;
+      rt.pendingResize = null;
+      if (
+        pending &&
+        (pending.sessionId !== sessionId || resizeGenerationRef.current === generation) &&
+        (pending.sessionId !== rt.lastResizeSessionId || pending.cols !== rt.lastCols || pending.rows !== rt.lastRows)
+      ) {
+        try {
+          await syncBackendSize(pending.sessionId, pending.cols, pending.rows);
+        } catch (error) {
+          if (!resizeError) resizeError = error;
+        }
+      }
+      if (resizeError) throw resizeError;
     }, []);
 
     const cancelInputQueue = useCallback((sessionId: string) => {
@@ -578,6 +630,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const teardownRuntime = useCallback(() => {
       const rt = runtimeRef.current;
       connectionGenerationRef.current += 1;
+      resizeGenerationRef.current += 1;
+      rt.pendingResize = null;
+      rt.lastResizeSessionId = null;
       rt.pumpStopped = true;
       if (rt.abort) {
         rt.abort.abort();
@@ -629,6 +684,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         lineHeight: 1.15,
         cursorBlink: true,
         scrollback: 4000,
+        // Full-screen TUIs explicitly position the cursor with CR and ANSI
+        // controls. Converting every LF to CRLF corrupts that redraw protocol
+        // and causes overlapping OpenCode/Codex frames.
         convertEol: false,
       });
       const fit = new FitAddon();
@@ -748,10 +806,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       const ro = new ResizeObserver(onResized);
       ro.observe(container);
 
-      // Initial resize kick so a slow ConPTY/cmd start flushes its banner promptly.
-      term.write('\x1b[90mConnecting to console…\x1b[0m\r\n');
-
-      // Stream: replay buffered output from offset 0, then follow live output.
+      // A new xterm surface has no screen state. Replay retained output from
+      // the beginning before following live output; partial OpenCode redraws
+      // cannot be rendered correctly without the screen state before them.
       const ctrl = new AbortController();
       rt.abort = ctrl;
       rt.pumpStopped = false;
@@ -785,10 +842,11 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         term.focus();
       };
 
-      // Keep the server cursor across the stream's periodic reconnects. The
-      // terminal component can still start at zero when it is newly mounted,
-      // but a reconnect must never replay from zero or clear the live screen.
-      let streamCursor = streamCursorsRef.current.get(activeId) ?? 0;
+      // Keep the cursor only for reconnects within this visual terminal
+      // instance. A recreated xterm always starts from the retained history.
+      streamCursorsRef.current.delete(activeId);
+      let streamCursor = 0;
+      let renderedCursor = streamCursor;
       let attemptHandshakeReceived = false;
 
       const pumpStreamOnce = async (): Promise<void> => {
@@ -834,8 +892,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               continue;
             }
             if (stopped() || connectionGeneration !== connectionGenerationRef.current || activeIdRef.current !== activeId) return;
-            if (typeof evt.t === 'number' && Number.isFinite(evt.t)) {
-              streamCursor = evt.t;
+            const eventCursor = typeof evt.t === 'number' && Number.isFinite(evt.t) ? evt.t : null;
+            if (eventCursor !== null) {
+              streamCursor = Math.max(streamCursor, eventCursor);
               streamCursorsRef.current.set(activeId, streamCursor);
             }
             if (evt.hello === true) {
@@ -851,9 +910,17 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
               setConnectionAttempt(0);
               enableInputAfterInitialRender();
             }
-            if (evt.reset) term.reset();
-            if (typeof evt.d === 'string' && evt.d) {
+            // A reconnect can race with the previous request and deliver the
+            // same cursor twice. Keep the stream cursor for recovery, but do
+            // not paint an already-rendered payload a second time.
+            const duplicatePayload = !evt.reset && eventCursor !== null && eventCursor <= renderedCursor;
+            if (evt.reset) {
+              term.reset();
+              if (eventCursor !== null) renderedCursor = eventCursor;
+            }
+            if (!duplicatePayload && typeof evt.d === 'string' && evt.d) {
               const output = evt.d;
+              if (eventCursor !== null) renderedCursor = Math.max(renderedCursor, eventCursor);
               rt.outputRevision += 1;
               rt.lastOutputAt = Date.now();
               rt.outputTail = `${rt.outputTail}${output}`.slice(-8192);

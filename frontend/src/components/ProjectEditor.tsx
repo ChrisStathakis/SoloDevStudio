@@ -41,7 +41,7 @@ type ProjectDraft = {
   pythonEnv: string;
   drive: string;
   notes: string;
-  initializationTool: 'opencode' | 'codex';
+  initializationTool: 'opencode' | 'codex' | 'kilo';
   initializationModel: string;
   pinned: boolean;
 };
@@ -213,7 +213,7 @@ export function ProjectEditor({ project, saving, error, onSave, onCancel }: {
         <h3 className="text-xs font-black uppercase tracking-[0.18em] text-content font-mono">Notes & initialization</h3>
         <label><span className={labelClass}>Notes</span><textarea rows={4} className={fieldClass} value={draft.notes} onChange={event => set('notes', event.target.value)} /></label>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label><span className={labelClass}>Initialization tool</span><select className={fieldClass} value={draft.initializationTool} onChange={event => set('initializationTool', event.target.value as 'opencode' | 'codex')}><option value="opencode">OpenCode</option><option value="codex">Codex</option></select></label>
+          <label><span className={labelClass}>Initialization tool</span><select className={fieldClass} value={draft.initializationTool} onChange={event => set('initializationTool', event.target.value as 'opencode' | 'codex' | 'kilo')}><option value="opencode">OpenCode</option><option value="codex">Codex</option><option value="kilo">Kilo</option></select></label>
           <label><span className={labelClass}>Initialization model</span><input className={fieldClass} value={draft.initializationModel} onChange={event => set('initializationModel', event.target.value)} placeholder="provider/model or model name" /></label>
         </div>
       </section>

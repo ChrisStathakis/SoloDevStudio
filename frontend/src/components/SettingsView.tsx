@@ -86,7 +86,7 @@ export const SettingsView: React.FC = () => {
   const { filters: agentFilters } = useAgentFilters();
   const [modelPresets, setModelPresets] = useState<LauncherModelPreset[]>([]);
   const [modelPresetError, setModelPresetError] = useState<string | null>(null);
-  const [newModelTool, setNewModelTool] = useState<'opencode' | 'codex'>('opencode');
+  const [newModelTool, setNewModelTool] = useState<'opencode' | 'codex' | 'kilo'>('opencode');
   const [newModelId, setNewModelId] = useState('');
   const [newModelLabel, setNewModelLabel] = useState('');
   const [newModelReasoningEffort, setNewModelReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
@@ -97,7 +97,7 @@ export const SettingsView: React.FC = () => {
   const [editingModelReasoningEffort, setEditingModelReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
   const [editingModelMode, setEditingModelMode] = useState<'build' | 'plan'>('build');
   const [presetSearch, setPresetSearch] = useState('');
-  const [presetToolFilter, setPresetToolFilter] = useState<'all' | 'opencode' | 'codex'>('all');
+  const [presetToolFilter, setPresetToolFilter] = useState<'all' | 'opencode' | 'codex' | 'kilo'>('all');
   const [projectFolderDraft, setProjectFolderDraft] = useState('');
   const [projectFolderEffective, setProjectFolderEffective] = useState('');
   const [projectFolderDefault, setProjectFolderDefault] = useState('');
@@ -815,13 +815,13 @@ export const SettingsView: React.FC = () => {
           <div className="p-5 rounded-2xl bg-surface border border-line space-y-3">
             <div>
               <h3 className="text-sm font-black text-content">Launch presets</h3>
-              <p className="text-xs text-content-faint mt-1">Save reusable OpenCode and Codex launch configurations with a model, effort, and mode (build/plan).</p>
+              <p className="text-xs text-content-faint mt-1">Save reusable OpenCode, Codex, and Kilo launch configurations with a model, effort, and mode (build/plan).</p>
             </div>
             <label className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 py-3 text-xs font-bold text-content"><input type="checkbox" checked={companionEnabled} onChange={async e => { const enabled = e.target.checked; setCompanionEnabled(enabled); try { await window.solodevDesktop?.setCompanionEnabled(enabled); } catch { setCompanionEnabled(!enabled); } }} className="h-4 w-4 accent-indigo-600" /> <span><span className="block">Show companion when minimized</span><span className="mt-0.5 block text-[11px] font-normal text-content-faint">A small SoloDev robot appears near the bottom-right while this window is minimized.</span></span></label>
             <label className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-3 py-3 text-xs font-bold text-content"><input type="checkbox" checked={companionPinned} disabled={!companionEnabled} onChange={async e => { const pinned = e.target.checked; setCompanionPinned(pinned); try { await window.solodevDesktop?.setCompanionPinned(pinned); } catch { setCompanionPinned(!pinned); } }} className="h-4 w-4 accent-indigo-600" /> <span><span className="block">Keep companion always on top</span><span className="mt-0.5 block text-[11px] font-normal text-content-faint">The robot stays visible above other windows, including borderless games. Dismissing it with × still hides it until the next minimize.</span></span></label>
             <div className="flex flex-wrap items-stretch gap-2">
-              <select value={newModelTool} onChange={e => { setNewModelTool(e.target.value as 'opencode' | 'codex'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
-                <option value="opencode">OpenCode</option><option value="codex">Codex</option>
+              <select value={newModelTool} onChange={e => { setNewModelTool(e.target.value as 'opencode' | 'codex' | 'kilo'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
+                <option value="opencode">OpenCode</option><option value="codex">Codex</option><option value="kilo">Kilo</option>
               </select>
               <input value={newModelId} onChange={e => setNewModelId(e.target.value)} placeholder={newModelTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
               <select value={newModelReasoningEffort} onChange={e => setNewModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-32 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
@@ -833,7 +833,7 @@ export const SettingsView: React.FC = () => {
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-content-faint" /><input value={presetSearch} onChange={e => setPresetSearch(e.target.value)} placeholder="Search presets…" aria-label="Search launch presets" className="w-full rounded-xl bg-surface border border-line py-2 pl-9 pr-3 text-xs text-content" /></div>
-            <select value={presetToolFilter} onChange={e => setPresetToolFilter(e.target.value as 'all' | 'opencode' | 'codex')} aria-label="Filter launch presets by tool" className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content"><option value="all">All tools</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select>
+            <select value={presetToolFilter} onChange={e => setPresetToolFilter(e.target.value as 'all' | 'opencode' | 'codex' | 'kilo')} aria-label="Filter launch presets by tool" className="rounded-xl bg-surface border border-line px-3 py-2 text-xs font-bold text-content"><option value="all">All tools</option><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="kilo">Kilo</option></select>
           </div>
           <div className="space-y-2">
             {filteredModelPresets.length === 0 ? <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-content-faint">{modelPresets.length === 0 ? 'No launch presets yet.' : 'No presets match your filters.'}</div> : filteredModelPresets.map(preset => (

@@ -279,8 +279,8 @@ def orchestrator_step_detail(request, step_id=None):
         return Response({'error': f'Unknown fields: {sorted(unknown)}.'}, status=status.HTTP_400_BAD_REQUEST)
     if 'tool' in data:
         tool = str(data.get('tool') or '').strip().lower()
-        if tool not in (InitializationTool.OPENCODE, InitializationTool.CODEX):
-            return Response({'tool': "Must be 'opencode' or 'codex'."}, status=status.HTTP_400_BAD_REQUEST)
+        if tool not in (InitializationTool.OPENCODE, InitializationTool.CODEX, InitializationTool.KILO):
+            return Response({'tool': "Must be 'opencode', 'codex', or 'kilo'."}, status=status.HTTP_400_BAD_REQUEST)
         step.tool = tool
     if 'model_id' in data:
         raw_model = data.get('model_id')

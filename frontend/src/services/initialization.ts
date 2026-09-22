@@ -1,4 +1,4 @@
-export type InitializationTool = 'opencode' | 'codex';
+export type InitializationTool = 'opencode' | 'codex' | 'kilo';
 export type InitializationMode = 'build' | 'plan';
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
@@ -20,6 +20,12 @@ export function buildInitializationCommand({
   if (tool === 'codex') {
     const sandbox = mode === 'plan' ? 'read-only' : 'workspace-write';
     return `codex --strict-config --model ${quotedModel} --sandbox ${sandbox} -c model_reasoning_effort="${reasoningEffort}"`;
+  }
+  if (tool === 'kilo') {
+    // Kilo's interactive CLI uses the same named build/plan agents as its
+    // OpenCode-derived TUI, while model selection stays provider/model based.
+    void reasoningEffort;
+    return `kilo --agent ${mode} --model ${quotedModel}`;
   }
   // Interactive `opencode [project]` supports --agent and --model but has no
   // top-level --variant flag (that flag is `opencode run`-only), so effort is
@@ -65,6 +71,12 @@ export const CODEX_READY_PATTERNS: RegExp[] = [
 export const OPENCODE_READY_PATTERNS: RegExp[] = [
   /[─│┌┐└┘]{4,}/,
   /opencode[^\n]*\d+\.\d+/i,
+];
+
+export const KILO_READY_PATTERNS: RegExp[] = [
+  /[─│┌┐└┘]{4,}/,
+  /kilo[^\n]*\d+\.\d+/i,
+  /ask anything/i,
 ];
 
 export type MarkerScan = 'ready' | 'blocked' | null;

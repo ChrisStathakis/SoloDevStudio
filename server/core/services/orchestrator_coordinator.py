@@ -45,6 +45,8 @@ def _cli_command(step):
         model_arg = f' --model {quoted}' if model and model.lower() != 'default' else ''
         return f'codex --strict-config{model_arg} --sandbox {"read-only" if step.mode == "plan" else "workspace-write"} -c model_reasoning_effort="{step.reasoning_effort}"'
     model_arg = f' --model {quoted}' if model and model.lower() != 'default' else ''
+    if step.tool == 'kilo':
+        return f'kilo --agent {step.mode}{model_arg}'
     return f'opencode --agent {step.mode}{model_arg}'
 
 

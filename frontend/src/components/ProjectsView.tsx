@@ -63,7 +63,7 @@ import { ProjectPromptTab } from './ProjectPromptTab';
 import { OrchestratorTab } from './OrchestratorTab';
 import { useToast } from './Toaster';
 import { useConsoleRowLayout, type ConsoleRowId } from '../hooks/useConsoleRowLayout';
-import { buildInitializationCommand, CODEX_PLAN_COMMAND, formatBracketedPaste, CODEX_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
+import { buildInitializationCommand, CODEX_PLAN_COMMAND, formatBracketedPaste, CODEX_READY_PATTERNS, KILO_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
 import { getDaysRemaining } from '../utils/dates';
 
 const recoverSavedProjectPrompt = (content: string) => {
@@ -74,14 +74,17 @@ const recoverSavedProjectPrompt = (content: string) => {
 };
 
 type InitializationSettings = {
-  tool: 'opencode' | 'codex';
+  tool: 'opencode' | 'codex' | 'kilo';
   modelId: string;
   reasoningEffort: 'low' | 'medium' | 'high';
   mode: 'build' | 'plan';
 };
 
+const normalizeInitializationTool = (tool: unknown): InitializationSettings['tool'] =>
+  tool === 'codex' || tool === 'kilo' ? tool : 'opencode';
+
 const mapInitializationSettings = (raw: any): InitializationSettings => ({
-  tool: raw?.tool === 'codex' ? 'codex' : 'opencode',
+  tool: normalizeInitializationTool(raw?.tool),
   modelId: typeof raw?.model_id === 'string' ? raw.model_id : '',
   reasoningEffort: raw?.reasoning_effort === 'low' || raw?.reasoning_effort === 'high'
     ? raw.reasoning_effort
@@ -226,12 +229,12 @@ export const ProjectsView: React.FC = () => {
   const [previewedSkillCount, setPreviewedSkillCount] = useState(0);
   const [promptPreviewError, setPromptPreviewError] = useState<string | null>(null);
   const [copiedPreviewPrompt, setCopiedPreviewPrompt] = useState(false);
-  const [launchTool, setLaunchTool] = useState<'opencode' | 'codex'>('opencode');
+  const [launchTool, setLaunchTool] = useState<'opencode' | 'codex' | 'kilo'>('opencode');
   const [launchModel, setLaunchModel] = useState('');
   const [launchReasoningEffort, setLaunchReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
   const [launchMode, setLaunchMode] = useState<'build' | 'plan'>('build');
   const [isSavingInitializationSettings, setIsSavingInitializationSettings] = useState(false);
-  const [toolAvailability, setToolAvailability] = useState<{ tool: 'opencode' | 'codex'; available: boolean; npm_available: boolean; install_command: string; documentation_url: string; message?: string } | null>(null);
+  const [toolAvailability, setToolAvailability] = useState<{ tool: 'opencode' | 'codex' | 'kilo'; available: boolean; npm_available: boolean; install_command: string; documentation_url: string; message?: string } | null>(null);
   const [isCheckingTool, setIsCheckingTool] = useState(false);
   const [isInstallingTool, setIsInstallingTool] = useState(false);
   const [taskPromptStatus, setTaskPromptStatus] = useState<Record<string, 'selected' | undefined>>({});
@@ -400,7 +403,7 @@ export const ProjectsView: React.FC = () => {
     api.get('/launcher-model-presets/', { params: { page_size: 100, tool: launchTool } })
       .then(res => {
         const rows = Array.isArray(res.data) ? res.data : (res.data?.results || []);
-        setModelPresets(rows.map((raw: any) => ({ id: String(raw.id), tool: raw.tool === 'codex' ? 'codex' : 'opencode', modelId: raw.model_id || '', reasoningEffort: ['low', 'high'].includes(raw.reasoning_effort) ? raw.reasoning_effort : 'medium', mode: raw.mode === 'plan' ? 'plan' : 'build', label: raw.label || '', enabled: raw.enabled !== false, createdAt: raw.created_at, updatedAt: raw.updated_at })));
+        setModelPresets(rows.map((raw: any) => ({ id: String(raw.id), tool: normalizeInitializationTool(raw.tool), modelId: raw.model_id || '', reasoningEffort: ['low', 'high'].includes(raw.reasoning_effort) ? raw.reasoning_effort : 'medium', mode: raw.mode === 'plan' ? 'plan' : 'build', label: raw.label || '', enabled: raw.enabled !== false, createdAt: raw.created_at, updatedAt: raw.updated_at })));
       })
       .catch(() => setModelPresets([]));
   }, [activeProject?.id, launchTool]);
@@ -507,7 +510,7 @@ export const ProjectsView: React.FC = () => {
     setInitializationStatus('Generated skill context was removed from the editable draft. Review it, then save the prompt if it looks correct.');
   };
 
-  const handleStartInitialization = async (tool: 'opencode' | 'codex', model: string, reasoningEffort: 'low' | 'medium' | 'high', mode: 'build' | 'plan') => {
+  const handleStartInitialization = async (tool: 'opencode' | 'codex' | 'kilo', model: string, reasoningEffort: 'low' | 'medium' | 'high', mode: 'build' | 'plan') => {
     if (!activeProject?.initialPrompt) {
       setPromptCopyError('Save a prompt before starting initialization.');
       return;
@@ -554,8 +557,8 @@ export const ProjectsView: React.FC = () => {
         }
         const session = await drawer.create('cmd', { forceNew: true });
         const initialRevision = await drawer.waitForOutputIdle(session.id);
-        const appName = tool === 'codex' ? 'Codex' : 'OpenCode';
-        const readyPatterns = tool === 'codex' ? CODEX_READY_PATTERNS : OPENCODE_READY_PATTERNS;
+        const appName = tool === 'codex' ? 'Codex' : tool === 'kilo' ? 'Kilo' : 'OpenCode';
+        const readyPatterns = tool === 'codex' ? CODEX_READY_PATTERNS : tool === 'kilo' ? KILO_READY_PATTERNS : OPENCODE_READY_PATTERNS;
         setInitializationStatus(`Starting ${appName} — watching for its composer…`);
         await drawer.sendInput(`${buildInitializationCommand({ tool, model: normalizedModel, reasoningEffort, mode })}\r`, session.id);
         // The app may stop at an interactive trust gate first. Never
@@ -599,7 +602,7 @@ export const ProjectsView: React.FC = () => {
       return;
     }
     const ok = await confirm({
-      title: `Install ${toolAvailability.tool === 'codex' ? 'Codex' : 'OpenCode'} in the project terminal?`,
+      title: `Install ${toolAvailability.tool === 'codex' ? 'Codex' : toolAvailability.tool === 'kilo' ? 'Kilo' : 'OpenCode'} in the project terminal?`,
       description: `Runs: ${toolAvailability.install_command}`,
       confirmLabel: 'Install',
     });
@@ -620,7 +623,7 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
-  const checkToolAvailability = async (tool: 'opencode' | 'codex') => {
+  const checkToolAvailability = async (tool: 'opencode' | 'codex' | 'kilo') => {
     if (!activeProject || isCheckingTool) return;
     setIsCheckingTool(true);
     try {

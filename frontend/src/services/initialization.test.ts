@@ -38,6 +38,13 @@ test('builds an OpenCode Plan command with agent and model', () => {
   );
 });
 
+test('builds a Kilo Plan command with its plan agent and model', () => {
+  assert.equal(
+    buildInitializationCommand({ tool: 'kilo', model: 'openai/gpt-5', reasoningEffort: 'medium', mode: 'plan' }),
+    'kilo --agent plan --model "openai/gpt-5"',
+  );
+});
+
 test('formats multiline prompts as a safe bracketed paste draft', () => {
   const esc = String.fromCharCode(27);
   const prompt = 'Plan this\n' + esc + '[31mred' + esc + '[0m\nend' + String.fromCharCode(1);

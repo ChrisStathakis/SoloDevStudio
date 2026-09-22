@@ -57,7 +57,7 @@ export function mapProjectFromApi(raw: any): Project {
     port: raw.port || undefined,
     notes: raw.notes || undefined,
     initialPrompt: raw.launch_prompt?.content || undefined,
-    initializationTool: raw.initialization_tool === 'codex' ? 'codex' : 'opencode',
+    initializationTool: raw.initialization_tool === 'codex' || raw.initialization_tool === 'kilo' ? raw.initialization_tool : 'opencode',
     initializationModel: raw.initialization_model || undefined,
     initializationReasoningEffort: ['low', 'high'].includes(raw.initialization_reasoning_effort) ? raw.initialization_reasoning_effort : 'medium',
     initializationMode: raw.initialization_mode === 'plan' ? 'plan' : 'build',
@@ -93,7 +93,7 @@ export function mapStageWorkspaceFromApi(raw: any, stage: Project['currentStage'
 export function mapLauncherModelPresetFromApi(raw: any) {
   return {
     id: String(raw.id),
-    tool: raw.tool === 'codex' ? 'codex' : 'opencode',
+    tool: raw.tool === 'codex' || raw.tool === 'kilo' ? raw.tool : 'opencode',
     modelId: raw.model_id || '',
     reasoningEffort: ['low', 'high'].includes(raw.reasoning_effort) ? raw.reasoning_effort : 'medium',
     mode: raw.mode === 'plan' ? 'plan' : 'build',

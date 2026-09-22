@@ -33,6 +33,18 @@ from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 from .pdf_exports import idea_pdf, project_pdf
 from .stage_workspaces import STAGE_WORKSPACE_CONFIG, checklist_ids, builtin_checklists, effective_checklists, stage_guidance, initialize_project_workspaces
 from .services.terminal_manager import TerminalError, terminal_manager
+
+
+def find_global_npm_executable(command):
+    """Locate a Windows npm global shim even when the packaged backend lacks it on PATH."""
+    executable = shutil.which(command)
+    if executable:
+        return executable
+    appdata = os.environ.get('APPDATA', '')
+    if not appdata:
+        return None
+    shim = os.path.join(appdata, 'npm', f'{command}.cmd')
+    return shim if os.path.isfile(shim) else None
 from .version import APP_VERSION, BUILD_ID
 
 User = get_user_model()
@@ -492,7 +504,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             reasoning_effort = request.data.get('reasoning_effort', project.initialization_reasoning_effort)
             mode = request.data.get('mode', project.initialization_mode)
             if tool not in InitializationTool.values:
-                return Response({'tool': 'Tool must be opencode or codex.'}, status=400)
+                return Response({'tool': 'Tool must be opencode, codex, or kilo.'}, status=400)
             if mode not in InitializationMode.values:
                 return Response({'mode': 'Mode must be build or plan.'}, status=400)
             if not isinstance(model_id, str):
@@ -524,11 +536,16 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'install_command': 'npm install -g @openai/codex',
                 'documentation_url': 'https://learn.chatgpt.com/docs/codex/cli',
             },
+            'kilo': {
+                'command': 'kilo',
+                'install_command': 'npm install -g @kilocode/cli',
+                'documentation_url': 'https://kilo.ai/docs/',
+            },
         }
         config = configs.get(tool)
         if not config:
-            return Response({'error': 'tool must be opencode or codex.'}, status=400)
-        executable = shutil.which(config['command'])
+            return Response({'error': 'tool must be opencode, codex, or kilo.'}, status=400)
+        executable = find_global_npm_executable(config['command'])
         npm_available = shutil.which('npm') is not None
         return Response({
             'tool': tool,
@@ -1677,13 +1694,13 @@ def _perform_import(user, data):
                 label = preset.get('label') or preset.get('name')
                 if not label and isinstance(model_id, str):
                     label = f'{model_id.strip()} ({reasoning_effort})'
-                if tool not in [InitializationTool.OPENCODE, InitializationTool.CODEX] or not isinstance(model_id, str):
+                if tool not in [InitializationTool.OPENCODE, InitializationTool.CODEX, InitializationTool.KILO] or not isinstance(model_id, str):
                     continue
                 if not is_safe_model_id(model_id):
                     continue
                 if reasoning_effort not in ReasoningEffort.values:
                     continue
-                if mode not in InitializationMode.values or (mode == InitializationMode.PLAN and tool != InitializationTool.CODEX):
+                if mode not in InitializationMode.values:
                     continue
                 label = str(label).strip()
                 if not label:
