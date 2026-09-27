@@ -147,31 +147,147 @@ export async function requireCloudClient(): Promise<{ base: string; client: Axio
 }
 
 export async function testCloudConnection(base: string): Promise<void> {
-  const res = await fetch(`${base.replace(/\/+$/, '')}/health/`);
-  if (!res.ok) throw new Error(`Server responded with ${res.status}.`);
+  const { status } = await cloudRequestJson('GET', '/health/', { base, auth: false });
+  if (status < 200 || status >= 300) throw new Error(`Server responded with ${status}.`);
 }
 
 export type CloudUser = { id: string; username: string; email: string };
 
+/** HTTP error carrying parsed body; shaped so describeCloudError keeps working. */
+export class CloudHttpError extends Error {
+  status: number;
+  data: unknown;
+  response: { status: number; data: unknown };
+  constructor(status: number, data: unknown, message?: string) {
+    super(message || `Cloud request failed with status ${status}.`);
+    this.status = status;
+    this.data = data;
+    this.response = { status, data };
+  }
+}
+
+type DesktopCloudBridge = {
+  cloudRequest?: (request: { method?: string; url: string; headers?: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; bodyText: string }>;
+};
+
+function getDesktopCloudBridge(): DesktopCloudBridge | null {
+  try {
+    const bridge = (globalThis as unknown as { solodevDesktop?: DesktopCloudBridge }).solodevDesktop;
+    return bridge && typeof bridge.cloudRequest === 'function' ? bridge : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonBody(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+interface CloudRequestOptions {
+  base?: string;
+  /** Attach the stored access token. Defaults to true. */
+  auth?: boolean;
+  headers?: Record<string, string>;
+  body?: unknown;
+  /** Allow one refresh-and-retry on 401. Defaults to true. */
+  retryOnAuth?: boolean;
+}
+
+/**
+ * CORS-proof cloud request. Inside Electron it goes through the main process
+ * (no Chromium CORS); in the browser it uses fetch directly. Throws
+ * CloudHttpError on HTTP errors.
+ */
+export async function cloudRequestJson(
+  method: string,
+  path: string,
+  options: CloudRequestOptions = {},
+): Promise<{ status: number; data: unknown }> {
+  const base = options.base || (await resolveCloudBase());
+  if (!base) throw new Error('Set your PythonAnywhere server URL first.');
+  const url = `${base.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (options.auth !== false) {
+    const token = cloudTokenStorage.getAccess();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  const body = options.body === undefined ? undefined : JSON.stringify(options.body);
+
+  let status: number;
+  let data: unknown;
+  const bridge = getDesktopCloudBridge();
+  if (bridge?.cloudRequest) {
+    const res = await bridge.cloudRequest({ method, url, headers, body });
+    status = res.status;
+    data = parseJsonBody(res.bodyText || '');
+  } else {
+    const res = await fetch(url, { method, headers, body });
+    const text = await res.text();
+    status = res.status;
+    data = parseJsonBody(text);
+  }
+
+  if (status === 401 && options.auth !== false && options.retryOnAuth !== false && !String(path).startsWith('/auth/refresh')) {
+    const refresh = cloudTokenStorage.getRefresh();
+    if (refresh) {
+      try {
+        const refreshRes = await cloudRequestJson('POST', '/auth/refresh/', { base, auth: false, body: { refresh }, retryOnAuth: false });
+        const next = (refreshRes.data as { access?: string; refresh?: string }) || {};
+        if (next.access) {
+          cloudTokenStorage.setTokens(next.access, next.refresh || refresh);
+          return cloudRequestJson(method, path, { ...options, base, retryOnAuth: false });
+        }
+      } catch {
+        // fall through to the original 401 below
+      }
+      cloudTokenStorage.clear();
+      try {
+        window.dispatchEvent(new Event('solodev:cloud-logout'));
+      } catch {
+        // non-browser context
+      }
+    }
+  }
+
+  if (status < 200 || status >= 300) {
+    const detail = (data as { detail?: string; error?: string } | null);
+    const message = (detail && (detail.detail || detail.error)) || `Cloud request failed with status ${status}.`;
+    throw new CloudHttpError(status, data, typeof message === 'string' ? message : undefined);
+  }
+  return { status, data };
+}
+
 export async function cloudLogin(username: string, password: string): Promise<CloudUser> {
-  const { client } = await requireCloudClient();
-  const res = await client.post('/auth/login/', { username, password });
-  cloudTokenStorage.setTokens(res.data.access, res.data.refresh);
-  return (await client.get('/auth/me/')).data as CloudUser;
+  const { data } = await cloudRequestJson('POST', '/auth/login/', { auth: false, body: { username, password } });
+  const tokens = (data as { access?: string; refresh?: string }) || {};
+  if (!tokens.access || !tokens.refresh) throw new CloudHttpError(401, data, 'Cloud login did not return tokens.');
+  cloudTokenStorage.setTokens(tokens.access, tokens.refresh);
+  const me = await cloudRequestJson('GET', '/auth/me/');
+  return me.data as CloudUser;
 }
 
 export async function cloudRegister(username: string, email: string, password: string): Promise<CloudUser> {
-  const { client } = await requireCloudClient();
-  const res = await client.post('/auth/register/', { username, email, password });
-  cloudTokenStorage.setTokens(res.data.access, res.data.refresh);
-  return (res.data.user as CloudUser) || ((await client.get('/auth/me/')).data as CloudUser);
+  const { data } = await cloudRequestJson('POST', '/auth/register/', { auth: false, body: { username, email, password } });
+  const payload = (data as { access?: string; refresh?: string; user?: CloudUser }) || {};
+  if (payload.access && payload.refresh) {
+    cloudTokenStorage.setTokens(payload.access, payload.refresh);
+    if (payload.user) return payload.user;
+  }
+  const me = await cloudRequestJson('GET', '/auth/me/');
+  return me.data as CloudUser;
 }
 
 export async function fetchCloudUser(): Promise<CloudUser | null> {
   if (!cloudTokenStorage.getAccess()) return null;
   try {
-    const { client } = await requireCloudClient();
-    return (await client.get('/auth/me/')).data as CloudUser;
+    const { data } = await cloudRequestJson('GET', '/auth/me/');
+    return data as CloudUser;
   } catch {
     return null;
   }

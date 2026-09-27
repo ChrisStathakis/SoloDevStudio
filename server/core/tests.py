@@ -445,6 +445,178 @@ class ProjectDuplicateTests(APITestCase):
             self.assertEqual(copied_readme.read_text(encoding='utf-8'), 'source project')
 
 
+class ProjectGitTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='git-owner',
+            email='git-owner@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+
+    def _make_project(self, **kwargs):
+        defaults = {
+            'title': 'Git project',
+            'target_deadline': date(2026, 12, 1),
+            'start_date': date(2026, 1, 1),
+        }
+        defaults.update(kwargs)
+        return Project.objects.create(owner=self.user, **defaults)
+
+    def test_git_status_reports_missing_repo(self):
+        with TemporaryDirectory() as temp_dir:
+            project = self._make_project(directory_path=temp_dir)
+            response = self.client.get(f'/api/projects/{project.pk}/git-status/')
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.data['is_repo'])
+            self.assertTrue(response.data['has_directory'])
+
+    def test_git_status_reports_branch_and_dirty_files(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=root, check=True)
+            subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=root, check=True)
+            (root / 'README.md').write_text('hello', encoding='utf-8')
+            project = self._make_project(directory_path=str(root))
+            response = self.client.get(f'/api/projects/{project.pk}/git-status/')
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data['is_repo'])
+            self.assertEqual(response.data['dirty_count'], 1)
+            self.assertTrue(response.data['has_changes'])
+
+    def test_git_clone_rejects_non_github_url(self):
+        with TemporaryDirectory() as temp_dir:
+            project = self._make_project(
+                repo_url='https://example.com/owner/repo.git',
+                directory_path=str(Path(temp_dir) / 'dest'),
+            )
+            response = self.client.post(f'/api/projects/{project.pk}/git-clone/')
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('github', response.data['error'].lower())
+
+    def test_git_clone_rejects_non_empty_folder(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / 'existing.txt').write_text('data', encoding='utf-8')
+            project = self._make_project(
+                repo_url='https://github.com/owner/repo.git',
+                directory_path=str(root),
+            )
+            response = self.client.post(f'/api/projects/{project.pk}/git-clone/')
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('not empty', response.data['error'].lower())
+
+    def test_git_clone_rejects_missing_repo_url(self):
+        with TemporaryDirectory() as temp_dir:
+            project = self._make_project(directory_path=str(Path(temp_dir) / 'dest'))
+            response = self.client.post(f'/api/projects/{project.pk}/git-clone/')
+            self.assertEqual(response.status_code, 400)
+
+    def test_git_pull_and_push_require_repo(self):
+        with TemporaryDirectory() as temp_dir:
+            project = self._make_project(directory_path=temp_dir)
+            pull = self.client.post(f'/api/projects/{project.pk}/git-pull/')
+            push = self.client.post(f'/api/projects/{project.pk}/git-push/')
+            self.assertEqual(pull.status_code, 400)
+            self.assertEqual(push.status_code, 400)
+
+    def test_git_pull_reports_git_output(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            project = self._make_project(directory_path=str(root))
+            fake = subprocess.CompletedProcess(
+                args=['git', 'pull', '--ff-only'], returncode=0, stdout='Already up to date.', stderr=''
+            )
+            with patch('core.views._run_git', return_value=fake):
+                response = self.client.post(f'/api/projects/{project.pk}/git-pull/')
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data['ok'])
+
+
+class ProjectContextTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='context-owner',
+            email='context-owner@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+
+    def _make_project(self, **kwargs):
+        defaults = {
+            'title': 'Context project',
+            'target_deadline': date(2026, 12, 1),
+            'start_date': date(2026, 1, 1),
+            'current_stage': 'planning',
+        }
+        defaults.update(kwargs)
+        return Project.objects.create(owner=self.user, **defaults)
+
+    def test_context_brief_defaults_to_current_stage(self):
+        project = self._make_project()
+        response = self.client.get(f'/api/projects/{project.pk}/context-brief/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['stages'], ['planning'])
+        self.assertIn('## Phase: planning', response.data['markdown'])
+
+    def test_context_brief_rejects_unknown_stage(self):
+        project = self._make_project()
+        response = self.client.get(f'/api/projects/{project.pk}/context-brief/', {'stages': 'nope'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_context_brief_sections_filter(self):
+        project = self._make_project()
+        response = self.client.get(
+            f'/api/projects/{project.pk}/context-brief/',
+            {'stages': 'planning', 'sections': 'git'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['sections'], ['git'])
+        self.assertIn('## Git', response.data['markdown'])
+        self.assertNotIn('## Phase', response.data['markdown'])
+
+    def test_write_context_file_creates_solodev_files(self):
+        with TemporaryDirectory() as temp_dir:
+            project = self._make_project(directory_path=temp_dir)
+            response = self.client.post(
+                f'/api/projects/{project.pk}/write-context-file/',
+                {'stages': 'planning', 'sections': 'brief'},
+                format='json',
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(Path(response.data['context_md']).is_file())
+            self.assertTrue(Path(response.data['context_json']).is_file())
+
+    def test_orchestrator_run_with_phases_stores_brief(self):
+        project = self._make_project()
+        response = self.client.post(
+            f'/api/projects/{project.pk}/orchestrator/runs/',
+            {'goal': 'Ship the planning milestone', 'phase_mode': 'goal_and_phases',
+             'stages': 'planning', 'sections': 'brief,tasks'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        run = OrchestratorRun.objects.get(pk=response.data['id'])
+        self.assertEqual(run.last_event.get('phase_mode'), 'goal_and_phases')
+        self.assertEqual(run.last_event.get('phases'), ['planning'])
+        self.assertIn('Phase: planning', run.last_event.get('phase_brief') or '')
+        step = run.steps.first()
+        prompt_response = self.client.get(f'/api/orchestrator/steps/{step.pk}/prompt/')
+        self.assertEqual(prompt_response.status_code, 200)
+        self.assertIn('Selected phase context', prompt_response.data['content'])
+
+    def test_orchestrator_run_rejects_bad_phase_mode(self):
+        project = self._make_project()
+        response = self.client.post(
+            f'/api/projects/{project.pk}/orchestrator/runs/',
+            {'goal': 'Ship the planning milestone', 'phase_mode': 'everything'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+
 class ProjectReorderTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='reorder-owner', email='reorder@example.com', password='test-password-123')

@@ -2,13 +2,16 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Play, Check, X, RotateCcw, Terminal as TerminalIcon, ShieldAlert, Trash2 } from 'lucide-react';
 import { api, unwrapPaginated } from '../services/api';
 import { buildInitializationCommand, formatBracketedPaste, CODEX_READY_PATTERNS, KILO_READY_PATTERNS, OPENCODE_READY_PATTERNS, CODEX_TRUST_PATTERNS } from '../services/initialization';
-import type { OrchestratorRun, OrchestratorStep } from '../types';
+import type { OrchestratorRun, OrchestratorStep, ProjectStage } from '../types';
 import type { TerminalDrawerHandle } from './TerminalDrawer';
 import { useToast } from './Toaster';
 import { FRONTEND_BUILD_ID } from '../services/buildIdentity';
+import { ProjectContextPicker } from './ProjectContextPicker';
+import { CONTEXT_SECTIONS, type ContextSection } from '../services/projectContext';
 
 interface Props {
   projectId: string;
+  currentStage: ProjectStage;
   terminalRef: React.RefObject<TerminalDrawerHandle | null>;
 }
 
@@ -23,9 +26,12 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: 'Cancelled',
 };
 
-export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => {
+export const OrchestratorTab: React.FC<Props> = ({ projectId, currentStage, terminalRef }) => {
   const [runs, setRuns] = useState<OrchestratorRun[]>([]);
   const [goal, setGoal] = useState('');
+  const [phaseMode, setPhaseMode] = useState<'goal' | 'goal_and_phases'>('goal');
+  const [phaseStages, setPhaseStages] = useState<string[]>([currentStage]);
+  const [phaseSections, setPhaseSections] = useState<ContextSection[]>([...CONTEXT_SECTIONS]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyStep, setBusyStep] = useState<string | null>(null);
@@ -140,7 +146,13 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
     setLoading(true);
     setError(null);
     try {
-      const res = await api.post(`/projects/${projectId}/orchestrator/runs/`, { goal: goal.trim(), max_parallel: 2 });
+      const payload: Record<string, unknown> = { goal: goal.trim(), max_parallel: 2 };
+      if (phaseMode === 'goal_and_phases') {
+        payload.phase_mode = 'goal_and_phases';
+        payload.stages = phaseStages.join(',');
+        payload.sections = phaseSections.join(',');
+      }
+      const res = await api.post(`/projects/${projectId}/orchestrator/runs/`, payload);
       setGoal('');
       setRuns(prev => [res.data, ...prev]);
     } catch (e: any) {
@@ -281,6 +293,40 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
           </button>
         </div>
         {error && <div className="text-xs text-rose-500 font-mono">{error}</div>}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-[11px] font-black uppercase tracking-wider text-content-faint font-mono">Run mode</span>
+          <button
+            type="button"
+            onClick={() => setPhaseMode('goal')}
+            aria-pressed={phaseMode === 'goal'}
+            className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold ${phaseMode === 'goal'
+              ? 'bg-indigo-600 border-indigo-600 text-white'
+              : 'bg-surface-2 border-line text-content-faint hover:text-content'}`}
+          >
+            Goal only
+          </button>
+          <button
+            type="button"
+            onClick={() => setPhaseMode('goal_and_phases')}
+            aria-pressed={phaseMode === 'goal_and_phases'}
+            title="Inject the selected phases into planning and every step prompt"
+            className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold ${phaseMode === 'goal_and_phases'
+              ? 'bg-indigo-600 border-indigo-600 text-white'
+              : 'bg-surface-2 border-line text-content-faint hover:text-content'}`}
+          >
+            Goal + phases
+          </button>
+        </div>
+        {phaseMode === 'goal_and_phases' && (
+          <div className="rounded-2xl border border-line bg-surface-2 p-3">
+            <ProjectContextPicker
+              currentStage={currentStage}
+              value={{ stages: phaseStages, sections: phaseSections }}
+              onChange={next => { setPhaseStages(next.stages); setPhaseSections(next.sections); }}
+              compact
+            />
+          </div>
+        )}
       </div>
 
       {runs.map(run => {
@@ -294,6 +340,11 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, terminalRef }) => 
             <div>
               <div className="text-sm font-bold">{run.goal}</div>
               <div className="text-[11px] font-mono text-content-faint">{coordinatorStarting ? 'Starting coordinator' : STATUS_LABEL[run.status] || run.status} · {run.steps.length} steps</div>
+              {(run.last_event as Record<string, unknown> | undefined)?.phase_mode === 'goal_and_phases' && (
+                <div className="mt-1 inline-flex items-center px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/25 text-[11px] font-mono text-indigo-700 dark:text-indigo-300">
+                  + {Array.isArray((run.last_event as Record<string, unknown>).phases) ? ((run.last_event as Record<string, unknown>).phases as string[]).length : 0} phases
+                </div>
+              )}
               {run.failure_reason && <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 font-mono">{run.failure_reason}</div>}
             </div>
             <div className="flex gap-2">

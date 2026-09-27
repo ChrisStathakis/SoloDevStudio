@@ -322,6 +322,52 @@ ipcMain.handle('desktop:set-cloud-url', (_event, value) => {
   writeSettings({ cloudApiUrl });
   return { cloudApiUrl };
 });
+// Cloud sync requests proxied through the main process. Renderer fetches are
+// subject to Chromium CORS, so any origin missing from the server's
+// CORS_ALLOWED_ORIGINS breaks sync. Main-process `net` has no CORS, and the
+// URL is pinned to the saved cloud server so the channel can't be abused as
+// an open proxy.
+ipcMain.handle('desktop:cloud-request', async (_event, req) => {
+  const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
+  const method = String(req && req.method ? req.method : 'GET').toUpperCase();
+  if (!allowedMethods.has(method)) throw new Error('Unsupported cloud request method.');
+  const savedBase = readSettings().cloudApiUrl;
+  if (!savedBase) throw new Error('Set your cloud server URL first.');
+  let url;
+  try {
+    url = new URL(String(req && req.url ? req.url : ''));
+  } catch {
+    throw new Error('Invalid cloud request URL.');
+  }
+  if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+    throw new Error('Cloud URL must use https:// (http is only allowed for localhost).');
+  }
+  if (!url.toString().startsWith(savedBase)) throw new Error('Cloud URL does not match the saved server URL.');
+  const headers = {};
+  const rawHeaders = req && req.headers;
+  if (rawHeaders && typeof rawHeaders === 'object') {
+    for (const [name, value] of Object.entries(rawHeaders)) {
+      if (typeof value === 'string' && value.length <= 8192 && /^[A-Za-z0-9-]+$/.test(name)) headers[name] = value;
+    }
+  }
+  let body;
+  if (req && req.body != null) {
+    body = String(req.body);
+    if (body.length > 100 * 1024 * 1024) throw new Error('Cloud request body too large.');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await net.fetch(url.toString(), { method, headers, body, signal: controller.signal });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, bodyText: text.slice(0, 100 * 1024 * 1024) };
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('Cloud request timed out.');
+    throw new Error(e instanceof Error ? e.message : 'Cloud request failed.');
+  } finally {
+    clearTimeout(timer);
+  }
+});
 ipcMain.handle('desktop:set-companion-enabled', (_event, value) => { const companionEnabled = Boolean(value); writeSettings({ companionEnabled }); if (!companionEnabled) hideCompanion(); else if (readSettings().companionPinned === true) { companionDismissed = false; showCompanion(); } return { companionEnabled }; });
 ipcMain.handle('desktop:set-companion-pinned', (_event, value) => {
   const companionPinned = Boolean(value);

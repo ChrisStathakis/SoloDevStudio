@@ -14,6 +14,18 @@ Backend settings use `python-decouple` and read these environment variables:
 
 The frontend reads `VITE_API_URL` for the Django API base. Research calls are served by Django (`/api/search/market/`, `/api/search/tech-stack/`) using `ddgs` — no key needed. Do not commit `.env` files or expose keys in logs.
 
+## Cloud host (PythonAnywhere) env
+
+The desktop app proxies cloud-sync HTTP through its main process, so sync
+works regardless of renderer CORS. Browser copies still call the cloud API
+directly and need their origin allow-listed. On the cloud host, create
+`server/.env` from `server/.env.example` with the production block:
+
+- `DEBUG=False`, a private `SECRET_KEY`, and `ALLOWED_HOSTS` with your domain.
+- `CORS_ALLOWED_ORIGINS` including `app://solodev` (desktop) plus every
+  browser origin you sync from (e.g. `http://localhost:3000`).
+- Reload the web app after changing env, then re-test Save + login.
+
 ## Database and migrations
 
 From `server/`:

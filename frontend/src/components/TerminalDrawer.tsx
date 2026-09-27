@@ -201,6 +201,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     const connStateRef = useRef<'idle' | 'connecting' | 'connected' | 'detached' | 'live' | 'error'>('idle');
     const connectionGenerationRef = useRef(0);
     const resizeGenerationRef = useRef(0);
+    const repaintPingRef = useRef(false);
     const streamCursorsRef = useRef<Map<string, number>>(new Map());
 
     const sessionsRef = useRef<TerminalSessionDto[]>([]);
@@ -613,6 +614,40 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       if (resizeError) throw resizeError;
     }, []);
 
+    /**
+     * After a replay-window reset the TUI still believes its previous frame is
+     * on screen (diff-based rendering), so cells on the freshly cleared display
+     * never get repainted. Toggling the PTY size by one column forces a full
+     * SIGWINCH redraw from the TUI onto the reset screen.
+     */
+    const requestTuiRepaint = useCallback(async (sessionId: string, cols: number, rows: number) => {
+      if (repaintPingRef.current) return;
+      repaintPingRef.current = true;
+      const rt = runtimeRef.current;
+      const target = Math.max(3, cols);
+      try {
+        if (rt.resizeInFlight) {
+          try {
+            await rt.resizeInFlight;
+          } catch {
+            /* the in-flight resize already reported its own failure */
+          }
+        }
+        await api.post(`/terminals/${sessionId}/resize/`, { cols: target - 1, rows });
+        await sleep(150);
+        await api.post(`/terminals/${sessionId}/resize/`, { cols: target, rows });
+        if (sessionId === activeIdRef.current) {
+          rt.lastCols = target;
+          rt.lastRows = rows;
+          rt.lastResizeSessionId = sessionId;
+        }
+      } catch {
+        /* repaint ping is best effort */
+      } finally {
+        repaintPingRef.current = false;
+      }
+    }, []);
+
     const cancelInputQueue = useCallback((sessionId: string) => {
       const queue = inputQueuesRef.current.get(sessionId);
       if (!queue) return;
@@ -847,6 +882,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       streamCursorsRef.current.delete(activeId);
       let streamCursor = 0;
       let renderedCursor = streamCursor;
+      let pendingRepaint = false;
       let attemptHandshakeReceived = false;
 
       const pumpStreamOnce = async (): Promise<void> => {
@@ -917,6 +953,11 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             if (evt.reset) {
               term.reset();
               if (eventCursor !== null) renderedCursor = eventCursor;
+              // The replay window dropped history: the TUI still thinks its old
+              // frame is on screen, so after clearing we must force it to
+              // repaint everything (see requestTuiRepaint).
+              pendingRepaint = true;
+              console.warn('[TerminalDrawer] replay window truncated — forcing full TUI repaint');
             }
             if (!duplicatePayload && typeof evt.d === 'string' && evt.d) {
               const output = evt.d;
@@ -929,6 +970,10 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                 term.write(output, resolve);
               });
               if (connStateRef.current !== 'detached') setConnState('live');
+            }
+            if (pendingRepaint) {
+              pendingRepaint = false;
+              if (!stopped()) void requestTuiRepaint(activeId, term.cols, term.rows);
             }
             if (evt.e === true) {
               markExitedAndPublish(activeId, (evt.c as number | null) ?? null);
@@ -1020,7 +1065,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         teardownRuntime();
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, activeId, reconnectNonce]);
+    }, [open, activeId, reconnectNonce, requestTuiRepaint]);
 
     useEffect(
       () => () => {

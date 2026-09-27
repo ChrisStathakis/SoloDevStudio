@@ -27,11 +27,14 @@ export function buildInitializationCommand({
     void reasoningEffort;
     return `kilo --agent ${mode} --model ${quotedModel}`;
   }
-  // Interactive `opencode [project]` supports --agent and --model but has no
-  // top-level --variant flag (that flag is `opencode run`-only), so effort is
-  // stored on the preset/project but not passed on the interactive command.
+  // V2 interactive `opencode [project]` accepts no top-level --agent/--model
+  // flags (those live on `opencode run`/`mini` only), so launch the plain TUI
+  // and let the user pick agent/model inside via /agents and /models. Model,
+  // effort and mode stay on the preset/project for messaging, not the command.
+  void model;
   void reasoningEffort;
-  return `opencode --agent ${mode} --model ${quotedModel}`;
+  void mode;
+  return `opencode`;
 }
 
 /** Codex's Plan mode is an interactive slash command, not prompt prose. */

@@ -30,7 +30,7 @@ from core.pathutils import resolve_venv
 
 DEFAULT_COLS = 110
 DEFAULT_ROWS = 28
-MAX_BUFFER_CHARS = 256 * 1024          # ~256 KB of replay history per session
+MAX_BUFFER_CHARS = 1024 * 1024         # ~1 MB of replay history per session
 MAX_ALIVE_SESSIONS_PER_USER = 6
 EXITED_SESSION_TTL = timedelta(minutes=30)
 STREAM_MAX_SECONDS = 540               # long-poll ceiling; client reconnects after
@@ -325,7 +325,7 @@ class TerminalManager:
 
     # ---------- public API ----------
 
-    def create_cmd(self, *, owner_id, project_id, project_title, directory, fallback_directory=None, python_env=None, cols=DEFAULT_COLS, rows=DEFAULT_ROWS):
+    def create_cmd(self, *, owner_id, project_id, project_title, directory, fallback_directory=None, python_env=None, cols=DEFAULT_COLS, rows=DEFAULT_ROWS, project_env=None):
         self._assert_supported()
         cwd = self._resolve_cmd_cwd(directory, fallback_directory)
         # /d disables registry AutoRun commands and /q keeps the prompt clean.
@@ -349,7 +349,7 @@ class TerminalManager:
             title = 'CMD (venv)'
         if existing_cmds:
             title = f'{title} {existing_cmds + 1}'
-        env = self._build_venv_env(python_env)
+        env = self._build_venv_env(python_env, project_env)
         return self._spawn(
             owner_id=owner_id,
             project_id=project_id,
@@ -382,7 +382,7 @@ class TerminalManager:
             400,
         )
 
-    def create_script(self, *, owner_id, project_id, project_title, script_path, run_args, python_env=None, cols=DEFAULT_COLS, rows=DEFAULT_ROWS):
+    def create_script(self, *, owner_id, project_id, project_title, script_path, run_args, python_env=None, cols=DEFAULT_COLS, rows=DEFAULT_ROWS, project_env=None):
         self._assert_supported()
         if not script_path:
             raise TerminalError('No script path set for this project.')
@@ -396,7 +396,7 @@ class TerminalManager:
         args = ['cmd.exe', '/d', '/q', '/k', 'call', script_path, *run_args]
         pretty_args = f" {' '.join(run_args)}" if run_args else ''
         title = f"{os.path.basename(script_path)}{pretty_args}"
-        env = self._build_venv_env(python_env)
+        env = self._build_venv_env(python_env, project_env)
         return self._spawn(
             owner_id=owner_id,
             project_id=project_id,
@@ -411,10 +411,12 @@ class TerminalManager:
             detached_launcher=_script_uses_detached_start(script_path),
         )
 
-    def _build_venv_env(self, python_env):
+    def _build_venv_env(self, python_env, project_env=None):
         """Return a modified environment with the venv Scripts dir first on PATH.
 
         Always isolate project tools from the Django/frozen-backend runtime.
+        `project_env` carries small SOLODEV_* markers (project/stage/dir) so
+        shells and agents can discover context without parsing output.
         """
         _activate_bat, scripts_dir = resolve_venv(python_env)
         env = dict(os.environ)
@@ -440,11 +442,15 @@ class TerminalManager:
             if not any(os.path.normcase(entry) == os.path.normcase(npm_bin) for entry in path_entries):
                 env['PATH'] = npm_bin + os.pathsep + env.get('PATH', '')
         if not scripts_dir:
+            if project_env:
+                env.update({str(k): str(v) for k, v in project_env.items() if k and v is not None})
             return env
         env.pop('PYTHONHOME', None)
         env['VIRTUAL_ENV'] = os.path.dirname(scripts_dir)
         existing = env.get('PATH', '')
         env['PATH'] = scripts_dir + ';' + existing if existing else scripts_dir
+        if project_env:
+            env.update({str(k): str(v) for k, v in project_env.items() if k and v is not None})
         return env
 
     def _assert_supported(self):

@@ -3,6 +3,7 @@ import ctypes
 import re
 import json
 import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from datetime import timedelta, date, datetime
@@ -333,6 +334,85 @@ def _remap_project_path(raw_path, source, destination):
         return ''
 
 
+GITHUB_HTTPS_RE = re.compile(r'^https://github\.com/[^/\s]+/[^/\s]+?(\.git)?/?$', re.IGNORECASE)
+GITHUB_SSH_RE = re.compile(r'^git@github\.com:[^/\s]+/[^/\s]+?(\.git)?$', re.IGNORECASE)
+
+
+def _is_github_url(url):
+    value = (url or '').strip()
+    return bool(GITHUB_HTTPS_RE.match(value) or GITHUB_SSH_RE.match(value))
+
+
+def _project_git_dir(project):
+    return normalize_path(project.directory_path) or normalize_path(project.cmd_directory)
+
+
+def _project_terminal_env(project):
+    """Small SOLODEV_* markers injected into every spawned project terminal."""
+    directory = _project_git_dir(project)
+    return {
+        'SOLODEV_PROJECT': (project.title or '')[:120],
+        'SOLODEV_PROJECT_ID': str(project.id),
+        'SOLODEV_STAGE': project.current_stage or '',
+        'SOLODEV_PROJECT_DIR': directory or '',
+    }
+
+
+def _tail_output(text, limit=4000):
+    text = (text or '').strip()
+    if len(text) > limit:
+        return '…' + text[-limit:]
+    return text
+
+
+def _run_git(cwd, *args, timeout=60):
+    try:
+        return subprocess.run(
+            ['git', *args],
+            cwd=cwd or None,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        completed = subprocess.CompletedProcess(
+            args=['git', *args], returncode=124, stdout='', stderr='Git timed out.'
+        )
+        return completed
+
+
+def _git_repo_state(directory):
+    state = {
+        'is_repo': False,
+        'directory': directory,
+        'branch': '',
+        'remote': '',
+        'dirty_count': 0,
+        'has_changes': False,
+    }
+    if not directory or not os.path.isdir(directory):
+        return state
+    toplevel = _run_git(directory, 'rev-parse', '--show-toplevel', timeout=15)
+    if toplevel is None or toplevel.returncode != 0:
+        return state
+    state['is_repo'] = True
+    state['directory'] = (toplevel.stdout or '').strip() or directory
+    branch = _run_git(state['directory'], 'rev-parse', '--abbrev-ref', 'HEAD', timeout=15)
+    if branch is not None and branch.returncode == 0:
+        state['branch'] = (branch.stdout or '').strip()
+    remote = _run_git(state['directory'], 'remote', 'get-url', 'origin', timeout=15)
+    if remote is not None and remote.returncode == 0:
+        state['remote'] = (remote.stdout or '').strip()
+    porcelain = _run_git(state['directory'], 'status', '--porcelain=v1', timeout=15)
+    if porcelain is not None and porcelain.returncode == 0:
+        lines = [line for line in (porcelain.stdout or '').splitlines() if line.strip()]
+        state['dirty_count'] = len(lines)
+        state['has_changes'] = bool(lines)
+    return state
+
+
 def compose_project_initialization_prompt(project, user):
     """Compose the saved project prompt with the project's currently active Skills."""
     prompt = ProjectLaunchPrompt.objects.filter(project=project).first()
@@ -650,6 +730,155 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Failed to open directory: {e}"}, status=500)
         return Response({"ok": True, "path": raw})
 
+    @action(detail=True, methods=['get'], url_path='git-status')
+    def git_status(self, request, pk=None):
+        project = self.get_object()
+        directory = _project_git_dir(project)
+        state = _git_repo_state(directory)
+        return Response({
+            **state,
+            'has_directory': bool(directory and os.path.isdir(directory)),
+            'repo_url': project.repo_url or '',
+        })
+
+    @action(detail=True, methods=['post'], url_path='git-clone')
+    def git_clone(self, request, pk=None):
+        project = self.get_object()
+        repo_url = (project.repo_url or '').strip()
+        if not repo_url:
+            return Response({'error': 'Set a GitHub repository URL for this project first.'}, status=400)
+        if not _is_github_url(repo_url):
+            return Response({'error': 'Repository URL must be a github.com HTTPS or SSH address.'}, status=400)
+        raw_dir = _project_git_dir(project)
+        destination = None
+        clone_cwd = None
+        clone_target = None
+        try:
+            if not raw_dir:
+                destination = Path(create_potential_project_folder(project.title, request.user)).resolve()
+                clone_cwd = str(destination)
+                clone_target = '.'
+            else:
+                candidate = Path(os.path.expanduser(raw_dir))
+                if candidate.is_file():
+                    return Response({'error': f'Project path is a file, not a folder: {raw_dir}'}, status=400)
+                if candidate.is_dir():
+                    resolved = candidate.resolve()
+                    if (resolved / '.git').is_dir():
+                        return Response({'error': 'This folder is already a git repository.'}, status=400)
+                    try:
+                        entries = list(resolved.iterdir())
+                    except OSError as exc:
+                        return Response({'error': f'Unable to read project folder: {exc}'}, status=400)
+                    if entries:
+                        return Response({'error': 'Project folder is not empty. Clone needs an empty folder.'}, status=400)
+                    destination = resolved
+                    clone_cwd = str(destination)
+                    clone_target = '.'
+                else:
+                    try:
+                        candidate.parent.mkdir(parents=True, exist_ok=True)
+                    except OSError as exc:
+                        return Response({'error': f'Unable to create project folder: {exc}'}, status=400)
+                    destination = candidate.resolve() if candidate.exists() else candidate.absolute()
+                    clone_cwd = str(candidate.parent.resolve())
+                    clone_target = str(destination)
+            result = _run_git(clone_cwd, 'clone', repo_url, clone_target, timeout=180)
+            if result is None:
+                return Response({'error': 'Git is not installed or not on the server PATH.'}, status=500)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or '').strip()
+                if 'Authentication failed' in detail or 'could not read Username' in detail or '403' in detail:
+                    detail += ' Check Windows Credential Manager or run `gh auth login` in a terminal, then try again.'
+                return Response({'error': f'Clone failed: {_tail_output(detail) or "unknown git error"}'}, status=400)
+            dest_str = str(destination)
+            project.directory_path = dest_str
+            if not (project.cmd_directory or '').strip():
+                project.cmd_directory = dest_str
+            project.save(update_fields=['directory_path', 'cmd_directory', 'updated_at'])
+            state = _git_repo_state(dest_str)
+            return Response({'ok': True, 'path': dest_str, 'output': _tail_output(result.stderr or result.stdout), **state})
+        except OSError as exc:
+            return Response({'error': f'Unable to prepare project folder: {exc}'}, status=500)
+
+    @action(detail=True, methods=['post'], url_path='git-pull')
+    def git_pull(self, request, pk=None):
+        project = self.get_object()
+        directory = _project_git_dir(project)
+        state = _git_repo_state(directory)
+        if not state['is_repo']:
+            return Response({'error': 'Project folder is not a git repository. Clone it first.'}, status=400)
+        result = _run_git(state['directory'], 'pull', '--ff-only', timeout=120)
+        if result is None:
+            return Response({'error': 'Git is not installed or not on the server PATH.'}, status=500)
+        if result.returncode != 0:
+            return Response({'error': f'Pull failed: {_tail_output(result.stderr or result.stdout) or "unknown git error"}'}, status=400)
+        fresh = _git_repo_state(state['directory'])
+        return Response({'ok': True, 'output': _tail_output(result.stdout or result.stderr), **fresh})
+
+    @action(detail=True, methods=['post'], url_path='git-push')
+    def git_push(self, request, pk=None):
+        project = self.get_object()
+        directory = _project_git_dir(project)
+        state = _git_repo_state(directory)
+        if not state['is_repo']:
+            return Response({'error': 'Project folder is not a git repository. Clone it first.'}, status=400)
+        result = _run_git(state['directory'], 'push', timeout=120)
+        if result is None:
+            return Response({'error': 'Git is not installed or not on the server PATH.'}, status=500)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or '').strip()
+            if 'Authentication failed' in detail or 'could not read Username' in detail or '403' in detail:
+                detail += ' Check Windows Credential Manager or run `gh auth login` in a terminal, then try again.'
+            return Response({'error': f'Push failed: {_tail_output(detail) or "unknown git error"}'}, status=400)
+        fresh = _git_repo_state(state['directory'])
+        return Response({'ok': True, 'output': _tail_output(result.stdout or result.stderr or 'Pushed.'), **fresh})
+
+    @action(detail=True, methods=['get'], url_path='context-brief')
+    def context_brief(self, request, pk=None):
+        from .services.project_context import (
+            parse_max_chars, parse_sections, parse_stages, build_project_context,
+        )
+        project = self.get_object()
+        valid_stages = [value for value, _label in ProjectStage.choices]
+        try:
+            stages = parse_stages(request.query_params.get('stages'), project.current_stage, valid_stages)
+            sections = parse_sections(request.query_params.get('sections'))
+            max_chars = parse_max_chars(request.query_params.get('max_chars'))
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=400)
+        payload = build_project_context(project, request.user, stages, sections, max_chars)
+        return Response({'project': str(project.id), 'current_stage': project.current_stage, **payload})
+
+    @action(detail=True, methods=['post'], url_path='write-context-file')
+    def write_context_file(self, request, pk=None):
+        from .services.project_context import (
+            parse_max_chars, parse_sections, parse_stages, build_project_context, write_context_files,
+        )
+        project = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        valid_stages = [value for value, _label in ProjectStage.choices]
+        try:
+            stages = parse_stages(data.get('stages'), project.current_stage, valid_stages)
+            sections = parse_sections(data.get('sections'))
+            max_chars = parse_max_chars(data.get('max_chars'))
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=400)
+        directory = _project_git_dir(project)
+        if not directory:
+            return Response({'error': 'Set a project folder first.'}, status=400)
+        payload = build_project_context(project, request.user, stages, sections, max_chars)
+        try:
+            paths = write_context_files(directory, payload['markdown'], {
+                'project': str(project.id),
+                'title': project.title,
+                'current_stage': project.current_stage,
+                **payload,
+            })
+        except OSError as exc:
+            return Response({'error': f'Unable to write context file: {exc}'}, status=500)
+        return Response({'ok': True, **paths, **payload})
+
     @action(detail=True, methods=['post'], url_path='duplicate')
     def duplicate(self, request, pk=None):
         source_project = self.get_object()
@@ -774,6 +1003,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 script_path=raw,
                 run_args=run_args,
                 python_env=normalize_path(project.python_env),
+                project_env=_project_terminal_env(project),
             )
         except TerminalError as e:
             return Response({'error': e.message}, status=e.http_status)
@@ -793,6 +1023,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 directory=raw,
                 fallback_directory=fallback,
                 python_env=normalize_path(project.python_env),
+                project_env=_project_terminal_env(project),
             )
         except TerminalError as e:
             return Response({'error': e.message}, status=e.http_status)

@@ -1,8 +1,8 @@
 import { api, tokenStorage } from './api';
 import {
+  cloudRequestJson,
   cloudTokenStorage,
   getCachedCloudBase,
-  requireCloudClient,
   resolveCloudBase,
 } from './cloudApi';
 
@@ -146,9 +146,8 @@ export function describeCloudError(e: unknown): string {
 }
 
 export async function fetchCloudMeta(): Promise<CloudBackupMeta> {
-  const { client } = await requireCloudClient();
-  const res = await client.get('/cloud-backup/latest/', { params: { meta: 1 } });
-  return res.data as CloudBackupMeta;
+  const { data } = await cloudRequestJson('GET', '/cloud-backup/latest/?meta=1');
+  return data as CloudBackupMeta;
 }
 
 /**
@@ -158,14 +157,14 @@ export async function fetchCloudMeta(): Promise<CloudBackupMeta> {
  */
 export async function pushCloudBackup(localUsername: string | null, cloudUsername: string | null): Promise<CloudBackupMeta> {
   assertStrictMatch(localUsername, cloudUsername);
-  const { client } = await requireCloudClient();
   const exp = await api.get('/export/');
   const payload = { ...exp.data, ownerUsername: localUsername };
   try {
-    const res = await client.post('/cloud-backup/push/', payload, {
+    const { data } = await cloudRequestJson('POST', '/cloud-backup/push/', {
+      body: payload,
       headers: localUsername ? { 'X-Local-Username': localUsername } : {},
     });
-    const meta = res.data as CloudBackupMeta;
+    const meta = data as CloudBackupMeta;
     if (meta?.exportedAt) {
       markSynced(meta.exportedAt);
       setLastSeenRemoteAt(meta.exportedAt);
@@ -187,10 +186,9 @@ export async function pushCloudBackup(localUsername: string | null, cloudUsernam
  */
 export async function restoreCloudBackup(localUsername: string | null, cloudUsername: string | null): Promise<RestoreResult> {
   assertStrictMatch(localUsername, cloudUsername);
-  const { client } = await requireCloudClient();
   let meta: CloudBackupMeta;
   try {
-    meta = (await client.get('/cloud-backup/latest/')).data as CloudBackupMeta & { payload?: Record<string, unknown> };
+    meta = (await cloudRequestJson('GET', '/cloud-backup/latest/')).data as CloudBackupMeta & { payload?: Record<string, unknown> };
   } catch (e) {
     throw new CloudSyncError('FETCH_FAILED', describeCloudError(e));
   }

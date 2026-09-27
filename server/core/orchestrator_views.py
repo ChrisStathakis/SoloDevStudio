@@ -16,7 +16,10 @@ from .services.orchestrator import propose_plan, classify_risk
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 from .services.terminal_manager import terminal_manager, TerminalError
 from .pathutils import normalize_path
-from .views import compose_project_initialization_prompt, compose_task_prompt
+from .views import compose_project_initialization_prompt, compose_task_prompt, _project_terminal_env
+from .services.project_context import (
+    parse_max_chars, parse_sections, parse_stages, build_project_context,
+)
 from .version import BUILD_ID
 
 
@@ -43,7 +46,7 @@ def _compose_step_prompt(step, user):
                 extra = f"\n\n## Orchestrator step\n- Step: {step.title}\n- Tool: {step.tool} / {step.model_id or 'default'}\n"
                 if step.verification_command:
                     extra += f"- Verify with: `{step.verification_command}`\n"
-                return content + extra
+                return _with_phase_context(content + extra, step)
         except Task.DoesNotExist:
             pass
     project = step.run.project
@@ -58,7 +61,19 @@ def _compose_step_prompt(step, user):
     if step.verification_command:
         lines.append(f"- Verify with: `{step.verification_command}`")
     lines.append('- Implement only this step; report tests/checks run.')
-    return '\n'.join(lines).strip()
+    return _with_phase_context('\n'.join(lines).strip(), step)
+
+
+def _with_phase_context(content, step):
+    """Append the run's selected phase brief so workers see stage context."""
+    try:
+        last_event = step.run.last_event or {}
+    except AttributeError:
+        return content
+    brief = (last_event.get('phase_brief') or '').strip() if isinstance(last_event, dict) else ''
+    if not brief:
+        return content
+    return f"{content}\n\n## Selected phase context\n{brief[:8000]}".strip()
 
 
 @api_view(['GET', 'POST'])
@@ -83,17 +98,46 @@ def orchestrator_runs(request, pk=None):
     except (TypeError, ValueError):
         max_parallel = 2
     max_parallel = max(1, min(max_parallel, 3))
+    data = request.data if isinstance(request.data, dict) else {}
+    phase_mode = str(data.get('phase_mode') or 'goal').strip().lower()
+    if phase_mode not in ('goal', 'goal_and_phases'):
+        return Response({'phase_mode': "Must be 'goal' or 'goal_and_phases'."}, status=status.HTTP_400_BAD_REQUEST)
+    from .models import ProjectStage
+    valid_stages = [value for value, _label in ProjectStage.choices]
+    phase_stages: list[str] = []
+    phase_sections: list[str] = []
+    phase_brief = ''
+    if phase_mode == 'goal_and_phases':
+        try:
+            phase_stages = parse_stages(data.get('stages'), project.current_stage, valid_stages)
+            phase_sections = parse_sections(data.get('sections'))
+            phase_max_chars = parse_max_chars(data.get('max_chars'))
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        phase_payload = build_project_context(
+            project, request.user, phase_stages, phase_sections, phase_max_chars
+        )
+        phase_brief = phase_payload['markdown']
     open_tasks = list(Task.objects.filter(project=project, completed=False).values('id', 'title', 'category')[:20])
     links = list(ProjectAgentLink.objects.filter(project=project, active=True).select_related('agent')[:10])
     active_skills = [{'id': str(l.agent_id), 'title': l.agent.title} for l in links]
+    planning_goal = f"{goal}\n\n## Selected phase context\n{phase_brief[:8000]}" if phase_brief else goal
     plan = propose_plan(
-        goal=goal, project=project, open_tasks=open_tasks,
+        goal=planning_goal, project=project, open_tasks=open_tasks,
         active_skills=active_skills, mvp_features=project.mvp_features or [],
     )
     with transaction.atomic():
         run = OrchestratorRun.objects.create(
             project=project, goal=goal, status=OrchestratorRun.AWAITING_PLAN,
             plan=plan, max_parallel=max_parallel,
+            last_event={
+                'type': 'run_created',
+                'at': timezone.now().isoformat(),
+                'phase_mode': phase_mode,
+                'phases': phase_stages,
+                'sections': phase_sections,
+                'phase_brief': phase_brief,
+            },
         )
         for i, item in enumerate(plan):
             task_ref = None
@@ -354,6 +398,7 @@ def orchestrator_step_action(request, step_id=None):
                 directory=normalize_path(project.cmd_directory),
                 fallback_directory=normalize_path(project.directory_path),
                 python_env=normalize_path(project.python_env),
+                project_env=_project_terminal_env(project),
             )
             session.mode = 'orchestrator'
             session.title = f'Orchestrator: {step.title[:40]}'

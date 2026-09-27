@@ -7,7 +7,6 @@ import {
   Calendar, 
   Clock, 
   ExternalLink, 
-  Github, 
   Figma, 
   Layers, 
   ChevronRight, 
@@ -44,7 +43,8 @@ import {
   Check,
   ChevronDown,
   Download,
-  Copy
+  Copy,
+  Send
 } from 'lucide-react';
 import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Project, PriorityQuadrant, TaskCategory, LauncherModelPreset } from '../types';
 import { api } from '../services/api';
@@ -57,6 +57,8 @@ import { PageHeader, Button } from './ui';
 import { MilestoneEditor } from './MilestoneEditor';
 import { ProjectEditor, ProjectDraft } from './ProjectEditor';
 import { ProjectStageStepper } from './ProjectStageStepper';
+import { ProjectGitButtons } from './ProjectGitButtons';
+import { ProjectContextPanel } from './ProjectContextPanel';
 import { ProjectRuntimeErrors } from './ProjectRuntimeErrors';
 import { ProjectTasksTab } from './ProjectTasksTab';
 import { ProjectPromptTab } from './ProjectPromptTab';
@@ -154,7 +156,7 @@ export const ProjectsView: React.FC = () => {
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [completedExpanded, setCompletedExpanded] = useState(false);
-  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'workspace' | 'docs' | 'prompt' | 'orchestrator'>('tasks');
+  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'milestones' | 'timelogs' | 'workspace' | 'docs' | 'prompt' | 'context' | 'orchestrator'>('tasks');
   const [taskFilterStage, setTaskFilterStage] = useState<string>('all');
   const [taskFilterCategory, setTaskFilterCategory] = useState<string>('all');
   const [newSubtaskTitle, setNewSubtaskTitle] = useState<{ [taskId: string]: string }>({});
@@ -584,7 +586,11 @@ export const ProjectsView: React.FC = () => {
         }
         setInitializationStatus(`Pasting the prompt into ${appName}…`);
         await drawer.sendPastedText(formatBracketedPaste(prompt), session.id);
-        setInitializationStatus(`${appName} is ready with ${normalizedModel} (${reasoningEffort}, ${mode}). The prompt is prepared in the composer; review it and press Enter.`);
+        if (tool === 'opencode') {
+          setInitializationStatus(`${appName} is ready. Pick agent via /agents (${mode}) and model via /models (${normalizedModel}), then review the prompt and press Enter.`);
+        } else {
+          setInitializationStatus(`${appName} is ready with ${normalizedModel} (${reasoningEffort}, ${mode}). The prompt is prepared in the composer; review it and press Enter.`);
+        }
       } catch (error: any) {
         const detail = error?.response?.data?.error || 'Set a CMD folder for this project to open its console.';
         setIsLaunchDialogOpen(true);
@@ -1601,17 +1607,17 @@ export const ProjectsView: React.FC = () => {
           ) : <>
           {/* Project Header Banner */}
           <div className="p-6 rounded-3xl bg-surface border border-line shadow-xl space-y-6">
-            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-              <div className="space-y-2 max-w-2xl">
-                <div className="flex items-center gap-2.5">
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+              <div className="space-y-2 min-w-0 lg:max-w-2xl flex-1">
+                <div className="flex flex-wrap items-center gap-2.5">
                   <div
                     className="w-4 h-4 rounded-full shrink-0 shadow-sm"
                     style={{ backgroundColor: activeProject.color || '#6366f1' }}
                   />
-                  <h2 className="text-2xl font-black text-content tracking-tight">
+                  <h2 className="text-2xl font-black text-content tracking-tight break-words min-w-0">
                     {activeProject.title}
                   </h2>
-                  <span className="text-[12px] font-bold px-2.5 py-1 rounded-lg bg-surface-3 text-content-muted font-mono">
+                  <span className="text-[12px] font-bold px-2.5 py-1 rounded-lg bg-surface-3 text-content-muted font-mono shrink-0 whitespace-nowrap">
                     {activeProject.category}
                   </span>
                 </div>
@@ -1627,21 +1633,17 @@ export const ProjectsView: React.FC = () => {
                 )}
               </div>
 
-              {/* Action Buttons & Links */}
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button type="button" onClick={() => setActiveDetailTab('workspace')} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-black hover:bg-indigo-500 transition-colors" title="Open the current stage workspace"><Sparkles className="w-3.5 h-3.5" /> Stage Workspace</button>
-                {activeProject.repoUrl && (
-                  <a
-                    href={activeProject.repoUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content text-xs font-bold hover:bg-surface-3 hover:border-line-strong transition-colors"
-                  >
-                    <Github className="w-3.5 h-3.5" />
-                    <span>Repo</span>
-                  </a>
-                )}
-                {activeProject.liveUrl && (
+              {/* Action Buttons & Links — grouped so wrapping breaks between groups, not mid-row */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 lg:justify-end lg:max-w-xl">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => setActiveDetailTab('workspace')} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-black hover:bg-indigo-500 transition-colors" title="Open the current stage workspace"><Sparkles className="w-3.5 h-3.5" /> Stage Workspace</button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <ProjectGitButtons project={activeProject} />
+                </div>
+                {(activeProject.liveUrl || activeProject.figmaUrl) && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {activeProject.liveUrl && (
                   <a
                     href={activeProject.liveUrl}
                     target="_blank"
@@ -1663,9 +1665,12 @@ export const ProjectsView: React.FC = () => {
                     <span>Figma</span>
                   </a>
                 )}
-                <button
-                  type="button"
-                  onClick={handleOpenFolder}
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenFolder}
                   disabled={isOpeningFolder}
                   title={activeProject.directoryPath ? `Open ${activeProject.directoryPath}` : 'Set a project folder path first'}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-2 border border-line text-content text-xs font-bold hover:bg-surface-3 hover:border-indigo-700 hover:text-indigo-300 transition-colors disabled:opacity-50"
@@ -1714,17 +1719,20 @@ export const ProjectsView: React.FC = () => {
                   <ChevronDown className="w-3.5 h-3.5" />
                   <span>Minimize CMD</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    startTimer('pomodoro', activeProject.id);
-                    setCurrentView('timetracker');
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-md tracking-wide"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  <span>Start Focus</span>
-                </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      startTimer('pomodoro', activeProject.id);
+                      setCurrentView('timetracker');
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-md tracking-wide"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Start Focus</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -2158,6 +2166,20 @@ export const ProjectsView: React.FC = () => {
 
               <button
                 type="button"
+                id="btn-tab-context"
+                onClick={() => setActiveDetailTab('context')}
+                className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
+                  activeDetailTab === 'context'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-content-faint hover:text-content'
+                }`}
+              >
+                <Send className="w-3.5 h-3.5" />
+                Context
+              </button>
+
+              <button
+                type="button"
                 id="btn-tab-orchestrator"
                 onClick={() => setActiveDetailTab('orchestrator')}
                 className={`flex items-center gap-1.5 pb-3 px-3.5 text-xs font-black border-b-2 transition-all font-mono ${
@@ -2400,9 +2422,14 @@ export const ProjectsView: React.FC = () => {
               />
             )}
 
+            {/* TAB: CONTEXT */}
+            {activeDetailTab === 'context' && (
+              <ProjectContextPanel project={activeProject} terminalRef={terminalDrawerRef} />
+            )}
+
             {/* TAB: ORCHESTRATOR */}
             {activeDetailTab === 'orchestrator' && (
-              <OrchestratorTab projectId={activeProject.id} terminalRef={terminalDrawerRef} />
+              <OrchestratorTab projectId={activeProject.id} currentStage={activeProject.currentStage} terminalRef={terminalDrawerRef} />
             )}
           </div>
         </div>

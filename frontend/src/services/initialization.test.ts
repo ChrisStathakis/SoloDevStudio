@@ -24,17 +24,17 @@ test('builds Codex Build command with workspace-write settings', () => {
   );
 });
 
-test('builds an OpenCode Build command with agent and model', () => {
+test('builds a plain OpenCode command (V2 TUI takes no --agent/--model flags)', () => {
   assert.equal(
     buildInitializationCommand({ tool: 'opencode', model: 'openai/gpt-5', reasoningEffort: 'high', mode: 'build' }),
-    'opencode --agent build --model "openai/gpt-5"',
+    'opencode',
   );
 });
 
-test('builds an OpenCode Plan command with agent and model', () => {
+test('OpenCode Plan also launches the plain TUI; agent/model are picked inside', () => {
   assert.equal(
     buildInitializationCommand({ tool: 'opencode', model: 'openai/gpt-5', reasoningEffort: 'low', mode: 'plan' }),
-    'opencode --agent plan --model "openai/gpt-5"',
+    'opencode',
   );
 });
 
