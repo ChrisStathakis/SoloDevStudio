@@ -404,7 +404,60 @@ export type ActiveView =
   | 'matrix' 
   | 'timetracker' 
   | 'timeline'
+  | 'automations'
   | 'settings';
+
+export type CronScheduleKind = 'daily' | 'every_hours' | 'cron';
+export type CronNotifyMode = 'always' | 'on_alert' | 'on_fail';
+export type CronRunStatus =
+  | 'queued'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'timeout'
+  | 'skipped'
+  | 'needs_attention';
+
+export interface CronRun {
+  id: string;
+  job: string;
+  status: CronRunStatus;
+  terminal_id: string;
+  output_tail: string;
+  structured_result: Record<string, unknown>;
+  notified: boolean;
+  trigger: string;
+  failure_reason: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+}
+
+export interface CronJob {
+  id: string;
+  name: string;
+  working_directory: string;
+  python_env: string;
+  tool: 'opencode' | 'codex' | 'kilo';
+  model_id: string;
+  reasoning_effort: 'low' | 'medium' | 'high';
+  mode: 'build' | 'plan';
+  prompt_template: string;
+  schedule_kind: CronScheduleKind;
+  schedule_value: string;
+  timezone_name: string;
+  timeout_minutes: number;
+  enabled: boolean;
+  notify_mode: CronNotifyMode;
+  windows_task_name: string;
+  consecutive_failures: number;
+  next_run_at?: string | null;
+  last_status: string;
+  last_run_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  recent_runs?: CronRun[];
+}
 
 export const STAGE_CONFIG: Record<ProjectStage, { label: string; order: number; color: string; bgLight: string; bgDark: string; description: string }> = {
   ideation: {

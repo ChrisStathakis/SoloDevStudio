@@ -22,8 +22,12 @@ from .orchestrator_views import (
     orchestrator_clear_previous_runs,
 )
 
+from .cron_views import CronJobViewSet, CronRunViewSet
+
 router = DefaultRouter()
 router.register(r'projects', ProjectViewSet, basename='project')
+router.register(r'cron-jobs', CronJobViewSet, basename='cron-job')
+router.register(r'cron-runs', CronRunViewSet, basename='cron-run')
 router.register(r'milestones', MilestoneViewSet, basename='milestone')
 router.register(r'tasks', TaskViewSet, basename='task')
 router.register(r'ideas', IdeaViewSet, basename='idea')

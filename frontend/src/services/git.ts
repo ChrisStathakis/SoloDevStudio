@@ -26,8 +26,8 @@ export async function pullProjectRepo(projectId: string): Promise<ProjectGitStat
   return res.data;
 }
 
-export async function pushProjectRepo(projectId: string): Promise<ProjectGitStatus & { ok: boolean; output: string }> {
-  const res = await api.post(`/projects/${projectId}/git-push/`);
+export async function pushProjectRepo(projectId: string, message?: string): Promise<ProjectGitStatus & { ok: boolean; output: string; committed: boolean; commit_message: string }> {
+  const res = await api.post(`/projects/${projectId}/git-push/`, message?.trim() ? { message: message.trim() } : {});
   return res.data;
 }
 

@@ -20,7 +20,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup, CronJob, CronRun
 from .serializers import (
     UserSerializer, RegisterSerializer,
     ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer, StageChecklistDefaultSerializer,
@@ -823,7 +823,41 @@ class ProjectViewSet(viewsets.ModelViewSet):
         state = _git_repo_state(directory)
         if not state['is_repo']:
             return Response({'error': 'Project folder is not a git repository. Clone it first.'}, status=400)
-        result = _run_git(state['directory'], 'push', timeout=120)
+        repo_dir = state['directory']
+        outputs = []
+        committed = False
+        commit_message = ''
+        if state.get('has_changes'):
+            data = request.data if isinstance(request.data, dict) else {}
+            raw_message = data.get('message', '')
+            if raw_message is None:
+                raw_message = ''
+            commit_message = str(raw_message).strip() if isinstance(raw_message, str) else ''
+            if not commit_message:
+                commit_message = f"Save from SoloDev Studio ({timezone.localdate().isoformat()})"
+            if len(commit_message) > 500:
+                return Response({'error': 'Commit message must be 500 characters or fewer.'}, status=400)
+            add_result = _run_git(repo_dir, 'add', '-A', timeout=120)
+            if add_result is None:
+                return Response({'error': 'Git is not installed or not on the server PATH.'}, status=500)
+            if add_result.returncode != 0:
+                return Response({'error': f'Commit failed during git add: {_tail_output(add_result.stderr or add_result.stdout) or "unknown git error"}'}, status=400)
+            commit_result = _run_git(repo_dir, 'commit', '-m', commit_message, timeout=120)
+            if commit_result is None:
+                return Response({'error': 'Git is not installed or not on the server PATH.'}, status=500)
+            if commit_result.returncode != 0:
+                detail = (commit_result.stderr or commit_result.stdout or '').strip()
+                if 'nothing to commit' in detail.lower():
+                    pass
+                elif 'user.name' in detail or 'user.email' in detail or 'Author identity unknown' in detail:
+                    return Response({'error': 'Git author identity is not configured. Run `git config user.name "Your Name"` and `git config user.email "you@example.com"` in the project folder, then try again.'}, status=400)
+                else:
+                    return Response({'error': f'Commit failed: {_tail_output(detail) or "unknown git error"}'}, status=400)
+            else:
+                committed = True
+                outputs.append(_tail_output(commit_result.stdout or commit_result.stderr))
+                state = _git_repo_state(repo_dir)
+        result = _run_git(repo_dir, 'push', timeout=120)
         if result is None:
             return Response({'error': 'Git is not installed or not on the server PATH.'}, status=500)
         if result.returncode != 0:
@@ -831,8 +865,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
             if 'Authentication failed' in detail or 'could not read Username' in detail or '403' in detail:
                 detail += ' Check Windows Credential Manager or run `gh auth login` in a terminal, then try again.'
             return Response({'error': f'Push failed: {_tail_output(detail) or "unknown git error"}'}, status=400)
-        fresh = _git_repo_state(state['directory'])
-        return Response({'ok': True, 'output': _tail_output(result.stdout or result.stderr or 'Pushed.'), **fresh})
+        outputs.append(_tail_output(result.stdout or result.stderr or 'Pushed.'))
+        fresh = _git_repo_state(repo_dir)
+        return Response({'ok': True, 'output': '\n'.join(part for part in outputs if part), 'committed': committed, 'commit_message': commit_message if committed else '', **fresh})
 
     @action(detail=True, methods=['get'], url_path='context-brief')
     def context_brief(self, request, pk=None):
@@ -867,6 +902,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         directory = _project_git_dir(project)
         if not directory:
             return Response({'error': 'Set a project folder first.'}, status=400)
+        if not os.path.isdir(directory):
+            return Response({'error': f'Project folder does not exist: {directory}'}, status=400)
         payload = build_project_context(project, request.user, stages, sections, max_chars)
         try:
             paths = write_context_files(directory, payload['markdown'], {
@@ -1462,7 +1499,7 @@ def _build_export_payload(user):
     docs = ProjectDoc.objects.filter(owner=user)
     presets = LauncherModelPreset.objects.filter(owner=user)
     stage_workspaces = StageWorkspace.objects.filter(project__owner=user)
-    from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer
+    from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer, CronJobSerializer
     return {
         "version": "1.0",
         "exportedAt": timezone.now().isoformat(),
@@ -1477,6 +1514,7 @@ def _build_export_payload(user):
         "dailyFocuses": [{'day': focus.day.isoformat(), 'task_ids': list(focus.task_ids or [])} for focus in DailyFocus.objects.filter(owner=user)],
         "stageReviews": [{'project': str(review.project_id), 'stage': review.stage, 'decision': review.decision, 'note': review.note, 'snapshot': review.snapshot, 'reviewed_at': review.reviewed_at} for review in StageReview.objects.filter(project__owner=user)],
         "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
+        "cronJobs": CronJobSerializer(CronJob.objects.filter(owner=user), many=True).data,
         "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
     }
 
@@ -1502,6 +1540,7 @@ def _wipe_workspace_data(user):
     TimeEntry.objects.filter(owner=user).delete()
     ProjectDoc.objects.filter(owner=user).delete()
     LauncherModelPreset.objects.filter(owner=user).delete()
+    CronJob.objects.filter(owner=user).delete()
     DailyFocus.objects.filter(owner=user).delete()
     StageChecklistDefault.objects.filter(owner=user).delete()
     Idea.objects.filter(owner=user).delete()
@@ -1547,6 +1586,7 @@ def reset_workspace_view(request):
             'dailyFocuses': DailyFocus.objects.filter(owner=user).count(),
             'stageReviews': StageReview.objects.filter(project__owner=user).count(),
             'modelPresets': LauncherModelPreset.objects.filter(owner=user).count(),
+            'cronJobs': CronJob.objects.filter(owner=user).count(),
         }
 
         _wipe_workspace_data(user)
@@ -1952,6 +1992,44 @@ def _perform_import(user, data):
                     defaults={'model_id': model_id.strip(), 'reasoning_effort': reasoning_effort, 'mode': mode, 'enabled': preset.get('enabled', True)},
                 )
                 imported["modelPresets"] += 1
+        # Cron jobs (standalone schedules; run history stays local)
+        raw_cron = data.get('cronJobs', data.get('cron_jobs', []))
+        if isinstance(raw_cron, list):
+            from .services.cron_schedule import compute_next_run
+            if 'cronJobs' not in imported:
+                imported['cronJobs'] = 0
+            for entry in raw_cron:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get('name') or '').strip()[:200]
+                prompt = str(entry.get('prompt_template') or entry.get('promptTemplate') or '').strip()
+                if len(name) < 3 or len(prompt) < 10:
+                    continue
+                tool = entry.get('tool') or InitializationTool.OPENCODE
+                if tool not in InitializationTool.values:
+                    tool = InitializationTool.OPENCODE
+                working_directory = str(entry.get('working_directory') or entry.get('workingDirectory') or '').strip()
+                if not working_directory or not os.path.isdir(os.path.expanduser(working_directory)):
+                    continue
+                CronJob.objects.create(
+                    owner=user, name=name, working_directory=working_directory,
+                    python_env=str(entry.get('python_env') or entry.get('pythonEnv') or '')[:500],
+                    tool=tool,
+                    model_id=str(entry.get('model_id') or entry.get('modelId') or '')[:200],
+                    reasoning_effort=entry.get('reasoning_effort') or entry.get('reasoningEffort') or ReasoningEffort.MEDIUM,
+                    mode=entry.get('mode') or InitializationMode.BUILD,
+                    prompt_template=prompt,
+                    schedule_kind=entry.get('schedule_kind') or entry.get('scheduleKind') or 'daily',
+                    schedule_value=str(entry.get('schedule_value') or entry.get('scheduleValue') or '09:00')[:200],
+                    timeout_minutes=int(entry.get('timeout_minutes') or entry.get('timeoutMinutes') or 15),
+                    enabled=bool(entry.get('enabled', True)),
+                    notify_mode=entry.get('notify_mode') or entry.get('notifyMode') or 'on_alert',
+                    next_run_at=compute_next_run(
+                        entry.get('schedule_kind') or entry.get('scheduleKind') or 'daily',
+                        str(entry.get('schedule_value') or entry.get('scheduleValue') or '09:00'),
+                    ),
+                )
+                imported['cronJobs'] += 1
     return imported
 
 

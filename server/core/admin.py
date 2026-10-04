@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Project, ProjectLaunchPrompt, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc
+from .models import User, Project, ProjectLaunchPrompt, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, CronJob, CronRun
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
@@ -61,3 +61,18 @@ class ProjectDocAdmin(admin.ModelAdmin):
     list_display = ('title', 'owner', 'updated_at')
     search_fields = ('title', 'content')
     raw_id_fields = ('owner',)
+
+
+@admin.register(CronJob)
+class CronJobAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'schedule_kind', 'enabled', 'last_status', 'next_run_at')
+    list_filter = ('enabled', 'schedule_kind', 'tool')
+    search_fields = ('name', 'prompt_template', 'working_directory')
+    raw_id_fields = ('owner',)
+
+
+@admin.register(CronRun)
+class CronRunAdmin(admin.ModelAdmin):
+    list_display = ('job', 'status', 'trigger', 'notified', 'created_at')
+    list_filter = ('status', 'trigger', 'notified')
+    raw_id_fields = ('job',)

@@ -81,6 +81,10 @@ export const OrchestratorTab: React.FC<Props> = ({ projectId, currentStage, term
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
+    setPhaseStages([currentStage]);
+    setPhaseSections([...CONTEXT_SECTIONS]);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {

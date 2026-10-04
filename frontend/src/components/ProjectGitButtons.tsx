@@ -29,6 +29,8 @@ export const ProjectGitButtons: React.FC<{ project: Project }> = ({ project }) =
   const [repoDraft, setRepoDraft] = useState('');
   const [isSavingRepo, setIsSavingRepo] = useState(false);
   const [repoError, setRepoError] = useState<string | null>(null);
+  const [showCommitBox, setShowCommitBox] = useState(false);
+  const [commitDraft, setCommitDraft] = useState('');
 
   const fetchStatus = useCallback(async () => {
     setIsChecking(true);
@@ -52,9 +54,20 @@ export const ProjectGitButtons: React.FC<{ project: Project }> = ({ project }) =
     try {
       if (kind === 'clone') await cloneProjectRepo(project.id);
       else if (kind === 'pull') await pullProjectRepo(project.id);
-      else await pushProjectRepo(project.id);
+      else {
+        const result = await pushProjectRepo(project.id, status?.has_changes ? commitDraft : undefined);
+        toast({
+          title: result?.committed ? 'Committed & pushed to GitHub.' : 'Pushed to GitHub.',
+          tone: 'success',
+        });
+        setShowCommitBox(false);
+        setCommitDraft('');
+        await refreshData();
+        await fetchStatus();
+        return;
+      }
       toast({
-        title: kind === 'clone' ? 'Repository cloned.' : kind === 'pull' ? 'Pulled latest changes.' : 'Pushed to GitHub.',
+        title: kind === 'clone' ? 'Repository cloned.' : 'Pulled latest changes.',
         tone: 'success',
       });
       await refreshData();
@@ -64,6 +77,14 @@ export const ProjectGitButtons: React.FC<{ project: Project }> = ({ project }) =
     } finally {
       setBusy(null);
     }
+  };
+
+  const handlePushClick = () => {
+    if (status?.has_changes && !showCommitBox) {
+      setShowCommitBox(true);
+      return;
+    }
+    void runAction('push');
   };
 
   const openRepoEdit = () => {
@@ -203,14 +224,53 @@ export const ProjectGitButtons: React.FC<{ project: Project }> = ({ project }) =
           </button>
           <button
             type="button"
-            onClick={() => void runAction('push')}
+            onClick={handlePushClick}
             disabled={busy !== null}
-            title="git push"
+            title={status?.has_changes ? 'git add -A + git commit + git push' : 'git push'}
             className={headerBtn}
           >
             {busy === 'push' ? spinner : <Upload className="w-3.5 h-3.5" />}
-            <span>Push</span>
+            <span>{status?.has_changes ? (showCommitBox ? 'Commit & Push' : `Push (${status.dirty_count} changed)`) : 'Push'}</span>
           </button>
+          {showCommitBox && status?.has_changes && (
+            <form
+              onSubmit={e => {
+                e.preventDefault();
+                void runAction('push');
+              }}
+              className="flex flex-wrap items-center gap-1.5 min-w-[240px] flex-1 sm:flex-none"
+            >
+              <input
+                autoFocus
+                type="text"
+                value={commitDraft}
+                onChange={e => setCommitDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    setShowCommitBox(false);
+                    setCommitDraft('');
+                  }
+                }}
+                placeholder="Commit message (optional)"
+                aria-label="Commit message"
+                maxLength={500}
+                className="flex-1 min-w-[200px] px-2.5 py-2 bg-surface-2 border border-indigo-500 rounded-xl text-xs text-content placeholder-slate-600 outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCommitBox(false);
+                  setCommitDraft('');
+                }}
+                disabled={busy !== null}
+                className="p-2 rounded-xl bg-surface-2 border border-line text-content-faint hover:text-content transition-colors"
+                title="Cancel commit"
+                aria-label="Cancel commit"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          )}
         </>
       )}
     </>

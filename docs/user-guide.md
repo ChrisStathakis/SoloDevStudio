@@ -98,3 +98,27 @@ Desktop builds include Python and the terminal runtime; users do not need to
 install Python or pywinpty to open CMD. Project-specific tools such as Node.js,
 Git, or a project's Python environment are separate dependencies. Their setup
 commands and interactive prompts can be used inside the console.
+
+## Automations (recurring agent jobs)
+
+**Automations** runs a saved agent prompt on a schedule. Each automation is
+standalone — no project needed, just a working directory. Each run opens a
+CMD console in that directory, launches the configured CLI (opencode, codex,
+or kilo), waits for its composer, and pastes the prompt automatically. The run
+ends when the agent prints its `CRON_RESULT:` line or when the 15-minute
+default timeout is reached; the terminal is then closed and the output tail is
+kept in the run history.
+
+- Create an automation with a name, working directory (must exist), optional
+  Python env, agent, schedule (daily time, every X hours, or
+  `m h * * *` cron), timeout, and notify mode (always, on alert, on fail).
+- Price/news style jobs should instruct the agent to set `"alert": true` in
+  its `CRON_RESULT` JSON when something needs your attention.
+- **Run now** triggers an immediate run; **History** shows past runs with
+  output tails and lets you delete or clear them.
+- Every job syncs a per-job Windows Task Scheduler entry
+  (`SoloDevStudio\cron-<id>`), so schedules keep firing with the app closed.
+  Tasks require Windows, run only while you are logged on, and target the
+  local `server/db.sqlite3` database.
+- After 3 consecutive failures a job auto-disables to avoid spam. Trust
+  prompts are never auto-confirmed: such runs stop as `needs_attention`.

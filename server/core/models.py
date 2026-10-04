@@ -576,3 +576,95 @@ class OrchestratorStep(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.status})"
+
+
+class CronScheduleKind(models.TextChoices):
+    DAILY = 'daily', 'Daily'
+    EVERY_HOURS = 'every_hours', 'Every X hours'
+    CRON = 'cron', 'Cron expression'
+
+
+class CronNotifyMode(models.TextChoices):
+    ALWAYS = 'always', 'Always'
+    ON_ALERT = 'on_alert', 'On alert'
+    ON_FAIL = 'on_fail', 'On fail'
+
+
+class CronJob(models.Model):
+    """A standalone recurring LLM-backed job: opens a cmd terminal and lets the agent work."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='cron_jobs')
+    name = models.CharField(max_length=200)
+    working_directory = models.CharField(max_length=500, blank=True, default='')
+    python_env = models.CharField(max_length=500, blank=True, default='')
+    tool = models.CharField(max_length=20, choices=InitializationTool.choices, default=InitializationTool.OPENCODE)
+    model_id = models.CharField(max_length=200, blank=True, default='')
+    reasoning_effort = models.CharField(max_length=10, choices=ReasoningEffort.choices, default=ReasoningEffort.MEDIUM)
+    mode = models.CharField(max_length=10, choices=InitializationMode.choices, default=InitializationMode.BUILD)
+    prompt_template = models.TextField()
+    schedule_kind = models.CharField(max_length=20, choices=CronScheduleKind.choices, default=CronScheduleKind.DAILY)
+    schedule_value = models.CharField(max_length=200, blank=True, default='09:00')
+    timezone_name = models.CharField(max_length=100, blank=True, default='Europe/Athens')
+    timeout_minutes = models.PositiveIntegerField(default=15)
+    enabled = models.BooleanField(default=True)
+    notify_mode = models.CharField(max_length=20, choices=CronNotifyMode.choices, default=CronNotifyMode.ON_ALERT)
+    windows_task_name = models.CharField(max_length=260, blank=True, default='')
+    consecutive_failures = models.PositiveIntegerField(default=0)
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=30, blank=True, default='')
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    coordinator_id = models.CharField(max_length=120, blank=True, default='')
+    coordinator_heartbeat = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name', 'created_at']
+        indexes = [
+            models.Index(fields=['owner', 'enabled', 'next_run_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.schedule_kind})"
+
+
+class CronRun(models.Model):
+    """One execution of a CronJob."""
+
+    QUEUED = 'queued'
+    RUNNING = 'running'
+    PASSED = 'passed'
+    FAILED = 'failed'
+    TIMEOUT = 'timeout'
+    SKIPPED = 'skipped'
+    NEEDS_ATTENTION = 'needs_attention'
+    STATUS_CHOICES = [
+        (QUEUED, 'Queued'),
+        (RUNNING, 'Running'),
+        (PASSED, 'Passed'),
+        (FAILED, 'Failed'),
+        (TIMEOUT, 'Timeout'),
+        (SKIPPED, 'Skipped'),
+        (NEEDS_ATTENTION, 'Needs attention'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.ForeignKey(CronJob, on_delete=models.CASCADE, related_name='runs')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=QUEUED)
+    terminal_id = models.CharField(max_length=64, blank=True, default='')
+    output_tail = models.TextField(blank=True, default='')
+    structured_result = models.JSONField(default=dict, blank=True)
+    notified = models.BooleanField(default=False)
+    trigger = models.CharField(max_length=30, blank=True, default='schedule')
+    failure_reason = models.TextField(blank=True, default='')
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['job', 'status', 'created_at'])]
+
+    def __str__(self):
+        return f"{self.job.name} — {self.status}"

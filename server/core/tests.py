@@ -1373,3 +1373,185 @@ class OrchestratorDeliveryTests(TestCase):
             files = git('ls-tree', '-r', '--name-only', snapshot).stdout.splitlines()
             self.assertIn('tracked.txt', files)
             self.assertIn('untracked.txt', files)
+
+
+class CronJobTests(APITestCase):
+    def setUp(self):
+        from .models import CronJob
+        self.CronJob = CronJob
+        self.user = User.objects.create_user(
+            username='cron-owner', email='cron-owner@example.com', password='test-password-123',
+        )
+        self._tmp = TemporaryDirectory()
+        self.workdir = self._tmp.name
+        self.client.force_authenticate(self.user)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _make_job(self, **kwargs):
+        defaults = {
+            'owner': self.user, 'name': 'Daily news',
+            'working_directory': self.workdir,
+            'tool': 'opencode', 'prompt_template': 'Find videogame news from the last 24h.',
+            'schedule_kind': 'daily', 'schedule_value': '09:00',
+        }
+        defaults.update(kwargs)
+        return self.CronJob.objects.create(**defaults)
+
+    def _job_payload(self, **kwargs):
+        payload = {
+            'name': 'Daily news', 'working_directory': self.workdir, 'tool': 'opencode',
+            'prompt_template': 'Find videogame news from the last 24h.',
+            'schedule_kind': 'daily', 'schedule_value': '09:00',
+            'timeout_minutes': 15, 'enabled': True, 'notify_mode': 'on_alert',
+        }
+        payload.update(kwargs)
+        return payload
+
+    def test_schedule_helpers(self):
+        from .services.cron_schedule import compute_next_run
+        now = timezone.now()
+        nxt = compute_next_run('daily', '09:00', from_dt=now)
+        self.assertGreater(nxt, now)
+        self.assertEqual((nxt.hour, nxt.minute), (9, 0))
+        nxt2 = compute_next_run('every_hours', '6', from_dt=now)
+        self.assertAlmostEqual((nxt2 - now).total_seconds(), 6 * 3600, delta=5)
+        nxt3 = compute_next_run('cron', '30 8 * * *', from_dt=now)
+        self.assertEqual((nxt3.hour, nxt3.minute), (8, 30))
+
+    def test_crud_sets_next_run_and_syncs_windows_task(self):
+        with patch('core.cron_views.windows_tasks.sync_job_task', return_value={'synced': False}) as sync:
+            response = self.client.post('/api/cron-jobs/', self._job_payload(), format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNotNone(response.data['next_run_at'])
+        sync.assert_called_once()
+        job_id = response.data['id']
+        listed = self.client.get('/api/cron-jobs/')
+        rows = listed.data['results'] if isinstance(listed.data, dict) else listed.data
+        self.assertEqual(len(rows), 1)
+        patched = self.client.patch(f'/api/cron-jobs/{job_id}/', {'schedule_value': '10:30'}, format='json')
+        self.assertEqual(patched.status_code, 200)
+        with patch('core.cron_views.windows_tasks.delete_job_task', return_value={'deleted': True}):
+            deleted = self.client.delete(f'/api/cron-jobs/{job_id}/')
+        self.assertEqual(deleted.status_code, 204)
+
+    def test_validation_rejects_short_prompt_and_bad_timeout(self):
+        bad_prompt = self.client.post('/api/cron-jobs/', self._job_payload(prompt_template='short'), format='json')
+        self.assertEqual(bad_prompt.status_code, 400)
+        bad_timeout = self.client.post('/api/cron-jobs/', self._job_payload(timeout_minutes=500), format='json')
+        self.assertEqual(bad_timeout.status_code, 400)
+        bad_dir = self.client.post('/api/cron-jobs/', self._job_payload(working_directory='/no/such/dir/xyz'), format='json')
+        self.assertEqual(bad_dir.status_code, 400)
+        missing_dir = self.client.post('/api/cron-jobs/', self._job_payload(working_directory=''), format='json')
+        self.assertEqual(missing_dir.status_code, 400)
+
+    def test_run_history_crud(self):
+        from .models import CronRun
+        job = self._make_job()
+        run = CronRun.objects.create(job=job, status=CronRun.PASSED, output_tail='ok')
+        history = self.client.get(f'/api/cron-jobs/{job.pk}/runs/')
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(len(history.data), 1)
+        self.assertEqual(self.client.get(f'/api/cron-runs/{run.pk}/').status_code, 200)
+        cleared = self.client.post(f'/api/cron-jobs/{job.pk}/clear-runs/')
+        self.assertEqual(cleared.data['deleted_count'], 1)
+        self.assertEqual(self.client.get(f'/api/cron-runs/{run.pk}/').status_code, 404)
+
+    def test_run_now_returns_202(self):
+        job = self._make_job()
+        with patch('core.cron_views.windows_tasks.sync_job_task', return_value={'synced': False}):
+            pass
+        with patch('core.services.cron_runner.run_job', return_value=None):
+            response = self.client.post(f'/api/cron-jobs/{job.pk}/run-now/', {}, format='json')
+        self.assertEqual(response.status_code, 202)
+
+    def test_run_job_success_parses_cron_result(self):
+        from .models import CronRun
+        from .services import cron_runner
+
+        chunks = [
+            'composer ready — ask anything, type / for commands',
+            '',
+            'done. CRON_RESULT: {"status":"done","summary":"3 news items","alert":true}',
+        ]
+
+        class FakeSession:
+            def __init__(self):
+                self.id = 'sess1'
+                self.mode = ''
+                self.title = ''
+                self._counter = 0
+                self._calls = 0
+
+            def stats(self):
+                return (self._counter, 0)
+
+            def write(self, data):
+                self._counter += len(str(data))
+
+            def is_alive(self):
+                return True
+
+            def read_since(self, offset):
+                idx = self._calls
+                self._calls += 1
+                text = chunks[idx] if idx < len(chunks) else chunks[-1]
+                self._counter += len(text)
+                return (False, text, self._counter, False)
+
+        job = self._make_job()
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch.object(cron_runner.agent_launcher, 'wait_for_ready', return_value='ready'), \
+             patch.object(cron_runner.agent_launcher, 'submit_prompt', return_value=None), \
+             patch('core.services.cron_runner._send_notification', return_value=True):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertIsNotNone(run)
+        self.assertEqual(run.status, CronRun.PASSED)
+        _, kwargs = tm.create_cmd.call_args
+        self.assertEqual(kwargs.get('directory'), self.workdir)
+        self.assertEqual(kwargs.get('owner_id'), self.user.id)
+        self.assertTrue(run.structured_result.get('alert'))
+        self.assertTrue(run.notified)
+        job.refresh_from_db()
+        self.assertEqual(job.last_status, CronRun.PASSED)
+        self.assertIsNotNone(job.next_run_at)
+
+    def test_run_job_trust_gate_needs_attention(self):
+        from .models import CronRun
+        from .services import cron_runner
+
+        class FakeSession:
+            id = 'sess2'
+            mode = ''
+            title = ''
+
+            def write(self, data):
+                return None
+
+            def is_alive(self):
+                return True
+
+        job = self._make_job()
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch.object(cron_runner.agent_launcher, 'wait_for_ready', return_value='trust'), \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.NEEDS_ATTENTION)
+
+    def test_run_job_skipped_when_lease_held(self):
+        from .services import cron_runner
+        job = self._make_job()
+        with patch.object(cron_runner, '_claim', return_value=None):
+            self.assertIsNone(cron_runner.run_job(str(job.pk)))
+
+    def test_export_includes_cron_jobs(self):
+        self._make_job(name='Export job')
+        response = self.client.get('/api/export/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['cronJobs']), 1)
+        self.assertEqual(response.data['cronJobs'][0]['name'], 'Export job')

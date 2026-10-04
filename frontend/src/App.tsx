@@ -292,6 +292,7 @@ const DesktopCompanionBridge: React.FC = () => {
 };
 
 const TimelineDeadlinesView = React.lazy(() => import('./components/TimelineDeadlinesView').then(m => ({ default: m.TimelineDeadlinesView })));
+const AutomationsView = React.lazy(() => import('./components/AutomationsView').then(m => ({ default: m.AutomationsView })));
 const SettingsView = React.lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
 
 const ViewFallback: React.FC<{ label: string }> = ({ label }) => (
@@ -329,6 +330,7 @@ const MainContent: React.FC<{ authenticated: boolean; sidebarCollapsed: boolean 
       {currentView === 'ideas' && <ErrorBoundary fallbackLabel="ideas"><IdeasView /></ErrorBoundary>}
       {currentView === 'timetracker' && <ErrorBoundary fallbackLabel="focus timer"><TimeTrackerView /></ErrorBoundary>}
       {currentView === 'timeline' && <ErrorBoundary fallbackLabel="timeline"><React.Suspense fallback={<ViewFallback label="timeline" />}><TimelineDeadlinesView /></React.Suspense></ErrorBoundary>}
+      {currentView === 'automations' && <ErrorBoundary fallbackLabel="automations"><React.Suspense fallback={<ViewFallback label="automations" />}><AutomationsView /></React.Suspense></ErrorBoundary>}
       {currentView === 'settings' && <ErrorBoundary fallbackLabel="settings"><React.Suspense fallback={<ViewFallback label="settings" />}><SettingsView /></React.Suspense></ErrorBoundary>}
       <QuickAddModal />
       <CommandPalette />

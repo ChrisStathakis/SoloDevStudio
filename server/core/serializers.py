@@ -9,7 +9,7 @@ from django.utils.text import slugify
 from .models import (
     Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode,
-    OrchestratorRun, OrchestratorStep,
+    OrchestratorRun, OrchestratorStep, CronJob, CronRun, CronScheduleKind, CronNotifyMode,
 )
 from .stage_workspaces import checklist_ids, builtin_checklists, stage_guidance, initialize_project_workspaces, STAGE_WORKSPACE_CONFIG
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
@@ -714,3 +714,86 @@ class OrchestratorRunSerializer(serializers.ModelSerializer):
             'autonomous', 'failure_reason', 'last_event', 'steps', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class CronRunSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CronRun
+        fields = [
+            'id', 'job', 'status', 'terminal_id', 'output_tail', 'structured_result',
+            'notified', 'trigger', 'failure_reason', 'started_at', 'finished_at', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class CronJobSerializer(serializers.ModelSerializer):
+    recent_runs = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CronJob
+        fields = [
+            'id', 'name', 'working_directory', 'python_env', 'tool', 'model_id',
+            'reasoning_effort', 'mode', 'prompt_template', 'schedule_kind',
+            'schedule_value', 'timezone_name', 'timeout_minutes', 'enabled',
+            'notify_mode', 'windows_task_name', 'consecutive_failures',
+            'next_run_at', 'last_status', 'last_run_at', 'created_at', 'updated_at',
+            'recent_runs',
+        ]
+        read_only_fields = ['id', 'windows_task_name', 'consecutive_failures', 'last_status', 'last_run_at', 'created_at', 'updated_at']
+
+    def get_recent_runs(self, obj):
+        runs = getattr(obj, '_prefetched_runs', None)
+        if runs is None:
+            runs = list(obj.runs.order_by('-created_at')[:5])
+        return CronRunSerializer(runs, many=True).data
+
+    def validate_working_directory(self, value):
+        import os
+        raw = (value or '').strip().strip('"').strip("'")
+        if not raw:
+            raise serializers.ValidationError('Working directory is required.')
+        candidate = os.path.expanduser(raw)
+        is_windows_absolute = bool(re.match(r'^[A-Za-z]:[\\/]', candidate) or candidate.startswith('\\\\'))
+        if not os.path.isabs(candidate) and not is_windows_absolute:
+            raise serializers.ValidationError('Working directory must be an absolute path.')
+        if not os.path.isdir(candidate):
+            raise serializers.ValidationError('Working directory does not exist.')
+        return candidate
+
+    def validate_python_env(self, value):
+        return (value or '').strip().strip('"').strip("'")[:500]
+
+    def validate_name(self, value):
+        value = (value or '').strip()
+        if len(value) < 3:
+            raise serializers.ValidationError('Name needs at least 3 characters.')
+        return value[:200]
+
+    def validate_prompt_template(self, value):
+        value = (value or '').strip()
+        if len(value) < 10:
+            raise serializers.ValidationError('Prompt needs at least 10 characters.')
+        return value
+
+    def validate_tool(self, value):
+        if value not in InitializationTool.values:
+            raise serializers.ValidationError('Tool must be opencode, codex, or kilo.')
+        return value
+
+    def validate_timeout_minutes(self, value):
+        if value < 1 or value > 120:
+            raise serializers.ValidationError('Timeout must be 1-120 minutes.')
+        return value
+
+    def validate_schedule_kind(self, value):
+        if value not in CronScheduleKind.values:
+            raise serializers.ValidationError('Unknown schedule kind.')
+        return value
+
+    def validate_schedule_value(self, value):
+        return (value or '').strip()[:200]
+
+    def validate_notify_mode(self, value):
+        if value not in CronNotifyMode.values:
+            raise serializers.ValidationError('Unknown notify mode.')
+        return value

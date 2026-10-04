@@ -67,6 +67,22 @@ def parse_max_chars(raw):
 
 
 def _git_snapshot(directory):
+    """Git summary for context output. Reuses the canonical repo-state helper."""
+    try:
+        from ..views import _git_repo_state
+    except Exception:
+        _git_repo_state = None  # type: ignore
+    if _git_repo_state is not None:
+        try:
+            state = _git_repo_state(directory)
+            return {
+                'is_repo': bool(state.get('is_repo')),
+                'branch': state.get('branch', ''),
+                'remote': state.get('remote', ''),
+                'dirty_count': state.get('dirty_count', 0),
+            }
+        except Exception:
+            pass
     snapshot = {'is_repo': False, 'branch': '', 'remote': '', 'dirty_count': 0}
     if not directory or not os.path.isdir(directory):
         return snapshot
