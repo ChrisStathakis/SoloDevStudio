@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Project, ProjectLaunchPrompt, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, CronJob, CronRun
+from .models import AutomationPrompt, User, Project, ProjectLaunchPrompt, Milestone, Task, Subtask, Idea, TimeEntry, ProjectDoc, CronJob, CronRun
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
@@ -76,3 +76,10 @@ class CronRunAdmin(admin.ModelAdmin):
     list_display = ('job', 'status', 'trigger', 'notified', 'created_at')
     list_filter = ('status', 'trigger', 'notified')
     raw_id_fields = ('job',)
+
+
+@admin.register(AutomationPrompt)
+class AutomationPromptAdmin(admin.ModelAdmin):
+    list_display = ('title', 'owner', 'updated_at')
+    search_fields = ('title', 'content')
+    raw_id_fields = ('owner',)

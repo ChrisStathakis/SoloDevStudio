@@ -92,6 +92,7 @@ class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True, blank=False)
     potential_projects_root = models.CharField(max_length=500, blank=True, default='')
+    automation_results_root = models.CharField(max_length=500, blank=True, default='')
 
     class Meta:
         ordering = ['-date_joined']
@@ -582,6 +583,25 @@ class CronScheduleKind(models.TextChoices):
     DAILY = 'daily', 'Daily'
     EVERY_HOURS = 'every_hours', 'Every X hours'
     CRON = 'cron', 'Cron expression'
+
+
+class AutomationPrompt(models.Model):
+    """A user-saved reusable markdown prompt for automations (snapshot-copied into CronJob)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='automation_prompts')
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['owner', 'updated_at']),
+        ]
+
+    def __str__(self):
+        return self.title
 
 
 class CronNotifyMode(models.TextChoices):

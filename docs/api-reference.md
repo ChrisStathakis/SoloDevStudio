@@ -55,6 +55,7 @@ List responses use standard DRF pagination (`count`, `next`, `previous`, `result
 - `POST /api/workspace/reset/` atomically removes the signed-in owner’s workspace records and saved project root. The response includes counts for `projects`, `tasks`, `ideas`, `timeEntries`, `docs`, `stageWorkspaces`, and `modelPresets`.
 - `/api/idea-categories/` supports authenticated list, create, rename, and delete operations for the shared Idea Canvas catalog. Its `name` is the value used by `/api/ideas/`; deletion returns `409` while any idea still uses the category.
 - `GET /api/filesystem/?path=<directory>` lists local drives or directory entries for the path picker. It is read-only.
+- `POST /api/filesystem/mkdir/` with `{ "path": <existing parent>, "name": <new folder> }` creates one folder level for the picker.
 
 ## Terminal endpoints
 

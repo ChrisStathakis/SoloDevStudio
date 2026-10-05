@@ -98,6 +98,7 @@ export const SettingsView: React.FC = () => {
   const [editingModelMode, setEditingModelMode] = useState<'build' | 'plan'>('build');
   const [presetSearch, setPresetSearch] = useState('');
   const [presetToolFilter, setPresetToolFilter] = useState<'all' | 'opencode' | 'codex' | 'kilo'>('all');
+  const [opencodeModels, setOpencodeModels] = useState<string[]>([]);
   const [projectFolderDraft, setProjectFolderDraft] = useState('');
   const [projectFolderEffective, setProjectFolderEffective] = useState('');
   const [projectFolderDefault, setProjectFolderDefault] = useState('');
@@ -105,6 +106,13 @@ export const SettingsView: React.FC = () => {
   const [projectFolderError, setProjectFolderError] = useState<string | null>(null);
   const [projectFolderBusy, setProjectFolderBusy] = useState(false);
   const [showProjectFolderPicker, setShowProjectFolderPicker] = useState(false);
+  const [automationFolderDraft, setAutomationFolderDraft] = useState('');
+  const [automationFolderEffective, setAutomationFolderEffective] = useState('');
+  const [automationFolderDefault, setAutomationFolderDefault] = useState('');
+  const [automationFolderIsCustom, setAutomationFolderIsCustom] = useState(false);
+  const [automationFolderError, setAutomationFolderError] = useState<string | null>(null);
+  const [automationFolderBusy, setAutomationFolderBusy] = useState(false);
+  const [showAutomationFolderPicker, setShowAutomationFolderPicker] = useState(false);
   const [globalDrive, setGlobalDrive] = useState('');
   const [globalDriveBusy, setGlobalDriveBusy] = useState(false);
   const [globalDriveStatus, setGlobalDriveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -340,6 +348,21 @@ export const SettingsView: React.FC = () => {
     if (section === 'models') loadModelPresets();
   }, [section, loadModelPresets]);
 
+  useEffect(() => {
+    if (section !== 'models') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/opencode-models/');
+        const rows = Array.isArray(res.data) ? res.data : (res.data?.models || []);
+        if (!cancelled) setOpencodeModels(rows.map(String));
+      } catch {
+        if (!cancelled) setOpencodeModels([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [section]);
+
   const loadProjectFolder = useCallback(async () => {
     try {
       const res = await api.get('/settings/project-folder/');
@@ -353,9 +376,22 @@ export const SettingsView: React.FC = () => {
     }
   }, []);
 
+  const loadAutomationFolder = useCallback(async () => {
+    try {
+      const res = await api.get('/settings/automation-folder/');
+      setAutomationFolderDraft(res.data?.path || '');
+      setAutomationFolderEffective(res.data?.effective_path || '');
+      setAutomationFolderDefault(res.data?.default_path || '');
+      setAutomationFolderIsCustom(Boolean(res.data?.is_custom));
+      setAutomationFolderError(null);
+    } catch {
+      setAutomationFolderError('Unable to load automation folder setting.');
+    }
+  }, []);
+
   useEffect(() => {
-    if (section === 'project-folder') loadProjectFolder();
-  }, [section, loadProjectFolder]);
+    if (section === 'project-folder') { loadProjectFolder(); loadAutomationFolder(); }
+  }, [section, loadProjectFolder, loadAutomationFolder]);
 
   useEffect(() => {
     if (section !== 'desktop' || !window.solodevDesktop) return;
@@ -399,6 +435,36 @@ export const SettingsView: React.FC = () => {
       setProjectFolderError(null);
     } catch { setProjectFolderError('Unable to reset project folder.'); }
     finally { setProjectFolderBusy(false); }
+  };
+
+  const saveAutomationFolder = async () => {
+    if (!automationFolderDraft.trim()) return;
+    setAutomationFolderBusy(true);
+    try {
+      const res = await api.patch('/settings/automation-folder/', { path: automationFolderDraft.trim() });
+      setAutomationFolderDraft(res.data?.path || '');
+      setAutomationFolderEffective(res.data?.effective_path || '');
+      setAutomationFolderDefault(res.data?.default_path || '');
+      setAutomationFolderIsCustom(Boolean(res.data?.is_custom));
+      setAutomationFolderError(null);
+    } catch (error: any) {
+      setAutomationFolderError(error?.response?.data?.path?.[0] || 'Unable to save automation folder.');
+    } finally { setAutomationFolderBusy(false); }
+  };
+
+  const resetAutomationFolder = async () => {
+    const ok = await confirm({ title: 'Reset automation folder to the app default?', confirmLabel: 'Reset' });
+    if (!ok) return;
+    setAutomationFolderBusy(true);
+    try {
+      const res = await api.delete('/settings/automation-folder/');
+      setAutomationFolderDraft('');
+      setAutomationFolderEffective(res.data?.effective_path || '');
+      setAutomationFolderDefault(res.data?.default_path || '');
+      setAutomationFolderIsCustom(false);
+      setAutomationFolderError(null);
+    } catch { setAutomationFolderError('Unable to reset automation folder.'); }
+    finally { setAutomationFolderBusy(false); }
   };
 
   const applyGlobalDrive = async () => {
@@ -823,7 +889,8 @@ export const SettingsView: React.FC = () => {
               <select value={newModelTool} onChange={e => { setNewModelTool(e.target.value as 'opencode' | 'codex' | 'kilo'); }} className="w-full sm:w-36 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content">
                 <option value="opencode">OpenCode</option><option value="codex">Codex</option><option value="kilo">Kilo</option>
               </select>
-              <input value={newModelId} onChange={e => setNewModelId(e.target.value)} placeholder={newModelTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
+              <input value={newModelId} onChange={e => setNewModelId(e.target.value)} list={newModelTool === 'opencode' && opencodeModels.length > 0 ? 'settings-opencode-models' : undefined} placeholder={newModelTool === 'opencode' ? 'provider/model or model name' : 'model ID or name'} className="min-w-0 w-full sm:flex-1 sm:min-w-[14rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
+              <datalist id="settings-opencode-models">{opencodeModels.map(m => <option key={m} value={m} />)}</datalist>
               <select value={newModelReasoningEffort} onChange={e => setNewModelReasoningEffort(e.target.value as 'low' | 'medium' | 'high')} className="w-full sm:w-32 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Reasoning effort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
               <select value={newModelMode} onChange={e => setNewModelMode(e.target.value as 'build' | 'plan')} className="w-full sm:w-28 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-bold text-content" aria-label="Mode"><option value="build">Build</option><option value="plan">Plan</option></select>
               <input value={newModelLabel} onChange={e => setNewModelLabel(e.target.value)} placeholder="Preset name" aria-label="Preset name" className="min-w-0 w-full sm:flex-1 sm:min-w-[10rem] rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs text-content" />
@@ -882,6 +949,26 @@ export const SettingsView: React.FC = () => {
           </div>
           <div className="p-5 rounded-2xl bg-surface border border-line space-y-4">
             <div>
+              <h3 className="text-sm font-black text-content">Default automation folder</h3>
+              <p className="text-xs text-content-faint mt-1">Prefills the working directory for new automations. Each automation can still override it. Saving creates the folder if it does not exist yet.</p>
+            </div>
+            <div className="rounded-xl bg-surface-2 border border-line px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider font-black text-content-faint">Current folder</div>
+              <div className="mt-1 text-xs font-mono text-content break-all">{automationFolderEffective || 'Loading…'}</div>
+              {!automationFolderIsCustom && automationFolderDefault && <div className="mt-1 text-[11px] text-content-faint">Using app default</div>}
+            </div>
+            <div className="flex gap-2">
+              <input value={automationFolderDraft} onChange={e => setAutomationFolderDraft(e.target.value)} placeholder={automationFolderDefault || 'D:\\projects\\automations'} className="min-w-0 flex-1 rounded-xl bg-surface-2 border border-line px-3 py-2 text-xs font-mono text-content" />
+              <button type="button" onClick={() => setShowAutomationFolderPicker(true)} className="flex items-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs font-black text-content hover:border-indigo-500"><FolderOpen className="w-4 h-4" />Choose</button>
+            </div>
+            {automationFolderError && <p className="text-xs text-rose-700 dark:text-rose-300" role="alert">{automationFolderError}</p>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={saveAutomationFolder} disabled={automationFolderBusy || !automationFolderDraft.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white disabled:opacity-40">Save folder</button>
+              <button type="button" onClick={resetAutomationFolder} disabled={automationFolderBusy || !automationFolderIsCustom} className="rounded-xl border border-line px-4 py-2 text-xs font-black text-content-faint hover:text-content disabled:opacity-40">Reset to app default</button>
+            </div>
+          </div>
+          <div className="p-5 rounded-2xl bg-surface border border-line space-y-4">
+            <div>
               <h3 className="text-sm font-black text-content flex items-center gap-2"><HardDrive className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />Drive for all projects</h3>
               <p className="text-xs text-content-faint mt-1">Use this when the drive letter changed on your computer. It updates every project you own and remaps folder, CMD, and server-script paths. Python environments are not changed.</p>
             </div>
@@ -895,6 +982,7 @@ export const SettingsView: React.FC = () => {
             {globalDriveStatus && <p className={`text-xs ${globalDriveStatus.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`} role="alert">{globalDriveStatus.msg}</p>}
           </div>
           {showProjectFolderPicker && <PathPickerModal mode="folder" initialPath={projectFolderDraft || projectFolderEffective} title="Choose project folder" onClose={() => setShowProjectFolderPicker(false)} onSelect={path => { setProjectFolderDraft(path); setShowProjectFolderPicker(false); }} />}
+          {showAutomationFolderPicker && <PathPickerModal mode="folder" initialPath={automationFolderDraft || automationFolderEffective} title="Choose automation folder" onClose={() => setShowAutomationFolderPicker(false)} onSelect={path => { setAutomationFolderDraft(path); setShowAutomationFolderPicker(false); }} />}
         </div>
       )}
 

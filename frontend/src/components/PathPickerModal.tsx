@@ -37,6 +37,9 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
   const [selected, setSelected] = useState<string | null>(null);
   const [crumbOpen, setCrumbOpen] = useState<boolean>(false);
   const [copiedPath, setCopiedPath] = useState<boolean>(false);
+  const [newFolderName, setNewFolderName] = useState<string>('');
+  const [creating, setCreating] = useState<boolean>(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const requestControllerRef = useRef<AbortController | null>(null);
   // Callers often provide an inline filter array. A primitive key prevents
@@ -159,6 +162,24 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
     } else {
       if (!selected) return;
       onSelect(selected);
+    }
+  };
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name || !currentPath || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const res = await api.post('/filesystem/mkdir/', { path: currentPath, name });
+      const created = String(res.data?.path || '');
+      setNewFolderName('');
+      if (created) await browse(created);
+      else await browse(currentPath);
+    } catch (e: any) {
+      setCreateError(e?.response?.data?.name?.[0] || e?.response?.data?.path?.[0] || 'Could not create the folder.');
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -315,6 +336,29 @@ export const PathPickerModal: React.FC<PathPickerModalProps> = ({
         </div>
 
         {/* Footer */}
+        {mode === 'folder' && currentPath && !isRoots && (
+          <div className="px-5 py-2.5 bg-surface-2 border-t border-line">
+            <div className="flex gap-2">
+              <input
+                value={newFolderName}
+                onChange={e => setNewFolderName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') void handleCreateFolder(); }}
+                placeholder="New folder name…"
+                aria-label="New folder name"
+                className="min-w-0 flex-1 rounded-xl bg-surface-1 border border-line px-3 py-1.5 text-xs font-mono text-content outline-none focus:border-indigo-500"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreateFolder()}
+                disabled={!newFolderName.trim() || creating || loading}
+                className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-3.5 py-1.5 text-xs font-black text-white disabled:opacity-40 transition-all shrink-0"
+              >
+                {creating ? 'Creating…' : 'New folder'}
+              </button>
+            </div>
+            {createError && <p className="mt-1.5 text-xs font-bold text-rose-600 dark:text-rose-400" role="alert">{createError}</p>}
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-line">
           <div className="flex items-center gap-1 min-w-0 max-w-[60%]">
             <span className="flex-1 text-[11px] font-bold text-content-faint truncate" title={mode === 'folder' ? currentPath : selected || ''}>

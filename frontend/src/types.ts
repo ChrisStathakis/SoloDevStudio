@@ -459,6 +459,14 @@ export interface CronJob {
   recent_runs?: CronRun[];
 }
 
+export interface AutomationPrompt {
+  id: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export const STAGE_CONFIG: Record<ProjectStage, { label: string; order: number; color: string; bgLight: string; bgDark: string; description: string }> = {
   ideation: {
     label: 'Ideation',

@@ -7,7 +7,7 @@ from .views import (
     ProjectDocViewSet, AgentFilterViewSet, IdeaCategoryViewSet, LauncherModelPresetViewSet,
     export_data_view, import_data_view, reset_workspace_view, dashboard_view, timeline_view,
     cloud_backup_latest_view, cloud_backup_push_view, cloud_backup_restore_view,
-    filesystem_browse, project_folder_settings_view, project_drive_settings_view, checklist_defaults_view, checklist_default_stage_view, daily_focus_view,
+    filesystem_browse, filesystem_mkdir, file_content_view, project_folder_settings_view, automation_folder_settings_view, project_drive_settings_view, checklist_defaults_view, checklist_default_stage_view, daily_focus_view,
 )
 from .terminal_views import (
     create_project_terminal, list_terminals, kill_terminal,
@@ -22,10 +22,11 @@ from .orchestrator_views import (
     orchestrator_clear_previous_runs,
 )
 
-from .cron_views import CronJobViewSet, CronRunViewSet
+from .cron_views import AutomationPromptViewSet, CronJobViewSet, CronRunViewSet, opencode_models_view
 
 router = DefaultRouter()
 router.register(r'projects', ProjectViewSet, basename='project')
+router.register(r'automation-prompts', AutomationPromptViewSet, basename='automation-prompt')
 router.register(r'cron-jobs', CronJobViewSet, basename='cron-job')
 router.register(r'cron-runs', CronRunViewSet, basename='cron-run')
 router.register(r'milestones', MilestoneViewSet, basename='milestone')
@@ -52,11 +53,15 @@ urlpatterns = [
     path('dashboard/', dashboard_view, name='dashboard'),
     path('timeline/', timeline_view, name='timeline'),
     path('filesystem/', filesystem_browse, name='filesystem-browse'),
+    path('filesystem/mkdir/', filesystem_mkdir, name='filesystem-mkdir'),
+    path('files/content/', file_content_view, name='file-content'),
     path('settings/project-folder/', project_folder_settings_view, name='project-folder-settings'),
+    path('settings/automation-folder/', automation_folder_settings_view, name='automation-folder-settings'),
     path('settings/drive/', project_drive_settings_view, name='project-drive-settings'),
     path('settings/checklist-defaults/', checklist_defaults_view, name='checklist-defaults'),
     path('settings/checklist-defaults/<str:stage>/', checklist_default_stage_view, name='checklist-default-stage'),
     path('daily-focus/', daily_focus_view, name='daily-focus'),
+    path('opencode-models/', opencode_models_view, name='opencode-models'),
     path('search/market/', market_research_view, name='search-market'),
     path('search/tech-stack/', tech_research_view, name='search-tech-stack'),
     # Pasted-image uploads (consoles consume them as file paths)

@@ -9,19 +9,35 @@ from django.utils.text import slugify
 from .models import (
     Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode,
-    OrchestratorRun, OrchestratorStep, CronJob, CronRun, CronScheduleKind, CronNotifyMode,
+    OrchestratorRun, OrchestratorStep, CronJob, CronRun, CronScheduleKind, CronNotifyMode, AutomationPrompt,
 )
 from .stage_workspaces import checklist_ids, builtin_checklists, stage_guidance, initialize_project_workspaces, STAGE_WORKSPACE_CONFIG
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
 
 User = get_user_model()
 
+
+def _normalize_opencode_model_id(tool, model_id):
+    """Canonicalize bare opencode slugs to provider/model when unambiguous.
+
+    Never rejects: unresolvable values pass through untouched and the runner
+    fails fast at execution with the actionable reason instead.
+    """
+    if (tool or '') != 'opencode' or not (model_id or '').strip():
+        return model_id
+    try:
+        from .services import opencode_models as _om
+        resolved, _error = _om.resolve_model(model_id)
+    except Exception:
+        return model_id
+    return resolved or model_id
+
 # ---------- User / Auth ----------
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'date_joined', 'potential_projects_root']
+        fields = ['id', 'username', 'email', 'date_joined', 'potential_projects_root', 'automation_results_root']
         read_only_fields = ['id', 'date_joined']
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -362,6 +378,9 @@ class LauncherModelPresetSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         # Every supported CLI exposes a named plan agent or plan mode.
+        tool = attrs.get('tool', self.instance.tool if self.instance else None)
+        if 'model_id' in attrs:
+            attrs['model_id'] = _normalize_opencode_model_id(tool, attrs['model_id'])
         request = self.context.get('request')
         owner = getattr(request, 'user', None)
         if owner and getattr(owner, 'is_authenticated', False):
@@ -377,6 +396,26 @@ class LauncherModelPresetSerializer(serializers.ModelSerializer):
     def validate_mode(self, value):
         if value not in InitializationMode.values:
             raise serializers.ValidationError('Mode must be build or plan.')
+        return value
+
+# ---------- Automation prompts ----------
+
+class AutomationPromptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AutomationPrompt
+        fields = ['id', 'title', 'content', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_title(self, value):
+        value = (value or '').strip()
+        if len(value) < 3:
+            raise serializers.ValidationError('Title needs at least 3 characters.')
+        return value[:200]
+
+    def validate_content(self, value):
+        value = (value or '').strip()
+        if len(value) < 10:
+            raise serializers.ValidationError('Prompt needs at least 10 characters.')
         return value
 
 # ---------- Task ----------
@@ -741,6 +780,13 @@ class CronJobSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'windows_task_name', 'consecutive_failures', 'last_status', 'last_run_at', 'created_at', 'updated_at']
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        tool = attrs.get('tool', self.instance.tool if self.instance else 'opencode')
+        if 'model_id' in attrs:
+            attrs['model_id'] = _normalize_opencode_model_id(tool, attrs['model_id'])
+        return attrs
+
     def get_recent_runs(self, obj):
         runs = getattr(obj, '_prefetched_runs', None)
         if runs is None:
@@ -756,8 +802,17 @@ class CronJobSerializer(serializers.ModelSerializer):
         is_windows_absolute = bool(re.match(r'^[A-Za-z]:[\\/]', candidate) or candidate.startswith('\\\\'))
         if not os.path.isabs(candidate) and not is_windows_absolute:
             raise serializers.ValidationError('Working directory must be an absolute path.')
+        if any(ord(ch) < 32 for ch in candidate):
+            raise serializers.ValidationError('Working directory contains invalid characters.')
+        if os.path.exists(candidate) and not os.path.isdir(candidate):
+            raise serializers.ValidationError('Working directory is not a folder.')
         if not os.path.isdir(candidate):
-            raise serializers.ValidationError('Working directory does not exist.')
+            try:
+                os.makedirs(candidate, exist_ok=True)
+            except PermissionError:
+                raise serializers.ValidationError('Permission denied: could not create the directory.')
+            except OSError:
+                raise serializers.ValidationError('Could not create the directory.')
         return candidate
 
     def validate_python_env(self, value):
@@ -778,6 +833,13 @@ class CronJobSerializer(serializers.ModelSerializer):
     def validate_tool(self, value):
         if value not in InitializationTool.values:
             raise serializers.ValidationError('Tool must be opencode, codex, or kilo.')
+        return value
+
+    def validate_model_id(self, value):
+        # Model flows into a local shell command: keep the preset-level guard.
+        value = (value or '').strip()
+        if value and not is_safe_model_id(value):
+            raise serializers.ValidationError(MODEL_ID_ERROR)
         return value
 
     def validate_timeout_minutes(self, value):

@@ -44,10 +44,12 @@ def _cli_command(step):
     if step.tool == 'codex':
         model_arg = f' --model {quoted}' if model and model.lower() != 'default' else ''
         return f'codex --strict-config{model_arg} --sandbox {"read-only" if step.mode == "plan" else "workspace-write"} -c model_reasoning_effort="{step.reasoning_effort}"'
-    model_arg = f' --model {quoted}' if model and model.lower() != 'default' else ''
     if step.tool == 'kilo':
+        model_arg = f' --model {quoted}' if model and model.lower() != 'default' else ''
         return f'kilo --agent {step.mode}{model_arg}'
-    return f'opencode --agent {step.mode}{model_arg}'
+    # V2 interactive `opencode` accepts no top-level --agent/--model flags:
+    # launch the plain TUI. Mirrors frontend buildInitializationCommand.
+    return 'opencode'
 
 
 def _git(root, *args):
@@ -745,8 +747,23 @@ class OrchestratorCoordinator:
         return 'timeout'
 
     @staticmethod
-    def _submit_prompt(session, prompt, step):
-        """Use the same framing as xterm's paste path, with Enter separate."""
+    def _wait_for_output_growth(session, baseline, timeout):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            current, _dropped = session.stats()
+            if current > baseline:
+                return True
+            time.sleep(0.2)
+        return False
+
+    @staticmethod
+    def _submit_prompt(session, prompt, step, settle_seconds=2.0):
+        """Use the same framing as xterm's paste path, with Enter separate.
+
+        Falls back to unframed text: some TUI builds swallow bracketed paste.
+        """
+        if settle_seconds > 0:
+            time.sleep(settle_seconds)
         session.write('\x1b[200~')
         for offset in range(0, len(prompt), 4096):
             session.write(prompt[offset:offset + 4096])
@@ -755,21 +772,25 @@ class OrchestratorCoordinator:
         time.sleep(0.45)
         _baseline, _dropped = session.stats()
         session.write('\r')
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            current, _dropped = session.stats()
-            if current > _baseline:
-                return
-            time.sleep(0.2)
+        if OrchestratorCoordinator._wait_for_output_growth(session, _baseline, 5):
+            return
         # OpenCode can drop the first Enter while it is finalising a large
-        # bracketed paste. Retry once, then surface the failure to the user.
+        # bracketed paste. Retry once before falling back to plain text.
         session.write('\r')
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            current, _dropped = session.stats()
-            if current > _baseline:
-                return
-            time.sleep(0.2)
+        if OrchestratorCoordinator._wait_for_output_growth(session, _baseline, 5):
+            return
+        plain = prompt.replace('\x1b', '')
+        for offset in range(0, len(plain), 4096):
+            session.write(plain[offset:offset + 4096])
+            time.sleep(0.015)
+        time.sleep(0.45)
+        _baseline, _dropped = session.stats()
+        session.write('\r')
+        if OrchestratorCoordinator._wait_for_output_growth(session, _baseline, 8):
+            return
+        session.write('\r')
+        if OrchestratorCoordinator._wait_for_output_growth(session, _baseline, 5):
+            return
         raise TerminalError('Prompt was not accepted by the agent composer.', 504)
 
     @staticmethod

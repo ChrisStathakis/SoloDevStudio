@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from pathlib import Path
+import os
 import subprocess
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -404,6 +405,43 @@ class FilesystemBrowseTests(APITestCase):
         self.assertTrue(response.data['is_roots'])
         self.assertEqual(response.data['entries'][0]['path'], 'C:\\')
         roots.assert_called_once()
+
+
+class FilesystemMkdirTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='mkdir-owner',
+            email='mkdir-owner@example.com',
+            password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_creates_folder_and_returns_path(self):
+        res = self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': 'new-results'}, format='json')
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(os.path.isdir(res.data['path']))
+
+    def test_existing_directory_is_idempotent(self):
+        target = Path(self._tmp.name) / 'exists'
+        target.mkdir()
+        res = self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': 'exists'}, format='json')
+        self.assertEqual(res.status_code, 201)
+
+    def test_rejects_separators_reserved_and_file_collision(self):
+        self.assertEqual(self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': 'a/b'}, format='json').status_code, 400)
+        self.assertEqual(self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': 'CON'}, format='json').status_code, 400)
+        self.assertEqual(self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': ''}, format='json').status_code, 400)
+        clash = Path(self._tmp.name) / 'file.txt'
+        clash.write_text('x')
+        self.assertEqual(self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': 'file.txt'}, format='json').status_code, 400)
+        self.assertEqual(self.client.post('/api/filesystem/mkdir/', {'path': str(Path(self._tmp.name) / 'missing-parent'), 'name': 'child'}, format='json').status_code, 400)
+
+    def test_requires_auth(self):
+        self.client.force_authenticate(None)
+        res = self.client.post('/api/filesystem/mkdir/', {'path': self._tmp.name, 'name': 'nope'}, format='json')
+        self.assertEqual(res.status_code, 401)
 
 
 class ProjectDuplicateTests(APITestCase):
@@ -1441,10 +1479,21 @@ class CronJobTests(APITestCase):
         self.assertEqual(bad_prompt.status_code, 400)
         bad_timeout = self.client.post('/api/cron-jobs/', self._job_payload(timeout_minutes=500), format='json')
         self.assertEqual(bad_timeout.status_code, 400)
-        bad_dir = self.client.post('/api/cron-jobs/', self._job_payload(working_directory='/no/such/dir/xyz'), format='json')
-        self.assertEqual(bad_dir.status_code, 400)
+        with TemporaryDirectory() as tmp:
+            file_path = str(Path(tmp) / 'not-a-dir.txt')
+            Path(file_path).write_text('x')
+            bad_dir = self.client.post('/api/cron-jobs/', self._job_payload(working_directory=file_path), format='json')
+            self.assertEqual(bad_dir.status_code, 400)
         missing_dir = self.client.post('/api/cron-jobs/', self._job_payload(working_directory=''), format='json')
         self.assertEqual(missing_dir.status_code, 400)
+
+    def test_create_makes_missing_working_directory(self):
+        with TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / 'nested' / 'automation-dir')
+            with patch('core.cron_views.windows_tasks.sync_job_task', return_value={'synced': False}):
+                response = self.client.post('/api/cron-jobs/', self._job_payload(working_directory=target), format='json')
+            self.assertEqual(response.status_code, 201)
+            self.assertTrue(Path(target).is_dir())
 
     def test_run_history_crud(self):
         from .models import CronRun
@@ -1500,7 +1549,7 @@ class CronJobTests(APITestCase):
                 self._counter += len(text)
                 return (False, text, self._counter, False)
 
-        job = self._make_job()
+        job = self._make_job(tool='codex')
         with patch('core.services.cron_runner.terminal_manager') as tm, \
              patch.object(cron_runner.agent_launcher, 'wait_for_ready', return_value='ready'), \
              patch.object(cron_runner.agent_launcher, 'submit_prompt', return_value=None), \
@@ -1534,7 +1583,7 @@ class CronJobTests(APITestCase):
             def is_alive(self):
                 return True
 
-        job = self._make_job()
+        job = self._make_job(tool='codex')
         with patch('core.services.cron_runner.terminal_manager') as tm, \
              patch.object(cron_runner.agent_launcher, 'wait_for_ready', return_value='trust'), \
              patch('core.services.cron_runner._send_notification', return_value=False):
@@ -1549,9 +1598,513 @@ class CronJobTests(APITestCase):
         with patch.object(cron_runner, '_claim', return_value=None):
             self.assertIsNone(cron_runner.run_job(str(job.pk)))
 
+    def test_opencode_model_resolution(self):
+        from .services import opencode_models as om
+        items = ['opencode/muse-spark-1.3-contributor-free', 'opencode-go/deepseek-v4-flash']
+        resolved, err = om.resolve_from_items('muse-spark-1.3-contributor-free', items)
+        self.assertEqual(resolved, 'opencode/muse-spark-1.3-contributor-free')
+        self.assertIsNone(err)
+        resolved, err = om.resolve_from_items('opencode/muse-spark-1.3-contributor-free', items)
+        self.assertEqual(resolved, 'opencode/muse-spark-1.3-contributor-free')
+        self.assertIsNone(err)
+        resolved, err = om.resolve_from_items('custom/my-model', items)
+        self.assertEqual(resolved, 'custom/my-model')
+        self.assertIsNone(err)
+        resolved, err = om.resolve_from_items('Hy3 Free', items)
+        self.assertEqual(resolved, '')
+        self.assertIn('Unknown opencode model', err)
+        resolved, err = om.resolve_from_items('', items)
+        self.assertEqual(resolved, '')
+        self.assertIsNone(err)
+
+    def test_headless_command_has_exit_markers(self):
+        from .services import agent_launcher
+        cmd = agent_launcher.headless_command(agent='build', message='Do it.')
+        self.assertIn('SOLODEV_CRON_EXIT_0', cmd)
+        self.assertIn('SOLODEV_CRON_EXIT_1', cmd)
+
+    def test_headless_run_fails_fast_on_unknown_model(self):
+        from .models import CronRun
+        from .services import cron_runner
+        job = self._make_job(tool='opencode', model_id='nope-bare-slug-xyz')
+        items = ['opencode/muse-spark-1.3-contributor-free']
+        with patch('core.services.opencode_models.list_models', return_value=items), \
+             patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.FAILED)
+        self.assertIn('Unknown opencode model', run.failure_reason)
+        tm.create_cmd.assert_not_called()
+        job.refresh_from_db()
+        self.assertEqual(job.last_status, CronRun.FAILED)
+
+    def test_headless_run_fast_fail_on_process_error(self):
+        from .models import CronRun
+        from .services import cron_runner
+        transcript = (
+            'C:\\projects\\automations>opencode run --model "prov/model" --agent plan --auto\n'
+            'Error: Invalid model reference: prov/model\n'
+            'SOLODEV_CRON_EXIT_1\n'
+        )
+
+        class FakeSession:
+            id = 'sess-fastfail'
+            mode = ''
+            title = ''
+
+            def write(self, data):
+                return None
+
+            def is_alive(self):
+                return True
+
+            def read_since(self, offset):
+                return (False, transcript, len(transcript), False)
+
+        job = self._make_job(tool='opencode', model_id='prov/model')
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.FAILED)
+        self.assertIn('Invalid model reference', run.failure_reason)
+        self.assertIn('Invalid model reference', run.output_tail)
+        job.refresh_from_db()
+        self.assertEqual(job.last_status, CronRun.FAILED)
+
+    def test_exit_markers_ignore_command_echo(self):
+        from .services import agent_launcher
+        echo_only = ('C:\\projects\\automations>opencode run --model "m" --agent plan --auto '
+                     '&& echo SOLODEV_CRON_EXIT_0 || echo SOLODEV_CRON_EXIT_1\n')
+        self.assertIsNone(agent_launcher.EXIT_OK_RE.search(echo_only))
+        self.assertIsNone(agent_launcher.EXIT_FAIL_RE.search(echo_only))
+        self.assertIsNotNone(agent_launcher.EXIT_OK_RE.search(
+            'agent output\nC:\\WINDOWS\\system32\\cmd.exeSOLODEV_CRON_EXIT_0 C:\\projects\\automations> '))
+        self.assertIsNotNone(agent_launcher.EXIT_FAIL_RE.search(
+            'Error: Invalid model reference: x\nSOLODEV_CRON_EXIT_1\n'))
+
+    def test_headless_ignores_echoed_markers_until_real_exit(self):
+        from .models import CronRun
+        from .services import cron_runner
+        echo = ('C:\\projects\\automations>opencode run --model "opencode/m" --agent plan --auto '
+                '&& echo SOLODEV_CRON_EXIT_0 || echo SOLODEV_CRON_EXIT_1\n')
+        working = echo + '> plan · muse-spark\nFinding the latest videogame news.\n'
+        done = (working
+                + 'CRON_RESULT: {"status":"done","summary":"3 news items","alert":false}\n'
+                + 'C:\\WINDOWS\\system32\\cmd.exeSOLODEV_CRON_EXIT_0 C:\\projects\\automations> ')
+        reads = [echo, working, done]
+
+        class FakeSession:
+            id = 'sess-echo'
+            mode = ''
+            title = ''
+
+            def __init__(self):
+                self._calls = 0
+
+            def write(self, data):
+                return None
+
+            def is_alive(self):
+                return True
+
+            def read_since(self, offset):
+                text = reads[min(self._calls, len(reads) - 1)]
+                self._calls += 1
+                return (False, text, len(text), False)
+
+        job = self._make_job(tool='opencode', model_id='prov/model')
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.PASSED)
+        self.assertEqual(run.structured_result.get('summary'), '3 news items')
+        job.refresh_from_db()
+        self.assertEqual(job.last_status, CronRun.PASSED)
+
+    def test_run_now_disabled_returns_409(self):
+        from .models import CronRun
+        job = self._make_job()
+        job.enabled = False
+        job.save(update_fields=['enabled'])
+        with patch('core.services.cron_runner.run_job') as run_job:
+            response = self.client.post(f'/api/cron-jobs/{job.pk}/run-now/', {}, format='json')
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('disabled', response.data['detail'].lower())
+        run_job.assert_not_called()
+        self.assertFalse(CronRun.objects.filter(job=job).exists())
+
+    def test_bare_slug_normalized_on_create(self):
+        items = ['opencode/muse-spark-1.3-contributor-free']
+        with patch('core.services.opencode_models.list_models', return_value=items), \
+             patch('core.cron_views.windows_tasks.sync_job_task', return_value={'synced': False}):
+            response = self.client.post(
+                '/api/cron-jobs/',
+                self._job_payload(model_id='muse-spark-1.3-contributor-free'), format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['model_id'], 'opencode/muse-spark-1.3-contributor-free')
+
+    def test_finished_run_writes_result_file(self):
+        from .models import CronRun
+        from .services import cron_runner
+        transcript = 'agent working...\nCRON_RESULT: {"status":"done","summary":"3 news items","alert":true}\n'
+
+        class FakeSession:
+            id = 'sess-report'
+            mode = ''
+            title = ''
+
+            def write(self, data):
+                return None
+
+            def is_alive(self):
+                return True
+
+            def read_since(self, offset):
+                return (False, transcript, len(transcript), False)
+
+        job = self._make_job(tool='opencode', model_id='prov/model')
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.PASSED)
+        reports = sorted(Path(self.workdir, 'results').glob('*.md'))
+        self.assertEqual(len(reports), 1)
+        body = reports[0].read_text(encoding='utf-8')
+        self.assertIn('3 news items', body)
+        self.assertIn('passed', body)
+
+    def test_failed_run_writes_result_file(self):
+        from .models import CronRun
+        from .services import cron_runner
+        job = self._make_job(tool='opencode', model_id='nope-bare-slug-xyz')
+        with patch('core.services.opencode_models.list_models', return_value=['opencode/known-model']), \
+             patch('core.services.cron_runner.terminal_manager'), \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.FAILED)
+        reports = sorted(Path(self.workdir, 'results').glob('*.md'))
+        self.assertEqual(len(reports), 1)
+        self.assertIn('Unknown opencode model', reports[0].read_text(encoding='utf-8'))
+
+    def test_prompt_footer_asks_for_results_file(self):
+        from .services import cron_runner
+        job = self._make_job()
+        prompt = cron_runner._build_prompt(job)
+        self.assertIn('CRON_RESULT', prompt)
+        self.assertIn('results', prompt)
+
+    def test_files_navigation_and_traversal_rejected(self):
+        job = self._make_job()
+        subdir = Path(self.workdir, 'results')
+        subdir.mkdir(exist_ok=True)
+        Path(subdir, 'report.md').write_text('# Report\n', encoding='utf-8')
+        listed = self.client.get(f'/api/cron-jobs/{job.pk}/files/')
+        self.assertEqual(listed.data['current'], '')
+        self.assertIsNone(listed.data['parent'])
+        inside = self.client.get(f'/api/cron-jobs/{job.pk}/files/', {'path': 'results'})
+        self.assertEqual(inside.status_code, 200)
+        self.assertEqual(inside.data['current'], 'results')
+        self.assertIsNone(inside.data['parent'])
+        self.assertEqual([e['name'] for e in inside.data['files']], ['report.md'])
+        traversal = self.client.get(f'/api/cron-jobs/{job.pk}/files/', {'path': '../..'})
+        self.assertEqual(traversal.status_code, 400)
+        not_a_folder = self.client.get(f'/api/cron-jobs/{job.pk}/files/', {'path': 'results/report.md'})
+        self.assertEqual(not_a_folder.status_code, 400)
+
+    def test_automation_files_and_preview(self):
+        from .models import CronRun
+        from django.utils import timezone
+        job = self._make_job()
+        fresh = Path(self.workdir, 'news.md')
+        fresh.write_text('# News\n- item one\n', encoding='utf-8')
+        old = Path(self.workdir, 'archive.md')
+        old.write_text('# Old\n', encoding='utf-8')
+        two_days_ago = timezone.now().timestamp() - 2 * 86400
+        os.utime(old, (two_days_ago, two_days_ago))
+        run = CronRun.objects.create(
+            job=job, status=CronRun.PASSED,
+            started_at=timezone.now() - timedelta(minutes=5),
+            finished_at=timezone.now(),
+            structured_result={'status': 'done', 'summary': '3 news items', 'alert': False},
+        )
+        listed = self.client.get(f'/api/cron-jobs/{job.pk}/files/', {'run_id': str(run.pk)})
+        self.assertEqual(listed.status_code, 200)
+        by_name = {entry['name']: entry for entry in listed.data['files']}
+        self.assertTrue(by_name['news.md']['changed_in_run'])
+        self.assertFalse(by_name['archive.md']['changed_in_run'])
+        preview = self.client.get('/api/files/content/', {'path': str(fresh)})
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.data['kind'], 'text')
+        self.assertIn('item one', preview.data['content'])
+        exe = Path(self.workdir, 'tool.exe')
+        exe.write_bytes(b'MZ')
+        unsupported = self.client.get('/api/files/content/', {'path': str(exe)})
+        self.assertEqual(unsupported.status_code, 415)
+        outside = self.client.get('/api/files/content/', {'path': 'C:\\Windows\\System32\\drivers\\etc\\hosts'})
+        self.assertIn(outside.status_code, (403, 404))
+        missing = self.client.get('/api/files/content/', {'path': str(Path(self.workdir, 'nope.md'))})
+        self.assertEqual(missing.status_code, 404)
+
+    def test_open_folder_action(self):
+        job = self._make_job()
+        with patch('os.startfile', create=True) as opener:
+            response = self.client.post(f'/api/cron-jobs/{job.pk}/open-folder/')
+        self.assertEqual(response.status_code, 200)
+        opener.assert_called_once_with(job.working_directory)
+        job.working_directory = str(Path(self.workdir, 'missing-dir'))
+        job.save(update_fields=['working_directory'])
+        gone = self.client.post(f'/api/cron-jobs/{job.pk}/open-folder/')
+        self.assertEqual(gone.status_code, 400)
+
+    def test_opencode_models_endpoint(self):
+        with patch('core.services.opencode_models.list_models', return_value=['a/b']) as listed:
+            response = self.client.get('/api/opencode-models/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['models'], ['a/b'])
+        listed.assert_called_once()
+
+    def test_headless_command_builder(self):
+        from .services import agent_launcher
+        cmd = agent_launcher.headless_command(model_id='prov/model', agent='build', prompt_file='C:\\tmp\\p.md', message='Do it.', title='Cron News')
+        self.assertTrue(cmd.startswith('opencode run'))
+        self.assertIn('--model "prov/model"', cmd)
+        self.assertIn('--agent build', cmd)
+        self.assertIn('--auto', cmd)
+        self.assertIn('--file "C:\\tmp\\p.md"', cmd)
+        bare = agent_launcher.headless_command(agent='plan', message='Do it.')
+        self.assertNotIn('--model', bare)
+        self.assertNotIn('--file', bare)
+
+    def test_headless_run_parses_cron_result_without_composer(self):
+        from .models import CronRun
+        from .services import cron_runner
+
+        transcript = 'agent working...\nCRON_RESULT: {"status":"done","summary":"3 news items","alert":true}\n'
+
+        class FakeSession:
+            id = 'sess-headless'
+            mode = ''
+            title = ''
+
+            def __init__(self):
+                self.writes = []
+
+            def write(self, data):
+                self.writes.append(data)
+
+            def is_alive(self):
+                return True
+
+            def read_since(self, offset):
+                return (False, transcript, len(transcript), False)
+
+        job = self._make_job(tool='opencode', model_id='prov/model')
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch.object(cron_runner.agent_launcher, 'wait_for_ready', side_effect=AssertionError('TUI path must not run')), \
+             patch.object(cron_runner.agent_launcher, 'submit_prompt', side_effect=AssertionError('TUI path must not run')), \
+             patch('core.services.cron_runner._send_notification', return_value=True):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, CronRun.PASSED)
+        self.assertTrue(run.structured_result.get('alert'))
+        self.assertTrue(run.notified)
+        sent = ' '.join(tm.create_cmd.return_value.writes)
+        self.assertIn('opencode run', sent)
+        self.assertIn('--auto', sent)
+        job.refresh_from_db()
+        self.assertEqual(job.last_status, CronRun.PASSED)
+
     def test_export_includes_cron_jobs(self):
         self._make_job(name='Export job')
         response = self.client.get('/api/export/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data['cronJobs']), 1)
         self.assertEqual(response.data['cronJobs'][0]['name'], 'Export job')
+
+    def test_opencode_launches_plain_tui_without_agent_flags(self):
+        from .services import agent_launcher
+        self.assertEqual(agent_launcher.cli_command(tool='opencode', model_id='gpt-x', mode='build'), 'opencode')
+        codex_cmd = agent_launcher.cli_command(tool='codex', model_id='gpt-5', mode='plan')
+        self.assertIn('--sandbox read-only', codex_cmd)
+        kilo_cmd = agent_launcher.cli_command(tool='kilo', model_id='m', mode='plan')
+        self.assertIn('--agent plan', kilo_cmd)
+
+    def test_composer_timeout_saves_terminal_tail(self):
+        from .services import cron_runner
+
+        class FakeSession:
+            id = 'sess-timeout'
+            mode = ''
+            title = ''
+
+            def write(self, data):
+                return None
+
+            def is_alive(self):
+                return True
+
+            def read_since(self, offset):
+                return (False, 'opencode v2 booting… waiting', 32, False)
+
+        job = self._make_job(tool='codex')
+        with patch('core.services.cron_runner.terminal_manager') as tm, \
+             patch.object(cron_runner.agent_launcher, 'wait_for_ready', return_value='timeout'), \
+             patch('core.services.cron_runner._send_notification', return_value=False):
+            tm.create_cmd.return_value = FakeSession()
+            tm.remove_for_user.return_value = None
+            run = cron_runner.run_job(str(job.pk), trigger='manual')
+        self.assertEqual(run.status, 'failed')
+        self.assertIn('composer', run.failure_reason)
+        self.assertIn('booting', run.output_tail)
+
+    def test_submit_prompt_falls_back_to_plain_text(self):
+        from .services import agent_launcher
+        from .services.terminal_manager import TerminalError
+
+        class FakeSession:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, data):
+                self.writes.append(data)
+
+            def stats(self):
+                return 0, 0
+
+        session = FakeSession()
+        with patch.object(agent_launcher.time, 'sleep', return_value=None), \
+             patch.object(agent_launcher, '_wait_for_output_growth', side_effect=[False, False, True]):
+            agent_launcher.submit_prompt(session, 'plain fallback prompt', settle_seconds=0)
+        self.assertIn('\x1b[200~', session.writes)
+        self.assertIn('plain fallback prompt', session.writes)
+
+    def test_submit_prompt_raises_after_all_attempts(self):
+        from .services import agent_launcher
+        from .services.terminal_manager import TerminalError
+
+        class FakeSession:
+            def write(self, data):
+                return None
+
+            def stats(self):
+                return 0, 0
+
+        with patch.object(agent_launcher.time, 'sleep', return_value=None), \
+             patch.object(agent_launcher, '_wait_for_output_growth', return_value=False):
+            with self.assertRaises(TerminalError):
+                agent_launcher.submit_prompt(session=FakeSession(), prompt='never accepted', settle_seconds=0)
+
+
+class AutomationPromptTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='prompt-owner', email='prompt-owner@example.com', password='test-password-123',
+        )
+        self.other = User.objects.create_user(
+            username='prompt-other', email='prompt-other@example.com', password='test-password-123',
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_crud_and_owner_isolation(self):
+        created = self.client.post('/api/automation-prompts/', {
+            'title': 'Price watch', 'content': 'Check these shops for price drops and report.',
+        }, format='json')
+        self.assertEqual(created.status_code, 201)
+        prompt_id = created.data['id']
+        listed = self.client.get('/api/automation-prompts/')
+        rows = listed.data['results'] if isinstance(listed.data, dict) else listed.data
+        self.assertEqual(len(rows), 1)
+        # Other user sees nothing and cannot access the row.
+        self.client.force_authenticate(self.other)
+        other_listed = self.client.get('/api/automation-prompts/')
+        other_rows = other_listed.data['results'] if isinstance(other_listed.data, dict) else other_listed.data
+        self.assertEqual(len(other_rows), 0)
+        self.assertEqual(self.client.get(f'/api/automation-prompts/{prompt_id}/').status_code, 404)
+        # Owner can update + search + delete.
+        self.client.force_authenticate(self.user)
+        patched = self.client.patch(f'/api/automation-prompts/{prompt_id}/', {'title': 'Price watch v2'}, format='json')
+        self.assertEqual(patched.status_code, 200)
+        searched = self.client.get('/api/automation-prompts/', {'search': 'v2'})
+        search_rows = searched.data['results'] if isinstance(searched.data, dict) else searched.data
+        self.assertEqual(len(search_rows), 1)
+        self.assertEqual(self.client.delete(f'/api/automation-prompts/{prompt_id}/').status_code, 204)
+
+    def test_validation_rejects_short_title_and_content(self):
+        self.assertEqual(self.client.post('/api/automation-prompts/', {
+            'title': 'ab', 'content': 'Check these shops for price drops and report.',
+        }, format='json').status_code, 400)
+        self.assertEqual(self.client.post('/api/automation-prompts/', {
+            'title': 'Valid title', 'content': 'short',
+        }, format='json').status_code, 400)
+
+    def test_export_import_roundtrip(self):
+        self.client.post('/api/automation-prompts/', {
+            'title': 'Export me', 'content': 'Exported prompt content for automations.',
+        }, format='json')
+        exported = self.client.get('/api/export/')
+        self.assertEqual(exported.status_code, 200)
+        self.assertEqual(len(exported.data['automationPrompts']), 1)
+        self.client.delete(f"/api/automation-prompts/{exported.data['automationPrompts'][0]['id']}/")
+        imported = self.client.post('/api/import/', {
+            'automationPrompts': [{'title': 'Export me', 'content': 'Exported prompt content for automations.'}],
+        }, format='json')
+        self.assertEqual(imported.status_code, 200)
+        self.assertEqual(imported.data['imported']['automationPrompts'], 1)
+
+
+class AutomationFolderSettingsTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='auto-folder-owner', email='auto-folder@example.com', password='test-password-123',
+        )
+        self._tmp = TemporaryDirectory()
+        self.client.force_authenticate(self.user)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_get_returns_app_default_when_unset(self):
+        res = self.client.get('/api/settings/automation-folder/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['path'], '')
+        self.assertTrue(res.data['effective_path'])
+        self.assertFalse(res.data['is_custom'])
+
+    def test_patch_save_and_reset(self):
+        target = self._tmp.name
+        saved = self.client.patch('/api/settings/automation-folder/', {'path': target}, format='json')
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.data['path'], target)
+        self.assertTrue(saved.data['is_custom'])
+        # Non-absolute rejected; file path rejected.
+        self.assertEqual(self.client.patch('/api/settings/automation-folder/', {'path': 'relative/dir'}, format='json').status_code, 400)
+        reset = self.client.delete('/api/settings/automation-folder/')
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(reset.data['path'], '')
+        self.assertFalse(reset.data['is_custom'])
+
+    def test_patch_creates_missing_directory(self):
+        target = str(Path(self._tmp.name) / 'nested' / 'results')
+        self.assertFalse(os.path.exists(target))
+        saved = self.client.patch('/api/settings/automation-folder/', {'path': target}, format='json')
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(os.path.isdir(target))
+
+    def test_export_import_roundtrip(self):
+        self.client.patch('/api/settings/automation-folder/', {'path': self._tmp.name}, format='json')
+        exported = self.client.get('/api/export/')
+        self.assertEqual(exported.data['settings']['automationResultsRoot'], self._tmp.name)
+        self.client.delete('/api/settings/automation-folder/')
+        imported = self.client.post('/api/import/', {
+            'settings': {'automationResultsRoot': self._tmp.name},
+        }, format='json')
+        self.assertEqual(imported.data['imported']['settings'], 1)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.automation_results_root, self._tmp.name)

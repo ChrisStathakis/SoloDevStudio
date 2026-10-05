@@ -20,13 +20,13 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup, CronJob, CronRun
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup, CronJob, CronRun, AutomationPrompt
 from .serializers import (
     UserSerializer, RegisterSerializer,
     ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer, StageChecklistDefaultSerializer,
     TaskSerializer, SubtaskSerializer,
     IdeaSerializer, IdeaCategorySerializer, TimeEntrySerializer,
-    ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer
+    ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer, AutomationPromptSerializer
 )
 from .filters import ProjectFilter, TaskFilter, IdeaFilter, TimeEntryFilter, ProjectDocFilter
 from .permissions import IsOwner
@@ -113,6 +113,53 @@ def project_folder_settings_view(request):
     user.potential_projects_root = value
     user.save(update_fields=['potential_projects_root'])
     return Response(_project_folder_payload(user))
+
+
+def _automation_folder_payload(user):
+    configured = str(getattr(user, 'automation_results_root', '') or '').strip()
+    default_path = str(Path(settings.AUTOMATION_RESULTS_ROOT).expanduser())
+    effective = configured or default_path
+    return {'path': configured, 'effective_path': effective, 'default_path': default_path, 'is_custom': bool(configured)}
+
+
+def _validate_folder_path(raw):
+    """Shared absolute-folder validation (setting may not exist yet; never auto-creates)."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, {'path': ['Enter an absolute folder path.']}
+    candidate = os.path.expanduser(raw.strip().strip('"').strip("'"))
+    is_windows_absolute = bool(re.match(r'^[A-Za-z]:[\\/]', candidate) or candidate.startswith('\\\\'))
+    value = os.path.abspath(candidate) if os.path.isabs(candidate) else candidate
+    if any(ord(ch) < 32 for ch in value):
+        return None, {'path': ['Folder path contains invalid characters.']}
+    if not os.path.isabs(value) and not is_windows_absolute:
+        return None, {'path': ['Folder path must be absolute.']}
+    if os.path.exists(value) and not os.path.isdir(value):
+        return None, {'path': ['Selected path is not a folder.']}
+    return value, None
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def automation_folder_settings_view(request):
+    user = request.user
+    if request.method == 'GET':
+        return Response(_automation_folder_payload(user))
+    if request.method == 'DELETE':
+        user.automation_results_root = ''
+        user.save(update_fields=['automation_results_root'])
+        return Response(_automation_folder_payload(user))
+    value, error = _validate_folder_path(request.data.get('path'))
+    if error:
+        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        os.makedirs(value, exist_ok=True)
+    except PermissionError:
+        return Response({'path': ['Permission denied for that location.']}, status=status.HTTP_403_FORBIDDEN)
+    except OSError:
+        return Response({'path': ['Could not create the folder there.']}, status=status.HTTP_400_BAD_REQUEST)
+    user.automation_results_root = value
+    user.save(update_fields=['automation_results_root'])
+    return Response(_automation_folder_payload(user))
 
 
 @api_view(['PATCH'])
@@ -1498,8 +1545,9 @@ def _build_export_payload(user):
     time_entries = TimeEntry.objects.filter(owner=user)
     docs = ProjectDoc.objects.filter(owner=user)
     presets = LauncherModelPreset.objects.filter(owner=user)
+    automation_prompts = AutomationPrompt.objects.filter(owner=user)
     stage_workspaces = StageWorkspace.objects.filter(project__owner=user)
-    from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer, CronJobSerializer
+    from .serializers import ProjectSerializer, TaskSerializer, IdeaSerializer, TimeEntrySerializer, LauncherModelPresetSerializer, CronJobSerializer, AutomationPromptSerializer
     return {
         "version": "1.0",
         "exportedAt": timezone.now().isoformat(),
@@ -1515,7 +1563,8 @@ def _build_export_payload(user):
         "stageReviews": [{'project': str(review.project_id), 'stage': review.stage, 'decision': review.decision, 'note': review.note, 'snapshot': review.snapshot, 'reviewed_at': review.reviewed_at} for review in StageReview.objects.filter(project__owner=user)],
         "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
         "cronJobs": CronJobSerializer(CronJob.objects.filter(owner=user), many=True).data,
-        "settings": {"potentialProjectsRoot": user.potential_projects_root or ''},
+        "automationPrompts": AutomationPromptSerializer(automation_prompts, many=True).data,
+        "settings": {"potentialProjectsRoot": user.potential_projects_root or '', "automationResultsRoot": getattr(user, 'automation_results_root', '') or ''},
     }
 
 
@@ -1540,6 +1589,7 @@ def _wipe_workspace_data(user):
     TimeEntry.objects.filter(owner=user).delete()
     ProjectDoc.objects.filter(owner=user).delete()
     LauncherModelPreset.objects.filter(owner=user).delete()
+    AutomationPrompt.objects.filter(owner=user).delete()
     CronJob.objects.filter(owner=user).delete()
     DailyFocus.objects.filter(owner=user).delete()
     StageChecklistDefault.objects.filter(owner=user).delete()
@@ -1548,6 +1598,9 @@ def _wipe_workspace_data(user):
     if user.potential_projects_root:
         user.potential_projects_root = ''
         user.save(update_fields=['potential_projects_root'])
+    if getattr(user, 'automation_results_root', ''):
+        user.automation_results_root = ''
+        user.save(update_fields=['automation_results_root'])
 
 
 def _cloud_backup_meta(backup):
@@ -1587,6 +1640,7 @@ def reset_workspace_view(request):
             'stageReviews': StageReview.objects.filter(project__owner=user).count(),
             'modelPresets': LauncherModelPreset.objects.filter(owner=user).count(),
             'cronJobs': CronJob.objects.filter(owner=user).count(),
+            'automationPrompts': AutomationPrompt.objects.filter(owner=user).count(),
         }
 
         _wipe_workspace_data(user)
@@ -1598,7 +1652,7 @@ def _perform_import(user, data):
     """Shared additive import used by manual import and cloud restore."""
     if not isinstance(data, dict):
         raise ValueError('Invalid backup format.')
-    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "stageWorkspaces": 0, "checklistDefaults": 0, "dailyFocuses": 0, "stageReviews": 0, "modelPresets": 0, "settings": 0}
+    imported = {"projects": 0, "tasks": 0, "ideas": 0, "timeEntries": 0, "docs": 0, "stageWorkspaces": 0, "checklistDefaults": 0, "dailyFocuses": 0, "stageReviews": 0, "modelPresets": 0, "automationPrompts": 0, "settings": 0}
     project_id_map = {}
     milestone_id_map = {}
     task_id_map = {}
@@ -1620,6 +1674,22 @@ def _perform_import(user, data):
                     if (os.path.isabs(normalized) or windows_abs) and not any(ord(ch) < 32 for ch in normalized) and (not os.path.exists(normalized) or os.path.isdir(normalized)):
                         user.potential_projects_root = normalized
                         user.save(update_fields=['potential_projects_root'])
+                        imported['settings'] = 1
+        if 'automationResultsRoot' in settings_data or 'automation_results_root' in settings_data:
+            raw_auto = settings_data.get('automationResultsRoot', settings_data.get('automation_results_root'))
+            if isinstance(raw_auto, str):
+                value = raw_auto.strip()
+                if not value:
+                    user.automation_results_root = ''
+                    user.save(update_fields=['automation_results_root'])
+                    imported['settings'] = 1
+                else:
+                    normalized_candidate = os.path.expanduser(value.strip('"').strip("'"))
+                    normalized = os.path.abspath(normalized_candidate) if os.path.isabs(normalized_candidate) else normalized_candidate
+                    windows_abs = bool(re.match(r'^[A-Za-z]:[\\/]', normalized_candidate) or normalized_candidate.startswith('\\\\'))
+                    if (os.path.isabs(normalized) or windows_abs) and not any(ord(ch) < 32 for ch in normalized) and (not os.path.exists(normalized) or os.path.isdir(normalized)):
+                        user.automation_results_root = normalized
+                        user.save(update_fields=['automation_results_root'])
                         imported['settings'] = 1
         # Projects with milestones
         if 'projects' in data and isinstance(data['projects'], list):
@@ -2030,6 +2100,23 @@ def _perform_import(user, data):
                     ),
                 )
                 imported['cronJobs'] += 1
+        # Automation prompts (reusable markdown library; snapshot-copied into jobs)
+        raw_prompts = data.get('automationPrompts', data.get('automation_prompts', []))
+        if isinstance(raw_prompts, list):
+            for entry in raw_prompts:
+                if not isinstance(entry, dict):
+                    continue
+                title = str(entry.get('title') or '').strip()[:200]
+                content = str(entry.get('content') or '').strip()
+                if len(title) < 3 or len(content) < 10:
+                    continue
+                existing = AutomationPrompt.objects.filter(owner=user, title__iexact=title).first()
+                if existing:
+                    existing.content = content
+                    existing.save(update_fields=['content', 'updated_at'])
+                else:
+                    AutomationPrompt.objects.create(owner=user, title=title, content=content)
+                imported['automationPrompts'] += 1
     return imported
 
 
@@ -2331,4 +2418,141 @@ def filesystem_browse(request):
         "parent": parent,
         "entries": entries,
         "is_roots": False,
+    })
+
+
+WINDOWS_RESERVED_NAMES = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+
+
+def _validate_new_folder_name(raw):
+    name = str(raw or '').strip().strip('"').strip("'")
+    if not name or len(name) > 180:
+        return None, 'Enter a folder name (1-180 characters).'
+    if '/' in name or '\\' in name or any(ord(ch) < 32 for ch in name):
+        return None, 'Folder name must not contain path separators.'
+    if re.search(r'[<>:"|?*]', name):
+        return None, 'Folder name contains invalid characters.'
+    if name.rstrip(' .') == '' or name != name.strip(' .') and name.strip(' .') == '':
+        return None, 'Enter a folder name.'
+    clean = name.rstrip(' .')
+    if not clean:
+        return None, 'Enter a folder name.'
+    if clean.upper().split('.')[0] in WINDOWS_RESERVED_NAMES:
+        return None, 'That name is reserved by Windows.'
+    return clean, None
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def filesystem_mkdir(request):
+    """Create one folder level inside an existing directory for the path picker.
+
+    POST /api/filesystem/mkdir/ { path: <existing parent dir>, name: <new folder> }
+    Returns: { path } of the created (or already-existing) directory.
+    """
+    raw_parent = request.data.get('path')
+    if not isinstance(raw_parent, str) or not raw_parent.strip():
+        return Response({'path': ['Choose the parent folder first.']}, status=status.HTTP_400_BAD_REQUEST)
+    parent = os.path.abspath(os.path.expanduser(raw_parent.strip().strip('"').strip("'")))
+    drive_root = _drive_root_for_path(parent)
+    if drive_root:
+        mounted_roots = _list_drive_roots()
+        if drive_root not in mounted_roots:
+            return Response({'path': [f'The drive {drive_root[:2]} is unavailable.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not os.path.isabs(parent):
+        return Response({'path': ['Parent path must be absolute.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not os.path.isdir(parent):
+        return Response({'path': ['Parent folder does not exist.']}, status=status.HTTP_400_BAD_REQUEST)
+    name, name_error = _validate_new_folder_name(request.data.get('name'))
+    if name_error:
+        return Response({'name': [name_error]}, status=status.HTTP_400_BAD_REQUEST)
+    target = os.path.join(parent, name)
+    try:
+        if os.path.exists(target) and not os.path.isdir(target):
+            return Response({'name': ['A file with that name already exists.']}, status=status.HTTP_400_BAD_REQUEST)
+        os.makedirs(target, exist_ok=True)
+    except PermissionError:
+        return Response({'name': ['Permission denied for that location.']}, status=status.HTTP_403_FORBIDDEN)
+    except OSError:
+        return Response({'name': ['Could not create the folder there.']}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'path': target}, status=status.HTTP_201_CREATED)
+
+
+RESULT_TEXT_EXTS = frozenset({
+    '.md', '.markdown', '.txt', '.json', '.jsonl', '.csv', '.tsv', '.log',
+    '.yaml', '.yml', '.xml', '.html', '.htm', '.css', '.js', '.ts', '.tsx',
+    '.py', '.cfg', '.ini', '.toml',
+})
+RESULT_IMAGE_EXTS = frozenset({'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'})
+RESULT_TEXT_CAP = 200 * 1024
+RESULT_IMAGE_CAP = 8 * 1024 * 1024
+
+
+def _automation_roots_for(user):
+    """Absolute working directories (plus results root) this user may preview."""
+    roots = []
+    try:
+        for job in CronJob.objects.filter(owner=user).only('working_directory'):
+            raw = (job.working_directory or '').strip().strip('"').strip("'")
+            if raw:
+                roots.append(os.path.abspath(os.path.expanduser(raw)))
+    except Exception:
+        pass
+    configured = str(getattr(user, 'automation_results_root', '') or '').strip()
+    if configured:
+        roots.append(os.path.abspath(os.path.expanduser(configured)))
+    return roots
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def file_content_view(request):
+    """Preview one automation result file inside the app.
+
+    GET /api/files/content/?path=<absolute file path>
+    Restricted to the caller's automation working directories (plus the
+    default results folder). Text kinds are capped at 200KB, images at 8MB.
+    """
+    raw = (request.query_params.get('path') or '').strip().strip('"').strip("'")
+    if not raw or not os.path.isabs(raw):
+        return Response({'error': 'Provide an absolute file path.'}, status=400)
+    current = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isfile(current):
+        return Response({'error': 'File does not exist.'}, status=404)
+    roots = _automation_roots_for(request.user)
+    if not any(current == root or current.startswith(root + os.sep) for root in roots):
+        return Response({'error': 'File is outside your automation folders.'}, status=403)
+    try:
+        size = os.path.getsize(current)
+    except OSError:
+        return Response({'error': 'Could not read the file.'}, status=400)
+    ext = os.path.splitext(current)[1].lower()
+    if ext in RESULT_IMAGE_EXTS:
+        if size > RESULT_IMAGE_CAP:
+            return Response({'error': 'Image is too large to preview.'}, status=413)
+        import base64 as _b64
+        import mimetypes as _mime
+        try:
+            with open(current, 'rb') as handle:
+                blob = handle.read()
+        except OSError:
+            return Response({'error': 'Could not read the file.'}, status=400)
+        mime = _mime.guess_type(current)[0] or 'application/octet-stream'
+        return Response({
+            'kind': 'image', 'name': os.path.basename(current), 'path': current,
+            'size': size, 'mime': mime,
+            'data_url': f'data:{mime};base64,{_b64.b64encode(blob).decode("ascii")}',
+        })
+    if ext not in RESULT_TEXT_EXTS:
+        return Response({'error': f'Preview is not supported for {ext or "this file type"}.'}, status=415)
+    try:
+        with open(current, 'r', encoding='utf-8', errors='replace') as handle:
+            text = handle.read(RESULT_TEXT_CAP + 1)
+    except OSError:
+        return Response({'error': 'Could not read the file.'}, status=400)
+    truncated = len(text) > RESULT_TEXT_CAP
+    return Response({
+        'kind': 'text', 'name': os.path.basename(current), 'path': current,
+        'size': size, 'truncated': truncated,
+        'content': text[:RESULT_TEXT_CAP],
     })
