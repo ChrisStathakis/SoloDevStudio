@@ -15,7 +15,6 @@ import {
   Download,
   Loader2
 } from 'lucide-react';
-import { STAGE_CONFIG } from '../types';
 import { api } from '../services/api';
 import { PageHeader, EmptyState, Button } from './ui';
 import { getDaysRemaining } from '../utils/dates';

@@ -13,3 +13,4 @@ export const queryClient = new QueryClient({
 
 export const ideaCategoriesKey = ['idea-categories'] as const;
 export const agentFiltersKey = ['agent-filters'] as const;
+export const workflowStagesKey = ['workflow-stages'] as const;

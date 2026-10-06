@@ -122,6 +122,8 @@ export const AutomationsView: React.FC = () => {
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const [folderMsg, setFolderMsg] = useState<Record<string, string>>({});
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
+  const [copiedRunId, setCopiedRunId] = useState<string | null>(null);
 
   const loadFiles = useCallback(async (jobId: string, runId?: string, subpath?: string) => {
     const effectiveRun = runId ?? highlightRunId[jobId];
@@ -825,6 +827,17 @@ export const AutomationsView: React.FC = () => {
                       : (run.status === 'failed' || run.status === 'timeout' || run.status === 'needs_attention')
                         ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
                         : 'bg-slate-500/15 text-slate-500';
+                    const expanded = !!expandedRuns[run.id];
+                    const toggleExpanded = () => setExpandedRuns(m => ({ ...m, [run.id]: !m[run.id] }));
+                    const copyTail = async () => {
+                      try {
+                        await navigator.clipboard.writeText(run.output_tail || '');
+                        setCopiedRunId(run.id);
+                        window.setTimeout(() => setCopiedRunId(c => (c === run.id ? null : c)), 1500);
+                      } catch {
+                        /* clipboard unavailable */
+                      }
+                    };
                     return (
                     <div key={run.id} className="rounded-xl border border-line bg-surface-2 p-2.5">
                       <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -837,12 +850,39 @@ export const AutomationsView: React.FC = () => {
                             ? <button type="button" onClick={() => stopWatching(run.id)} className="font-bold text-content-faint hover:text-content">Hide live</button>
                             : <button type="button" onClick={() => startWatching(run)} className="font-bold text-indigo-600 dark:text-indigo-300">Watch live</button>
                         )}
+                        <button type="button" onClick={toggleExpanded} aria-expanded={expanded} className="font-bold text-indigo-600 hover:underline dark:text-indigo-300">{expanded ? 'Hide' : 'Details'}</button>
                         <button type="button" onClick={() => deleteRun(job.id, run.id)} className="ml-auto font-bold text-rose-600 dark:text-rose-400">Delete</button>
                       </div>
-                      {summary && <p className="mt-1.5 text-xs leading-relaxed text-content">{summary}</p>}
+                      {summary && <p className={`mt-1.5 text-xs leading-relaxed text-content ${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>{summary}</p>}
                       {isActive && !liveSession && <div className="mt-1 text-[11px] text-content-faint">No live session — the run started with the app closed or already finished its terminal.</div>}
-                      {run.failure_reason && <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{run.failure_reason}</div>}
-                      {run.output_tail && (
+                      {run.failure_reason && <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{expanded ? run.failure_reason : run.failure_reason.slice(0, 220)}</div>}
+                      {expanded && (
+                        <div className="mt-2 space-y-2 border-t border-line pt-2">
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-content-faint">
+                            {run.started_at && <span>started: {new Date(run.started_at).toLocaleString()}</span>}
+                            {run.finished_at && <span>finished: {new Date(run.finished_at).toLocaleString()}</span>}
+                            <span>trigger: {run.trigger}</span>
+                          </div>
+                          {Object.keys(result).length > 0 && (
+                            <details open>
+                              <summary className="cursor-pointer text-[11px] font-bold text-content-faint hover:text-content">Result JSON</summary>
+                              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-content-muted">{JSON.stringify(result, null, 2)}</pre>
+                            </details>
+                          )}
+                          {run.output_tail ? (
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-bold text-content-faint">Console output</span>
+                                <button type="button" onClick={copyTail} className="text-[11px] font-bold text-indigo-600 dark:text-indigo-300">{copiedRunId === run.id ? 'Copied!' : 'Copy'}</button>
+                              </div>
+                              <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-content-muted">{run.output_tail}</pre>
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-content-faint">No console output captured.</div>
+                          )}
+                        </div>
+                      )}
+                      {!expanded && run.output_tail && (
                         <details className="mt-1.5">
                           <summary className="cursor-pointer text-[11px] font-bold text-content-faint hover:text-content">Console output</summary>
                           <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-content-muted">{run.output_tail.slice(-1500)}</pre>

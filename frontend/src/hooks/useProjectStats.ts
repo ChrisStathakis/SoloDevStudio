@@ -1,4 +1,4 @@
-import { ProjectStage, STAGE_CONFIG } from '../types';
+import { ProjectStage, stageOrderFor } from '../types';
 import { useMemo } from 'react';
 
 export function useProjectStats(
@@ -18,5 +18,5 @@ export function useProjectStats(
 }
 
 export function stageOrder(stage: ProjectStage): number {
-  return STAGE_CONFIG[stage].order;
+  return stageOrderFor(stage);
 }

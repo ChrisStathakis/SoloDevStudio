@@ -20,7 +20,8 @@ import {
   BarChart3,
   GripVertical
 } from 'lucide-react';
-import { STAGE_CONFIG, ProjectStage } from '../types';
+import { STAGE_CONFIG, stageLabelFor } from '../types';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 import { api } from '../services/api';
 import { PageHeader, Button } from './ui';
 import { TodayFocusCard } from './TodayFocusCard';
@@ -38,6 +39,7 @@ export const DashboardView: React.FC = () => {
     openQuickAdd,
     reorderProjects
   } = useApp();
+  const { stages, activeStages, orderFor } = useWorkflowStages();
 
   // Metrics calculations
   // projects arrive pre-sorted by manual sort_order (AppContext); active pipeline respects that order.
@@ -145,7 +147,7 @@ export const DashboardView: React.FC = () => {
           </div>
           {Object.entries(serverDashboard.stageTimeMap).slice(0, 5).map(([stage, secs]) => (
             <span key={stage} className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-surface-2 border border-slate-200 dark:border-line font-mono font-bold text-slate-600 dark:text-content-faint">
-              {STAGE_CONFIG[stage as ProjectStage]?.label || stage}: {(Number(secs)/3600).toFixed(1)}h
+              {stageLabelFor(stage, stages)}: {(Number(secs)/3600).toFixed(1)}h
             </span>
           ))}
           <span className="text-content-faint font-mono ml-auto">{serverDashboard.totalHoursWeek}h this week (server)</span>
@@ -310,7 +312,8 @@ export const DashboardView: React.FC = () => {
               const projTasks = tasks.filter(t => t.projectId === project.id);
               const projDone = projTasks.filter(t => t.completed).length;
               const progressPct = projTasks.length > 0 ? Math.round((projDone / projTasks.length) * 100) : 0;
-              const stageInfo = STAGE_CONFIG[project.currentStage];
+              const stageInfo = STAGE_CONFIG[project.currentStage] ?? STAGE_CONFIG.development;
+              const stageLabel = stageLabelFor(project.currentStage, stages);
               
               // Project total focus time
               const projectTimeSeconds = timeEntries
@@ -404,7 +407,7 @@ export const DashboardView: React.FC = () => {
 
                     <div className="flex items-center gap-2 shrink-0">
                       <span className={`text-[13px] font-bold px-2.5 py-1 rounded-lg border ${stageInfo.bgLight} ${stageInfo.bgDark}`}>
-                        {stageInfo.label}
+                        {stageLabel}
                       </span>
                       <span className="text-[13px] text-slate-600 dark:text-content-faint px-2 py-0.5 bg-slate-100 dark:bg-surface-3/80 border border-slate-200 dark:border-line-strong/50 rounded-md font-medium font-mono">
                         {project.category}
@@ -414,13 +417,12 @@ export const DashboardView: React.FC = () => {
 
                   {/* Stage Progress Roadmap Dots */}
                   <div className="grid grid-cols-7 gap-1.5 my-3">
-                    {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map((stg) => {
-                      const cfg = STAGE_CONFIG[stg];
-                      const isCurrent = project.currentStage === stg;
-                      const isPassed = cfg.order < stageInfo.order;
+                    {activeStages.map((stg) => {
+                      const isCurrent = project.currentStage === stg.key;
+                      const isPassed = stg.order < orderFor(project.currentStage);
 
                       return (
-                        <div key={stg} className="text-center group/stage relative">
+                        <div key={stg.key} className="text-center group/stage relative">
                           <div
                             className={`h-1.5 rounded-full transition-all ${
                               isCurrent
@@ -431,7 +433,7 @@ export const DashboardView: React.FC = () => {
                             }`}
                           />
                           <span className="text-[13px] text-content-faint dark:text-content-faint hidden sm:block truncate mt-1 font-mono">
-                            {cfg.label.split(' ')[0]}
+                            {stg.label.split(' ')[0]}
                           </span>
                         </div>
                       );
@@ -532,7 +534,7 @@ export const DashboardView: React.FC = () => {
                             {proj?.title}
                           </span>
                           <span className="text-[12px] text-content-faint dark:text-content-faint font-mono">
-                            {STAGE_CONFIG[task.stage]?.label}
+                            {stageLabelFor(task.stage, stages)}
                           </span>
                         </div>
                       </div>

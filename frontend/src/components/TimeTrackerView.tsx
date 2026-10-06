@@ -18,7 +18,8 @@ import {
   Layers,
   CheckSquare
 } from 'lucide-react';
-import { STAGE_CONFIG, ProjectStage, TimeEntry } from '../types';
+import { TimeEntry } from '../types';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 import { PageHeader, Button } from './ui';
 import { useToast } from './Toaster';
 
@@ -85,10 +86,11 @@ export const TimeTrackerView: React.FC = () => {
   });
 
   // Stage time breakdown
-  const stageTimeMap: { [stage in ProjectStage]?: number } = {};
+  const stageTimeMap: Record<string, number> = {};
   timeEntries.forEach(entry => {
     stageTimeMap[entry.stage] = (stageTimeMap[entry.stage] || 0) + entry.durationSeconds;
   });
+  const { activeStages } = useWorkflowStages();
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -397,18 +399,18 @@ export const TimeTrackerView: React.FC = () => {
                 By Lifecycle Stage
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(stg => {
-                  const sec = stageTimeMap[stg] || 0;
+                {activeStages.map(stg => {
+                  const sec = stageTimeMap[stg.key] || 0;
                   const mins = Math.round(sec / 60);
                   if (mins === 0) return null;
 
                   return (
                     <div
-                      key={stg}
+                      key={stg.key}
                       className="p-3 rounded-2xl bg-surface-3 border border-line text-xs"
                     >
                       <div className="text-[12px] text-content-faint uppercase font-black tracking-wider">
-                        {STAGE_CONFIG[stg].label}
+                        {stg.label}
                       </div>
                       <div className="font-black text-content font-mono text-sm mt-1">
                         {mins >= 60 ? `${(mins / 60).toFixed(1)}h` : `${mins}m`}

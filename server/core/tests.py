@@ -923,6 +923,61 @@ class StageWorkspaceTests(APITestCase):
         self.assertEqual(review.data['review']['decision'], StageReview.CONTINUE)
 
 
+class StageDefinitionTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='stage-owner', email='stage-owner@example.com', password='test-password-123')
+        self.other_user = User.objects.create_user(username='stage-other', email='stage-other@example.com', password='test-password-123')
+        self.client.force_authenticate(self.user)
+
+    def test_get_seeds_seven_builtin_defaults(self):
+        response = self.client.get('/api/settings/stages/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['stages']), 7)
+        self.assertTrue(all(stage['is_builtin'] and stage['is_active'] for stage in response.data['stages']))
+
+    def test_crud_custom_stage(self):
+        created = self.client.post('/api/settings/stages/', {'label': 'User Research', 'description': 'Discovery', 'color': '#ff0000'}, format='json')
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.data['key'], 'user-research')
+        renamed = self.client.patch('/api/settings/stages/user-research/', {'label': 'Discovery Research'}, format='json')
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.data['label'], 'Discovery Research')
+        self.assertEqual(renamed.data['key'], 'user-research')
+        deleted = self.client.delete('/api/settings/stages/user-research/')
+        self.assertEqual(deleted.status_code, 200)
+
+    def test_hide_builtin_in_use_requires_migration(self):
+        project = Project.objects.create(owner=self.user, title='Stage project', target_deadline=date(2026, 12, 1), start_date=date(2026, 1, 1), current_stage='testing')
+        Task.objects.create(project=project, title='QA pass', stage='testing')
+        blocked = self.client.patch('/api/settings/stages/testing/', {'is_active': False}, format='json')
+        self.assertEqual(blocked.status_code, 409)
+        moved = self.client.patch('/api/settings/stages/testing/', {'is_active': False, 'migrate_to': 'development'}, format='json')
+        self.assertEqual(moved.status_code, 200)
+        self.assertFalse(moved.data['is_active'])
+        project.refresh_from_db()
+        self.assertEqual(project.current_stage, 'development')
+
+    def test_reorder_and_reset(self):
+        self.client.post('/api/settings/stages/', {'label': 'Spike'}, format='json')
+        ordered = self.client.post('/api/settings/stages/reorder/', {'ordered_keys': ['live', 'deployment', 'testing', 'development', 'architecture', 'planning', 'ideation', 'spike']}, format='json')
+        self.assertEqual(ordered.status_code, 200)
+        self.assertEqual(ordered.data['stages'][0]['key'], 'live')
+        reset = self.client.post('/api/settings/stages/reset/')
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(len(reset.data['stages']), 7)
+        self.assertEqual(reset.data['stages'][0]['label'], 'Ideation')
+
+    def test_definitions_are_owner_scoped(self):
+        self.client.force_authenticate(self.other_user)
+        response = self.client.get('/api/settings/stages/')
+        self.assertEqual(len(response.data['stages']), 7)
+        renamed = self.client.patch('/api/settings/stages/testing/', {'label': 'Other QA'}, format='json')
+        self.assertEqual(renamed.status_code, 200)
+        self.client.force_authenticate(self.user)
+        own = self.client.get('/api/settings/stages/testing/')
+        self.assertEqual(own.data['label'], 'Testing & QA')
+
+
 class LauncherModelPresetTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='preset-owner', email='preset-owner@example.com', password='test-password-123')

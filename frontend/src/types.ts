@@ -1,11 +1,12 @@
-export type ProjectStage = 
-  | 'ideation' 
-  | 'planning' 
-  | 'architecture' 
-  | 'development' 
-  | 'testing' 
-  | 'deployment' 
-  | 'live';
+export type ProjectStage =
+  | 'ideation'
+  | 'planning'
+  | 'architecture'
+  | 'development'
+  | 'testing'
+  | 'deployment'
+  | 'live'
+  | (string & {});
 
 export type PriorityQuadrant = 
   | 'q1_do'         // Urgent & Important
@@ -467,7 +468,7 @@ export interface AutomationPrompt {
   updated_at: string;
 }
 
-export const STAGE_CONFIG: Record<ProjectStage, { label: string; order: number; color: string; bgLight: string; bgDark: string; description: string }> = {
+export const STAGE_CONFIG: Record<string, { label: string; order: number; color: string; bgLight: string; bgDark: string; description: string }> = {
   ideation: {
     label: 'Ideation',
     order: 1,
@@ -525,6 +526,56 @@ export const STAGE_CONFIG: Record<ProjectStage, { label: string; order: number; 
     description: 'Production monitoring, user feedback & iterations'
   }
 };
+
+export interface WorkflowStage {
+  id: string;
+  key: string;
+  label: string;
+  description: string;
+  color: string;
+  order: number;
+  isActive: boolean;
+  isBuiltin: boolean;
+  builtinKey: string;
+  usage?: { projects: number; tasks: number; milestones: number; timeEntries: number };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export function mapWorkflowStageFromApi(row: any): WorkflowStage {
+  return {
+    id: String(row.id ?? row.key ?? ''),
+    key: String(row.key ?? ''),
+    label: String(row.label ?? row.key ?? ''),
+    description: String(row.description ?? ''),
+    color: String(row.color ?? '#6366f1'),
+    order: Number(row.order ?? 0),
+    isActive: row.is_active ?? row.isActive ?? true,
+    isBuiltin: row.is_builtin ?? row.isBuiltin ?? false,
+    builtinKey: String(row.builtin_key ?? row.builtinKey ?? ''),
+    usage: row.usage ? {
+      projects: Number(row.usage.projects ?? 0),
+      tasks: Number(row.usage.tasks ?? 0),
+      milestones: Number(row.usage.milestones ?? 0),
+      timeEntries: Number(row.usage.timeEntries ?? row.usage.time_entries ?? 0),
+    } : undefined,
+    createdAt: row.created_at ?? row.createdAt,
+    updatedAt: row.updated_at ?? row.updatedAt,
+  };
+}
+
+/** Fallback label/order lookups that keep working for unknown or offline stages. */
+export function stageLabelFor(key: string, stages?: Pick<WorkflowStage, 'key' | 'label'>[]): string {
+  const found = (stages || []).find(s => s.key === key);
+  if (found) return found.label;
+  return STAGE_CONFIG[key]?.label || key;
+}
+
+export function stageOrderFor(key: string, stages?: Pick<WorkflowStage, 'key' | 'order'>[]): number {
+  const found = (stages || []).find(s => s.key === key);
+  if (found) return found.order;
+  return STAGE_CONFIG[key]?.order ?? 999;
+}
 
 export const QUADRANT_CONFIG: Record<PriorityQuadrant, { title: string; subtitle: string; tag: string; color: string; badgeClass: string; borderClass: string; bgClass: string }> = {
   q1_do: {

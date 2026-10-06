@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Save, X } from 'lucide-react';
-import { AppCategory, Project, ProjectStage, STAGE_CONFIG } from '../types';
+import { AppCategory, Project, ProjectStage } from '../types';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 import { PathPickerModal } from './PathPickerModal';
 
 const CATEGORIES: AppCategory[] = [
@@ -137,6 +138,7 @@ export function ProjectEditor({ project, saving, error, onSave, onCancel }: {
 }) {
   const [draft, setDraft] = useState<ProjectDraft>(() => draftFromProject(project));
   const [pathPicker, setPathPicker] = useState<null | 'directoryPath' | 'scriptPath' | 'cmdDirectory' | 'pythonEnv'>(null);
+  const { activeStages } = useWorkflowStages();
 
   useEffect(() => setDraft(draftFromProject(project)), [project.id]);
   const set = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => setDraft(previous => ({ ...previous, [key]: value }));
@@ -176,7 +178,7 @@ export function ProjectEditor({ project, saving, error, onSave, onCancel }: {
         <h3 className="text-xs font-black uppercase tracking-[0.18em] text-content font-mono">Planning</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <label><span className={labelClass}>Category</span><select className={fieldClass} value={draft.category} onChange={event => set('category', event.target.value as AppCategory)}>{CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>
-          <label><span className={labelClass}>Lifecycle stage</span><select className={fieldClass} value={draft.currentStage} onChange={event => set('currentStage', event.target.value as ProjectStage)}>{(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(stage => <option key={stage} value={stage}>{STAGE_CONFIG[stage].label}</option>)}</select></label>
+          <label><span className={labelClass}>Lifecycle stage</span><select className={fieldClass} value={draft.currentStage} onChange={event => set('currentStage', event.target.value as ProjectStage)}>{!activeStages.some(s => s.key === draft.currentStage) && <option value={draft.currentStage}>Current: {draft.currentStage}</option>}{activeStages.map(stage => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>
           <label><span className={labelClass}>Start date</span><input required type="date" className={fieldClass} value={draft.startDate} onChange={event => set('startDate', event.target.value)} /></label>
           <label><span className={labelClass}>Target deadline</span><input required type="date" className={fieldClass} value={draft.targetDeadline} onChange={event => set('targetDeadline', event.target.value)} /></label>
         </div>

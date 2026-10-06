@@ -1,6 +1,7 @@
 import React from 'react';
-import { STAGE_CONFIG, type ProjectStage } from '../types';
+import type { ProjectStage } from '../types';
 import { CONTEXT_SECTIONS, type ContextSection } from '../services/projectContext';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 
 export interface ContextSelectionValue {
   stages: string[];
@@ -17,14 +18,14 @@ const SECTION_LABELS: Record<ContextSection, string> = {
   git: 'Git status',
 };
 
-const ALL_STAGES = Object.keys(STAGE_CONFIG) as ProjectStage[];
-
 export const ProjectContextPicker: React.FC<{
   currentStage: ProjectStage;
   value: ContextSelectionValue;
   onChange: (next: ContextSelectionValue) => void;
   compact?: boolean;
 }> = ({ currentStage, value, onChange, compact }) => {
+  const { stages } = useWorkflowStages();
+  const ALL_STAGES = stages.map(s => s.key);
   const toggleStage = (stage: string) => {
     const next = value.stages.includes(stage)
       ? value.stages.filter(s => s !== stage)
@@ -63,20 +64,20 @@ export const ProjectContextPicker: React.FC<{
           </span>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {ALL_STAGES.map(stage => {
-            const active = value.stages.includes(stage);
+          {stages.map(item => {
+            const active = value.stages.includes(item.key);
             return (
               <button
-                key={stage}
+                key={item.key}
                 type="button"
-                onClick={() => toggleStage(stage)}
+                onClick={() => toggleStage(item.key)}
                 aria-pressed={active}
-                title={STAGE_CONFIG[stage].description}
+                title={item.description}
                 className={`${chip} font-mono ${active
                   ? 'bg-indigo-600 border-indigo-600 text-white'
                   : 'bg-surface-2 border-line text-content-faint hover:text-content'}`}
               >
-                {STAGE_CONFIG[stage].label}{stage === currentStage ? ' · current' : ''}
+                {item.label}{item.key === currentStage ? ' · current' : ''}
               </button>
             );
           })}

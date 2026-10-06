@@ -102,8 +102,8 @@ def orchestrator_runs(request, pk=None):
     phase_mode = str(data.get('phase_mode') or 'goal').strip().lower()
     if phase_mode not in ('goal', 'goal_and_phases'):
         return Response({'phase_mode': "Must be 'goal' or 'goal_and_phases'."}, status=status.HTTP_400_BAD_REQUEST)
-    from .models import ProjectStage
-    valid_stages = [value for value, _label in ProjectStage.choices]
+    from .stage_definitions import valid_stage_keys
+    valid_stages = sorted(valid_stage_keys(request.user))
     phase_stages: list[str] = []
     phase_sections: list[str] = []
     phase_brief = ''

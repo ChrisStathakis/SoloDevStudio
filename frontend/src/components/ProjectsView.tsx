@@ -47,6 +47,7 @@ import {
   Send
 } from 'lucide-react';
 import { ProjectStage, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, Project, PriorityQuadrant, TaskCategory, LauncherModelPreset } from '../types';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 import { api } from '../services/api';
 import { downloadPdf } from '../services/pdfDownload';
 import { DocsTab } from './DocsTab';
@@ -152,6 +153,7 @@ export const ProjectsView: React.FC = () => {
     reorderProjects
   } = useApp();
   const { toast, confirm } = useToast();
+  const { activeStages, labelFor, orderFor } = useWorkflowStages();
 
   const [selectedStageFilter, setSelectedStageFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
@@ -733,7 +735,8 @@ export const ProjectsView: React.FC = () => {
     const projTasks = tasks.filter(t => t.projectId === project.id);
     const projDone = projTasks.filter(t => t.completed).length;
     const progressPct = projTasks.length > 0 ? Math.round((projDone / projTasks.length) * 100) : 0;
-    const stageInfo = STAGE_CONFIG[project.currentStage];
+    const stageInfo = STAGE_CONFIG[project.currentStage] ?? STAGE_CONFIG.development;
+    const stageLabel = labelFor(project.currentStage);
     const daysRemaining = getDaysRemaining(project.targetDeadline);
 
     return (
@@ -745,7 +748,7 @@ export const ProjectsView: React.FC = () => {
         <div>
           <div className="flex items-center justify-between gap-2 mb-3">
             <span className={`text-[12px] font-black uppercase px-2.5 py-0.5 rounded-md border ${stageInfo.bgLight} ${stageInfo.bgDark}`}>
-              {stageInfo.label}
+              {stageLabel}
             </span>
             <span className="text-[12px] text-content-faint bg-surface-2 border border-line px-2 py-0.5 rounded-md font-mono font-semibold">
               {project.category}
@@ -1487,8 +1490,8 @@ export const ProjectsView: React.FC = () => {
           All Stages ({projects.length})
         </button>
 
-        {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(stageKey => {
-          const cfg = STAGE_CONFIG[stageKey];
+        {activeStages.map(stage => {
+          const stageKey = stage.key;
           const count = projects.filter(p => p.currentStage === stageKey).length;
           const isSelected = selectedStageFilter === stageKey;
 
@@ -1503,7 +1506,7 @@ export const ProjectsView: React.FC = () => {
                   : 'bg-surface-2 border border-line text-content-faint hover:text-content hover:border-line-strong'
               }`}
             >
-              <span>{cfg.label}</span>
+              <span>{stage.label}</span>
               {count > 0 && (
                 <span className={`text-[12px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
                   isSelected ? 'bg-indigo-700 text-white' : 'bg-surface-3 text-content-faint'
@@ -1958,10 +1961,10 @@ export const ProjectsView: React.FC = () => {
               </div>
 
               <ProjectStageStepper project={activeProject} onAdvance={(stg) => void (async () => {
-                const isBackward = STAGE_CONFIG[stg].order < STAGE_CONFIG[activeProject.currentStage].order;
+                const isBackward = orderFor(stg) < orderFor(activeProject.currentStage);
                 if (isBackward) {
                   const ok = await confirm({
-                    title: `Move back to ${STAGE_CONFIG[stg].label}?`,
+                    title: `Move back to ${labelFor(stg)}?`,
                     description: `Progress in later stages is kept, but focus for "${activeProject.title}" shifts back.`,
                     confirmLabel: 'Move back',
                   });
@@ -2294,7 +2297,7 @@ export const ProjectsView: React.FC = () => {
                             {ms.targetDate}
                           </div>
                           <span className="text-[12px] text-indigo-600 dark:text-indigo-400 font-bold">
-                            {STAGE_CONFIG[ms.stage]?.label}
+                            {labelFor(ms.stage)}
                           </span>
                           <div className="flex items-center justify-end gap-2 mt-2">
                             <button type="button" onClick={() => setMilestoneEditor({ milestone: ms })} className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 hover:text-indigo-200">Edit</button>

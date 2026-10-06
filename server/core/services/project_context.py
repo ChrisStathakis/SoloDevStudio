@@ -127,11 +127,12 @@ def build_project_context(project, user, stages, sections, max_chars=DEFAULT_MAX
 
     lines = []
     if 'brief' in sections:
+        from ..stage_definitions import stage_label as _stage_label
         lines.append(f'# {project.title}')
         if project.tagline:
             lines.append(f'> {project.tagline.strip()}')
         lines.append('')
-        lines.append(f'- Stage: {project.get_current_stage_display()} ({project.current_stage})')
+        lines.append(f'- Stage: {_stage_label(user, project.current_stage)} ({project.current_stage})')
         lines.append(f'- Category: {project.get_category_display()}')
         if project.target_deadline:
             lines.append(f'- Deadline: {project.target_deadline.isoformat()}')

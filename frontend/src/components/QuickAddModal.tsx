@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { ProjectStage, PriorityQuadrant, AppCategory, IdeaStatus, TaskCategory } from '../types';
 import { useIdeaCategories } from '../hooks/useIdeaCategories';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 import { Dialog } from './ui';
 
 export const QuickAddModal: React.FC = () => {
@@ -37,6 +38,7 @@ export const QuickAddModal: React.FC = () => {
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'task' | 'project' | 'idea' | 'timer'>('task');
+  const { activeStages } = useWorkflowStages();
 
   // Task form state
   const [taskTitle, setTaskTitle] = useState('');
@@ -477,13 +479,7 @@ export const QuickAddModal: React.FC = () => {
                     onChange={e => setTaskStage(e.target.value as ProjectStage)}
                     className="w-full px-3 py-2 text-xs bg-surface-2 border border-line rounded-xl text-content focus:border-indigo-500 outline-none font-bold"
                   >
-                    <option value="ideation">Ideation</option>
-                    <option value="planning">Planning</option>
-                    <option value="architecture">Architecture</option>
-                    <option value="development">Development</option>
-                    <option value="testing">Testing</option>
-                    <option value="deployment">Deployment</option>
-                    <option value="live">Live</option>
+                    {activeStages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
                   </select>
                 </div>
 
@@ -639,13 +635,7 @@ export const QuickAddModal: React.FC = () => {
                     onChange={e => setProjStage(e.target.value as ProjectStage)}
                     className="w-full px-3 py-2 text-xs bg-surface-2 border border-line rounded-xl text-content focus:border-indigo-500 outline-none font-bold"
                   >
-                    <option value="ideation">Ideation</option>
-                    <option value="planning">Planning</option>
-                    <option value="architecture">Design & Architecture</option>
-                    <option value="development">Development</option>
-                    <option value="testing">Testing & QA</option>
-                    <option value="deployment">Deployment</option>
-                    <option value="live">Live & Shipped</option>
+                    {activeStages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
                   </select>
                 </div>
 

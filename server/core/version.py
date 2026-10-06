@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-APP_VERSION = '1.1.3'
+APP_VERSION = '1.2.0'
 BUILD_ID = 'dev'
 
 

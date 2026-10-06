@@ -12,7 +12,8 @@ import {
   Clipboard,
   ClipboardPlus,
 } from 'lucide-react';
-import { Project, Task, ProjectStage, TaskCategory, STAGE_CONFIG, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG } from '../types';
+import { Project, Task, ProjectStage, TaskCategory, QUADRANT_CONFIG, TASK_CATEGORY_CONFIG, stageLabelFor } from '../types';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 import { EmptyState, Button } from './ui';
 
 interface EditingSubtask {
@@ -89,6 +90,7 @@ export const ProjectTasksTab: React.FC<Props> = ({
     .filter(t => taskFilterStage === 'all' || t.stage === taskFilterStage)
     .filter(t => taskFilterCategory === 'all' || (t as unknown as { category?: string }).category === taskFilterCategory)
     .sort((a, b) => Number(a.completed) - Number(b.completed));
+  const { activeStages } = useWorkflowStages();
   const [expandedBlocker, setExpandedBlocker] = useState<string | null>(null);
   const [blockerDraft, setBlockerDraft] = useState<Record<string, { reason: string; nextAction: string }>>({});
   const getBlockerDraft = (task: Task) => blockerDraft[task.id] || { reason: task.blockerReason || '', nextAction: task.blockerNextAction || '' };
@@ -139,8 +141,8 @@ export const ProjectTasksTab: React.FC<Props> = ({
             className="px-3.5 py-1.5 text-xs bg-surface-2 border border-line rounded-xl text-content-muted font-bold outline-none"
           >
             <option value="all">All Stages</option>
-            {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(s => (
-              <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>
+            {activeStages.map(s => (
+              <option key={s.key} value={s.key}>{s.label}</option>
             ))}
           </select>
           <label className="sr-only" htmlFor="task-filter-category">Filter tasks by category</label>
@@ -220,7 +222,7 @@ export const ProjectTasksTab: React.FC<Props> = ({
                         </span>
 
                         <span className="text-[12px] font-mono px-2 py-0.5 rounded-md bg-surface-3 text-content-faint font-bold">
-                          {STAGE_CONFIG[task.stage]?.label}
+                          {stageLabelFor(task.stage, activeStages)}
                         </span>
 
                         {(() => { const cat = (task as unknown as { category?: TaskCategory }).category || 'feature'; const cfg = TASK_CATEGORY_CONFIG[cat]; return (

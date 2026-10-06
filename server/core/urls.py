@@ -8,6 +8,7 @@ from .views import (
     export_data_view, import_data_view, reset_workspace_view, dashboard_view, timeline_view,
     cloud_backup_latest_view, cloud_backup_push_view, cloud_backup_restore_view,
     filesystem_browse, filesystem_mkdir, file_content_view, project_folder_settings_view, automation_folder_settings_view, project_drive_settings_view, checklist_defaults_view, checklist_default_stage_view, daily_focus_view,
+    stage_definitions_view, stage_definition_detail_view, stage_definitions_reset_view, stage_definitions_reorder_view,
 )
 from .terminal_views import (
     create_project_terminal, list_terminals, kill_terminal,
@@ -60,6 +61,10 @@ urlpatterns = [
     path('settings/drive/', project_drive_settings_view, name='project-drive-settings'),
     path('settings/checklist-defaults/', checklist_defaults_view, name='checklist-defaults'),
     path('settings/checklist-defaults/<str:stage>/', checklist_default_stage_view, name='checklist-default-stage'),
+    path('settings/stages/', stage_definitions_view, name='stage-definitions'),
+    path('settings/stages/reset/', stage_definitions_reset_view, name='stage-definitions-reset'),
+    path('settings/stages/reorder/', stage_definitions_reorder_view, name='stage-definitions-reorder'),
+    path('settings/stages/<str:key>/', stage_definition_detail_view, name='stage-definition-detail'),
     path('daily-focus/', daily_focus_view, name='daily-focus'),
     path('opencode-models/', opencode_models_view, name='opencode-models'),
     path('search/market/', market_research_view, name='search-market'),

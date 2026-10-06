@@ -111,9 +111,15 @@ def effective_checklists(owner, stage):
 
 
 def initialize_project_workspaces(project):
-    """Create independent definitions for every stage on a new project."""
-    from .models import StageWorkspace, ProjectStage
-    for stage, _label in ProjectStage.choices:
+    """Create independent definitions for every active stage on a new project."""
+    from .models import StageWorkspace
+    try:
+        from .stage_definitions import ensure_stage_definitions
+        stages = [d.key for d in ensure_stage_definitions(project.owner)]
+    except Exception:
+        from .models import ProjectStage
+        stages = [value for value, _label in ProjectStage.choices]
+    for stage in stages:
         definitions = effective_checklists(project.owner, stage)
         StageWorkspace.objects.get_or_create(
             project=project,

@@ -57,8 +57,9 @@ import { PathPickerModal } from './PathPickerModal';
 import { IdeaCategoryManager } from './IdeaCategoryManager';
 import { useToast } from './Toaster';
 import { ChecklistDefaultsManager } from './ChecklistDefaultsManager';
+import { StageDefinitionsManager } from './StageDefinitionsManager';
 
-type SettingsSection = 'documents' | 'filters' | 'idea-categories' | 'models' | 'project-folder' | 'checklist-defaults' | 'desktop' | 'data' | 'account';
+type SettingsSection = 'documents' | 'filters' | 'idea-categories' | 'models' | 'project-folder' | 'lifecycle-stages' | 'checklist-defaults' | 'desktop' | 'data' | 'account';
 const UNCATEGORIZED_FILTER_ID = 'uncategorized';
 
 const formatDate = (iso: string) => {
@@ -631,6 +632,7 @@ export const SettingsView: React.FC = () => {
     { id: 'idea-categories', label: 'Idea categories', icon: Tags },
     { id: 'models', label: 'Launch Presets', icon: Cpu },
     { id: 'project-folder', label: 'Project folder', icon: FolderOpen },
+    { id: 'lifecycle-stages', label: 'Lifecycle stages', icon: Tags },
     { id: 'checklist-defaults', label: 'Checklist defaults', icon: ClipboardCheck },
     ...(isDesktop ? [{ id: 'desktop' as SettingsSection, label: 'Desktop app', icon: Monitor }] : []),
     { id: 'data', label: 'Data & Backup', icon: DatabaseBackup },
@@ -659,6 +661,9 @@ export const SettingsView: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {/* SECTION: DOCUMENTS */}
+      {section === 'lifecycle-stages' && <StageDefinitionsManager />}
 
       {/* SECTION: DOCUMENTS */}
       {section === 'checklist-defaults' && <ChecklistDefaultsManager />}

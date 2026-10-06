@@ -14,7 +14,7 @@ import {
   Trash2,
   MoveRight
 } from 'lucide-react';
-import { PriorityQuadrant, QUADRANT_CONFIG, STAGE_CONFIG, Task } from '../types';
+import { PriorityQuadrant, QUADRANT_CONFIG, Task } from '../types';
 import { PageHeader } from './ui';
 import { useToast } from './Toaster';
 

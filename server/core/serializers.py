@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.text import slugify
 from .models import (
-    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault,
+    Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, StageDefinition,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode,
     OrchestratorRun, OrchestratorStep, CronJob, CronRun, CronScheduleKind, CronNotifyMode, AutomationPrompt,
 )
@@ -172,7 +172,7 @@ class StageWorkspaceSerializer(serializers.ModelSerializer):
         if invalid and completed_supplied:
             raise serializers.ValidationError({'completed_items': f'Unknown checklist item(s): {", ".join(invalid)}'})
         stage = self.instance.stage if self.instance else self.context.get('stage')
-        if stage not in STAGE_WORKSPACE_CONFIG:
+        if not isinstance(stage, str) or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', stage):
             raise serializers.ValidationError({'stage': 'Unknown lifecycle stage.'})
         return attrs
 
@@ -224,6 +224,49 @@ class StageChecklistDefaultSerializer(serializers.ModelSerializer):
         if 'shaping_checklist' in attrs:
             attrs['shaping_checklist'] = [{'id': item['id'], 'label': item['label'].strip()[:300]} for item in shaping]
         return attrs
+
+class StageDefinitionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StageDefinition
+        fields = ['id', 'key', 'label', 'description', 'color', 'order', 'is_active', 'is_builtin', 'builtin_key', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'key', 'is_builtin', 'builtin_key', 'created_at', 'updated_at']
+
+    def validate_label(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('Label is required.')
+        if len(value) > 100:
+            raise serializers.ValidationError('Label must be 100 characters or fewer.')
+        request = self.context.get('request')
+        owner = getattr(request, 'user', None)
+        if owner and getattr(owner, 'is_authenticated', False):
+            query = StageDefinition.objects.filter(owner=owner, label__iexact=value)
+            if self.instance:
+                query = query.exclude(pk=self.instance.pk)
+            if query.exists():
+                raise serializers.ValidationError('A stage with this name already exists.')
+        return value
+
+    def validate_description(self, value):
+        return (value or '').strip()[:1000]
+
+    def validate_color(self, value):
+        value = (value or '').strip() or '#6366f1'
+        if len(value) > 30:
+            raise serializers.ValidationError('Color is too long.')
+        return value
+
+    def validate_order(self, value):
+        if value is None:
+            return 0
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError('Order must be a number.')
+        if value < 0 or value > 1000:
+            raise serializers.ValidationError('Order must be between 0 and 1000.')
+        return value
+
 
 class ProjectLaunchPromptSerializer(serializers.ModelSerializer):
     class Meta:

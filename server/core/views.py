@@ -20,13 +20,22 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup, CronJob, CronRun, AutomationPrompt
+from .models import Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, StageDefinition, DailyFocus, StageReview, ProjectStage, InitializationTool, ReasoningEffort, InitializationMode, CloudBackup, CronJob, CronRun, AutomationPrompt, DEFAULT_STAGE_DEFINITIONS
 from .serializers import (
     UserSerializer, RegisterSerializer,
-    ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer, StageChecklistDefaultSerializer,
+    ProjectSerializer, MilestoneSerializer, StageWorkspaceSerializer, StageChecklistDefaultSerializer, StageDefinitionSerializer,
     TaskSerializer, SubtaskSerializer,
     IdeaSerializer, IdeaCategorySerializer, TimeEntrySerializer,
     ProjectDocSerializer, AgentFilterSerializer, LauncherModelPresetSerializer, AutomationPromptSerializer
+)
+from .stage_definitions import (
+    ensure_stage_definitions,
+    migrate_stage_references,
+    reset_to_defaults,
+    serialize_definition,
+    stage_usage_counts,
+    unique_key_for_label,
+    valid_stage_keys,
 )
 from .filters import ProjectFilter, TaskFilter, IdeaFilter, TimeEntryFilter, ProjectDocFilter
 from .permissions import IsOwner
@@ -209,7 +218,119 @@ def _checklist_default_payload(owner, stage):
 
 
 def _valid_stage(stage):
-    return stage in {value for value, _label in ProjectStage.choices} and stage in STAGE_WORKSPACE_CONFIG
+    return isinstance(stage, str) and bool(__import__('re').fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', stage or ''))
+
+
+def _user_stage_keys(user):
+    try:
+        return valid_stage_keys(user)
+    except Exception:
+        return {value for value, _label in ProjectStage.choices}
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def stage_definitions_view(request):
+    from .stage_definitions import ordered_definitions
+    definitions = ordered_definitions(request.user)
+    if request.method == 'GET':
+        return Response({'stages': [serialize_definition(d, stage_usage_counts(request.user, d.key)) for d in definitions]})
+    payload = request.data if isinstance(request.data, dict) else {}
+    serializer = StageDefinitionSerializer(data=payload, context={'request': request})
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    key = unique_key_for_label(request.user, values['label'])
+    max_order = max([d.order for d in definitions] + [0])
+    stage = StageDefinition.objects.create(
+        owner=request.user,
+        key=key,
+        label=values['label'],
+        description=values.get('description', ''),
+        color=values.get('color') or '#6366f1',
+        order=values.get('order') if values.get('order') else max_order + 1,
+        is_active=True,
+        is_builtin=False,
+        builtin_key='',
+    )
+    return Response(serialize_definition(stage, stage_usage_counts(request.user, stage.key)), status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def stage_definition_detail_view(request, key):
+    ensure_stage_definitions(request.user)
+    stage = StageDefinition.objects.filter(owner=request.user, key=key).first()
+    if not stage:
+        return Response({'key': 'Unknown lifecycle stage.'}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == 'GET':
+        return Response(serialize_definition(stage, stage_usage_counts(request.user, stage.key)))
+    if request.method == 'DELETE':
+        payload = request.data if isinstance(request.data, dict) else {}
+        migrate_to = (payload.get('migrate_to') or request.query_params.get('migrate_to') or '').strip()
+        usage = stage_usage_counts(request.user, stage.key)
+        in_use = any(usage.values())
+        if in_use and not migrate_to:
+            return Response({'detail': 'This stage is still in use.', 'usage': usage}, status=status.HTTP_409_CONFLICT)
+        if migrate_to:
+            target = StageDefinition.objects.filter(owner=request.user, key=migrate_to).first()
+            if not target or not target.is_active:
+                return Response({'migrate_to': 'Choose an active stage to move existing items to.'}, status=status.HTTP_400_BAD_REQUEST)
+            if migrate_to == stage.key:
+                return Response({'migrate_to': 'Choose a different stage.'}, status=status.HTTP_400_BAD_REQUEST)
+            migrate_stage_references(request.user, stage.key, migrate_to)
+        if stage.is_builtin:
+            stage.is_active = False
+            stage.save(update_fields=['is_active', 'updated_at'])
+            return Response(serialize_definition(stage, stage_usage_counts(request.user, stage.key)))
+        stage.delete()
+        return Response({'deleted': key, 'migrated_to': migrate_to or None})
+    payload = request.data if isinstance(request.data, dict) else {}
+    if 'migrate_to' in payload and 'is_active' not in payload:
+        payload = {k: v for k, v in payload.items() if k != 'migrate_to'}
+    serializer = StageDefinitionSerializer(stage, data=payload, partial=True, context={'request': request})
+    serializer.is_valid(raise_exception=True)
+    values = serializer.validated_data
+    # Hiding a stage with content requires an explicit migration target.
+    if values.get('is_active') is False and stage.is_active:
+        usage = stage_usage_counts(request.user, stage.key)
+        if any(usage.values()):
+            migrate_to = (payload.get('migrate_to') or '').strip()
+            target = StageDefinition.objects.filter(owner=request.user, key=migrate_to).first()
+            if not target or not target.is_active or migrate_to == stage.key:
+                return Response({'detail': 'This stage is still in use. Choose where to move existing items.', 'usage': usage}, status=status.HTTP_409_CONFLICT)
+            migrate_stage_references(request.user, stage.key, migrate_to)
+    for field, value in values.items():
+        setattr(stage, field, value)
+    stage.save()
+    return Response(serialize_definition(stage, stage_usage_counts(request.user, stage.key)))
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def stage_definitions_reset_view(request):
+    definitions = reset_to_defaults(request.user)
+    return Response({'stages': [serialize_definition(d, stage_usage_counts(request.user, d.key)) for d in definitions]})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def stage_definitions_reorder_view(request):
+    payload = request.data if isinstance(request.data, dict) else {}
+    ordered_keys = payload.get('ordered_keys') or payload.get('order') or []
+    if not isinstance(ordered_keys, list) or not ordered_keys:
+        return Response({'ordered_keys': 'Provide an ordered list of stage keys.'}, status=status.HTTP_400_BAD_REQUEST)
+    owned = {d.key: d for d in ensure_stage_definitions(request.user)}
+    unknown = [k for k in ordered_keys if k not in owned]
+    if unknown:
+        return Response({'ordered_keys': f'Unknown stages: {unknown}'}, status=status.HTTP_400_BAD_REQUEST)
+    if set(ordered_keys) != set(owned.keys()):
+        return Response({'ordered_keys': 'The list must contain every stage exactly once.'}, status=status.HTTP_400_BAD_REQUEST)
+    with transaction.atomic():
+        for idx, key in enumerate(ordered_keys, start=1):
+            owned[key].order = idx
+            owned[key].save(update_fields=['order', 'updated_at'])
+    definitions = ensure_stage_definitions(request.user)
+    return Response({'stages': [serialize_definition(d, stage_usage_counts(request.user, d.key)) for d in definitions]})
 
 
 @api_view(['GET'])
@@ -508,7 +629,8 @@ def compose_task_prompt(task, user):
     ]
     if task.description:
         lines.extend(['', '### Description', task.description.strip()])
-    lines.extend(['', f'- Stage: {task.get_stage_display()}', f'- Category: {task.get_category_display()}', f'- Priority: {task.get_quadrant_display()}'])
+    from .stage_definitions import stage_label as _stage_label
+    lines.extend(['', f'- Stage: {_stage_label(user, task.stage)}', f'- Category: {task.get_category_display()}', f'- Priority: {task.get_quadrant_display()}'])
     if task.estimated_minutes:
         lines.append(f'- Estimate: {task.estimated_minutes} minutes')
     if task.tags:
@@ -694,9 +816,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
         next_stage = request.data.get('nextStage') or request.data.get('next_stage')
         if not next_stage:
             return Response({"error": "nextStage is required"}, status=400)
-        valid = [c[0] for c in ProjectStage.choices]
+        valid = _user_stage_keys(request.user)
         if next_stage not in valid:
-            return Response({"error": f"Invalid stage. Must be one of {valid}"}, status=400)
+            return Response({"error": f"Invalid stage. Must be one of {sorted(valid)}"}, status=400)
         project.current_stage = next_stage
         if next_stage == ProjectStage.LIVE and not project.actual_launch_date:
             project.actual_launch_date = timezone.now().date()
@@ -706,9 +828,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get', 'patch'], url_path=r'stage-workspaces/(?P<stage>[^/.]+)')
     def stage_workspace(self, request, pk=None, stage=None):
         project = self.get_object()
-        valid_stages = {value for value, _label in ProjectStage.choices}
-        if stage not in valid_stages or stage not in STAGE_WORKSPACE_CONFIG:
-            return Response({'stage': f'Invalid stage. Must be one of {sorted(valid_stages)}'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _valid_stage(stage) or stage not in _user_stage_keys(request.user):
+            return Response({'stage': 'Unknown lifecycle stage.'}, status=status.HTTP_400_BAD_REQUEST)
         workspace = StageWorkspace.objects.filter(project=project, stage=stage).first()
         if request.method == 'GET':
             if workspace:
@@ -922,7 +1043,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             parse_max_chars, parse_sections, parse_stages, build_project_context,
         )
         project = self.get_object()
-        valid_stages = [value for value, _label in ProjectStage.choices]
+        valid_stages = sorted(_user_stage_keys(request.user))
         try:
             stages = parse_stages(request.query_params.get('stages'), project.current_stage, valid_stages)
             sections = parse_sections(request.query_params.get('sections'))
@@ -939,7 +1060,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         )
         project = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
-        valid_stages = [value for value, _label in ProjectStage.choices]
+        valid_stages = sorted(_user_stage_keys(request.user))
         try:
             stages = parse_stages(data.get('stages'), project.current_stage, valid_stages)
             sections = parse_sections(data.get('sections'))
@@ -1559,6 +1680,7 @@ def _build_export_payload(user):
         "docs": ProjectDocSerializer(docs, many=True).data,
         "stageWorkspaces": StageWorkspaceSerializer(stage_workspaces, many=True).data,
         "checklistDefaults": [{**_checklist_default_payload(user, stage)} for stage, _label in ProjectStage.choices if StageChecklistDefault.objects.filter(owner=user, stage=stage).exists()],
+        "stageDefinitions": [serialize_definition(d) for d in ensure_stage_definitions(user)] if StageDefinition.objects.filter(owner=user).exists() else [],
         "dailyFocuses": [{'day': focus.day.isoformat(), 'task_ids': list(focus.task_ids or [])} for focus in DailyFocus.objects.filter(owner=user)],
         "stageReviews": [{'project': str(review.project_id), 'stage': review.stage, 'decision': review.decision, 'note': review.note, 'snapshot': review.snapshot, 'reviewed_at': review.reviewed_at} for review in StageReview.objects.filter(project__owner=user)],
         "modelPresets": LauncherModelPresetSerializer(presets, many=True).data,
@@ -1593,6 +1715,7 @@ def _wipe_workspace_data(user):
     CronJob.objects.filter(owner=user).delete()
     DailyFocus.objects.filter(owner=user).delete()
     StageChecklistDefault.objects.filter(owner=user).delete()
+    StageDefinition.objects.filter(owner=user).delete()
     Idea.objects.filter(owner=user).delete()
     Project.objects.filter(owner=user).delete()
     if user.potential_projects_root:
@@ -1770,7 +1893,7 @@ def _perform_import(user, data):
         # Stage workspaces (optional for compatibility with older exports)
         raw_workspaces = data.get('stageWorkspaces', data.get('stage_workspaces', []))
         if isinstance(raw_workspaces, list):
-            valid_stages = {value for value, _label in ProjectStage.choices}
+            import re as _re2
             for workspace_data in raw_workspaces:
                 if not isinstance(workspace_data, dict):
                     continue
@@ -1782,7 +1905,7 @@ def _perform_import(user, data):
                         project_obj = Project.objects.get(id=project_ref, owner=user)
                     except (Project.DoesNotExist, ValueError, TypeError):
                         project_obj = Project.objects.filter(owner=user, title=project_ref).first()
-                if not project_obj or stage not in valid_stages:
+                if not project_obj or not _re2.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', str(stage or '')):
                     continue
                 completed = workspace_data.get('completedItems', workspace_data.get('completed_items', []))
                 if not isinstance(completed, list):
@@ -1821,6 +1944,30 @@ def _perform_import(user, data):
                 shaping = default_data.get('shaping_checklist') if isinstance(default_data.get('shaping_checklist'), list) else builtins['shaping_checklist']
                 StageChecklistDefault.objects.update_or_create(owner=user, stage=stage, defaults={'checklist': guided, 'shaping_checklist': shaping})
                 imported['checklistDefaults'] += 1
+        # Lifecycle stage definitions (optional; older exports fall back to built-ins)
+        raw_stages = data.get('stageDefinitions', data.get('stage_definitions', []))
+        if isinstance(raw_stages, list) and raw_stages:
+            import re as _re
+            for entry in raw_stages:
+                if not isinstance(entry, dict):
+                    continue
+                key = str(entry.get('key') or '').strip()
+                if not _re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', key or ''):
+                    continue
+                label = str(entry.get('label') or key).strip()[:100] or key
+                StageDefinition.objects.update_or_create(
+                    owner=user,
+                    key=key,
+                    defaults={
+                        'label': label,
+                        'description': str(entry.get('description') or '')[:1000],
+                        'color': str(entry.get('color') or '#6366f1')[:30],
+                        'order': int(entry.get('order') or 0),
+                        'is_active': bool(entry.get('is_active', True)),
+                        'is_builtin': bool(entry.get('is_builtin', False)),
+                        'builtin_key': str(entry.get('builtin_key') or ''),
+                    },
+                )
         # Tasks
         if 'tasks' in data and isinstance(data['tasks'], list):
             for t in data['tasks']:

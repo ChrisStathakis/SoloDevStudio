@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
-import { Milestone, Project, ProjectStage, Task, STAGE_CONFIG } from '../types';
+import { Milestone, Project, ProjectStage, Task } from '../types';
+import { useWorkflowStages } from '../hooks/useWorkflowStages';
 
 type Props = {
   project: Project;
@@ -19,6 +20,7 @@ export const MilestoneEditor: React.FC<Props> = ({ project, tasks, milestone, on
   const [taskIds, setTaskIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { activeStages } = useWorkflowStages();
 
   useEffect(() => {
     setTitle(milestone?.title || '');
@@ -68,7 +70,8 @@ export const MilestoneEditor: React.FC<Props> = ({ project, tasks, milestone, on
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block text-xs font-bold text-content-muted">Stage
               <select value={stage} onChange={e => setStage(e.target.value as ProjectStage)} className="mt-1 w-full px-3 py-2.5 rounded-xl bg-surface-2 border border-line text-content text-sm outline-none focus:border-indigo-500">
-                {(Object.keys(STAGE_CONFIG) as ProjectStage[]).map(key => <option key={key} value={key}>{STAGE_CONFIG[key].label}</option>)}
+                {!activeStages.some(s => s.key === stage) && <option value={stage}>Current: {stage}</option>}
+                {activeStages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
               </select>
             </label>
             <label className="block text-xs font-bold text-content-muted">Target date *

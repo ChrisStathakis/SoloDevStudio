@@ -5,7 +5,9 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.conf import settings
 
 
-# Choices mirroring frontend/src/types.ts
+# Choices mirroring frontend/src/types.ts — kept as the built-in defaults.
+# Custom user stages are stored in StageDefinition; stage CharFields no longer
+# enforce choices so custom slugs validate.
 class ProjectStage(models.TextChoices):
     IDEATION = 'ideation', 'Ideation'
     PLANNING = 'planning', 'Planning'
@@ -14,6 +16,46 @@ class ProjectStage(models.TextChoices):
     TESTING = 'testing', 'Testing & QA'
     DEPLOYMENT = 'deployment', 'Deployment'
     LIVE = 'live', 'Live & Shipped'
+
+
+DEFAULT_STAGE_DEFINITIONS = [
+    {'key': 'ideation', 'label': 'Ideation', 'description': 'Brainstorming, concept validation, and problem definition', 'order': 1, 'color': '#f59e0b'},
+    {'key': 'planning', 'label': 'Planning', 'description': 'Feature scoping, roadmapping, and MVP requirements', 'order': 2, 'color': '#3b82f6'},
+    {'key': 'architecture', 'label': 'Design & Arch', 'description': 'Data models, UI wireframes, API contracts & system design', 'order': 3, 'color': '#8b5cf6'},
+    {'key': 'development', 'label': 'Development', 'description': 'Core implementation, frontend & backend engineering', 'order': 4, 'color': '#6366f1'},
+    {'key': 'testing', 'label': 'Testing & QA', 'description': 'Bug fixing, edge cases, responsive checks & security', 'order': 5, 'color': '#f43f5e'},
+    {'key': 'deployment', 'label': 'Deployment', 'description': 'CI/CD pipeline, domain setup, hosting & release build', 'order': 6, 'color': '#14b8a6'},
+    {'key': 'live', 'label': 'Live & Shipped', 'description': 'Production monitoring, user feedback & iterations', 'order': 7, 'color': '#10b981'},
+]
+
+
+class StageDefinition(models.Model):
+    """Owner-scoped lifecycle stage; seeded from DEFAULT_STAGE_DEFINITIONS."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='stage_definitions')
+    key = models.CharField(max_length=40)
+    label = models.CharField(max_length=100)
+    description = models.TextField(blank=True, default='')
+    color = models.CharField(max_length=30, blank=True, default='#6366f1')
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    is_builtin = models.BooleanField(default=False)
+    builtin_key = models.CharField(max_length=40, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'label']
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'key'], name='unique_owner_stage_key'),
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'order']),
+            models.Index(fields=['owner', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.label} ({self.key})"
 
 
 class InitializationTool(models.TextChoices):
@@ -117,7 +159,7 @@ class Project(models.Model):
     mvp_features = models.JSONField(default=list, blank=True)
     tags = models.JSONField(default=list, blank=True)
     category = models.CharField(max_length=50, choices=AppCategory.choices, default=AppCategory.WEB_SAAS)
-    current_stage = models.CharField(max_length=20, choices=ProjectStage.choices, default=ProjectStage.IDEATION)
+    current_stage = models.CharField(max_length=40, default=ProjectStage.IDEATION)
     target_deadline = models.DateField()
     start_date = models.DateField()
     actual_launch_date = models.DateField(null=True, blank=True)
@@ -159,7 +201,7 @@ class StageWorkspace(models.Model):
     """Private notes and checklist progress for one project lifecycle stage."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='stage_workspaces')
-    stage = models.CharField(max_length=20, choices=ProjectStage.choices)
+    stage = models.CharField(max_length=40)
     notes = models.TextField(blank=True, default='')
     completed_items = models.JSONField(default=list, blank=True)
     checklist = models.JSONField(default=list, blank=True)
@@ -175,14 +217,15 @@ class StageWorkspace(models.Model):
         indexes = [models.Index(fields=['project', 'stage'])]
 
     def __str__(self):
-        return f"{self.project.title} — {self.get_stage_display()} workspace"
+        from .stage_definitions import default_label_for_key
+        return f"{self.project.title} — {default_label_for_key(self.stage)} workspace"
 
 
 class StageChecklistDefault(models.Model):
     """Owner-scoped checklist defaults copied into newly created projects."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='stage_checklist_defaults')
-    stage = models.CharField(max_length=20, choices=ProjectStage.choices)
+    stage = models.CharField(max_length=40)
     checklist = models.JSONField(default=list, blank=True)
     shaping_checklist = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -216,7 +259,7 @@ class StageReview(models.Model):
     DECISION_CHOICES = [(CONTINUE, 'Continue working'), (READY, 'Ready to advance')]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='stage_reviews')
-    stage = models.CharField(max_length=20, choices=ProjectStage.choices)
+    stage = models.CharField(max_length=40)
     decision = models.CharField(max_length=20, choices=DECISION_CHOICES)
     note = models.TextField(blank=True, default='')
     snapshot = models.JSONField(default=dict, blank=True)
@@ -266,7 +309,7 @@ class Milestone(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='milestones')
     title = models.CharField(max_length=400)
-    stage = models.CharField(max_length=20, choices=ProjectStage.choices, default=ProjectStage.PLANNING)
+    stage = models.CharField(max_length=40, default=ProjectStage.PLANNING)
     target_date = models.DateField()
     completed = models.BooleanField(default=False)
     description = models.TextField(blank=True, default='')
@@ -286,7 +329,7 @@ class Task(models.Model):
     milestones = models.ManyToManyField(Milestone, blank=True, related_name='tasks')
     title = models.CharField(max_length=400)
     description = models.TextField(blank=True, default='')
-    stage = models.CharField(max_length=20, choices=ProjectStage.choices, default=ProjectStage.DEVELOPMENT)
+    stage = models.CharField(max_length=40, default=ProjectStage.DEVELOPMENT)
     quadrant = models.CharField(max_length=20, choices=PriorityQuadrant.choices, default=PriorityQuadrant.Q1_DO)
     category = models.CharField(max_length=20, choices=TaskCategory.choices, default=TaskCategory.FEATURE)
     completed = models.BooleanField(default=False)
@@ -415,7 +458,7 @@ class TimeEntry(models.Model):
     project_title = models.CharField(max_length=400)
     task = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name='time_entries')
     task_title = models.CharField(max_length=400, blank=True, default='')
-    stage = models.CharField(max_length=20, choices=ProjectStage.choices, default=ProjectStage.DEVELOPMENT)
+    stage = models.CharField(max_length=40, default=ProjectStage.DEVELOPMENT)
     duration_seconds = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     mode = models.CharField(max_length=20, choices=TimeMode.choices, default=TimeMode.MANUAL)
     notes = models.TextField(blank=True, default='')

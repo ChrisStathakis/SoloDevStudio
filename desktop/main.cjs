@@ -5,13 +5,13 @@ const netModule = require('net');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
-let buildIdentity = { version: '1.1.3', buildId: 'dev' };
+let buildIdentity = { version: '1.2.0', buildId: 'dev' };
 try {
   buildIdentity = require('./build-identity.cjs');
 } catch {
   // Development checkouts do not have a generated release identity.
 }
-const APP_VERSION = buildIdentity.version || '1.1.3';
+const APP_VERSION = buildIdentity.version || '1.2.0';
 const BUILD_ID = buildIdentity.buildId || 'dev';
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
