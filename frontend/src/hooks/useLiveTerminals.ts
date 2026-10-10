@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
+import { api, TERMINAL_REQUEST_TIMEOUT_MS } from '../services/api';
 import type { TerminalSessionDto } from '../components/TerminalDrawer';
 
 export interface LiveProjectGroup {
@@ -12,6 +12,34 @@ export interface LiveProjectGroup {
 }
 
 const POLL_MS = 8000;
+
+// App, Navigation and the floating pill each mount this hook: without sharing,
+// every poll cycle fires 3 identical GETs at the backend. Share one in-flight
+// request and reuse fresh results so parallel pollers cost a single call.
+let sharedInflight: Promise<TerminalSessionDto[]> | null = null;
+let sharedAt = 0;
+let sharedResult: TerminalSessionDto[] = [];
+const SHARED_FRESH_MS = 3000;
+
+function fetchLiveSessions(): Promise<TerminalSessionDto[]> {
+  const now = Date.now();
+  if (sharedInflight) return sharedInflight;
+  if (now - sharedAt < SHARED_FRESH_MS) return Promise.resolve(sharedResult);
+  sharedInflight = api
+    .get<TerminalSessionDto[]>('/terminals/', {
+      params: { alive: 'true' },
+      timeout: TERMINAL_REQUEST_TIMEOUT_MS,
+    })
+    .then(res => {
+      sharedResult = (res.data || []).filter(s => s.alive);
+      sharedAt = Date.now();
+      return sharedResult;
+    })
+    .finally(() => {
+      sharedInflight = null;
+    });
+  return sharedInflight;
+}
 
 /** Dispatched by TerminalDrawer after create/close/stop/restart so the global
  *  pill refreshes instantly instead of waiting for the next poll. */
@@ -34,16 +62,16 @@ export function useLiveTerminals() {
   const { isAuthenticated } = useAuth();
   const [sessions, setSessions] = useState<TerminalSessionDto[]>([]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     if (!isAuthenticated) {
       setSessions([]);
       return;
     }
     try {
-      const res = await api.get<TerminalSessionDto[]>('/terminals/', {
-        params: { alive: 'true' },
-      });
-      const live = (res.data || []).filter(s => s.alive);
+      if (force) {
+        sharedAt = 0;
+      }
+      const live = await fetchLiveSessions();
       setSessions(live);
     } catch (e) {
       // Keep last known state, but surface the failure so an invisible pill
@@ -60,7 +88,7 @@ export function useLiveTerminals() {
     void refresh();
     const t = window.setInterval(() => void refresh(), POLL_MS);
     const onFocus = () => void refresh();
-    const onChanged = () => void refresh();
+    const onChanged = () => void refresh(true);
     window.addEventListener('focus', onFocus);
     window.addEventListener(TERMINALS_CHANGED_EVENT, onChanged);
     return () => {

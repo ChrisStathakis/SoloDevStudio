@@ -327,16 +327,19 @@ class ProjectSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        from django.db import transaction
         milestones_data = validated_data.pop('milestones', [])
-        project = Project.objects.create(**validated_data)
-        initialize_project_workspaces(project)
-        for idx, m in enumerate(milestones_data):
-            # allow client to pass id? generate if not
-            m_id = m.get('id') or uuid.uuid4()
-            Milestone.objects.create(project=project, id=m_id, order=m.get('order', idx), **{k: v for k, v in m.items() if k not in ['id', 'order']})
+        with transaction.atomic():
+            project = Project.objects.create(**validated_data)
+            initialize_project_workspaces(project)
+            for idx, m in enumerate(milestones_data):
+                # allow client to pass id? generate if not
+                m_id = m.get('id') or uuid.uuid4()
+                Milestone.objects.create(project=project, id=m_id, order=m.get('order', idx), **{k: v for k, v in m.items() if k not in ['id', 'order']})
         return project
 
     def update(self, instance, validated_data):
+        from django.db import transaction
         milestones_data = validated_data.pop('milestones', None)
         # When the drive letter changes, remap the project's folder paths to the
         # new drive (python_env is intentionally left alone — it lives on the system).
@@ -352,39 +355,40 @@ class ProjectSerializer(serializers.ModelSerializer):
                     validated_data[field] = remap_drive(current, new_drive)
         for attr, val in validated_data.items():
             setattr(instance, attr, val)
-        instance.save()
-        if milestones_data is not None:
-            # Full replacement strategy: delete missing, update existing, create new
-            existing_ids = {str(m.id): m for m in instance.milestones.all()}
-            keep_ids = set()
-            for idx, m in enumerate(milestones_data):
-                m_id = str(m.get('id') or '')
-                if m_id and m_id in existing_ids:
-                    obj = existing_ids[m_id]
-                    for k, v in m.items():
-                        if k == 'id':
-                            continue
-                        if k == 'order':
-                            obj.order = v
-                        else:
-                            setattr(obj, k, v)
-                    if 'order' not in m:
-                        obj.order = idx
-                    obj.save()
-                    keep_ids.add(m_id)
-                else:
-                    new_id = m.get('id') or uuid.uuid4()
-                    Milestone.objects.create(
-                        project=instance,
-                        id=new_id,
-                        order=m.get('order', idx),
-                        **{k: v for k, v in m.items() if k not in ['id', 'order']}
-                    )
-                    keep_ids.add(str(new_id))
-            # delete not in keep_ids
-            for eid, obj in existing_ids.items():
-                if eid not in keep_ids:
-                    obj.delete()
+        with transaction.atomic():
+            instance.save()
+            if milestones_data is not None:
+                # Full replacement strategy: delete missing, update existing, create new
+                existing_ids = {str(m.id): m for m in instance.milestones.all()}
+                keep_ids = set()
+                for idx, m in enumerate(milestones_data):
+                    m_id = str(m.get('id') or '')
+                    if m_id and m_id in existing_ids:
+                        obj = existing_ids[m_id]
+                        for k, v in m.items():
+                            if k == 'id':
+                                continue
+                            if k == 'order':
+                                obj.order = v
+                            else:
+                                setattr(obj, k, v)
+                        if 'order' not in m:
+                            obj.order = idx
+                        obj.save()
+                        keep_ids.add(m_id)
+                    else:
+                        new_id = m.get('id') or uuid.uuid4()
+                        Milestone.objects.create(
+                            project=instance,
+                            id=new_id,
+                            order=m.get('order', idx),
+                            **{k: v for k, v in m.items() if k not in ['id', 'order']}
+                        )
+                        keep_ids.add(str(new_id))
+                # delete not in keep_ids
+                for eid, obj in existing_ids.items():
+                    if eid not in keep_ids:
+                        obj.delete()
         return instance
 
 
@@ -520,6 +524,7 @@ class TaskSerializer(serializers.ModelSerializer):
         return task
 
     def update(self, instance, validated_data):
+        from django.db import transaction
         subtasks_data = validated_data.pop('subtasks', None)
         milestones_data = validated_data.pop('milestones', None)
         for attr, val in validated_data.items():
@@ -535,34 +540,35 @@ class TaskSerializer(serializers.ModelSerializer):
                 instance.blocker_next_action = ''
         if 'blocker_reason' in validated_data and not validated_data['blocker_reason'].strip():
             instance.blocker_next_action = ''
-        instance.save()
-        if milestones_data is not None:
-            instance.milestones.set(milestones_data)
-        if subtasks_data is not None:
-            existing = {str(s.id): s for s in instance.subtasks.all()}
-            keep = set()
-            for idx, s in enumerate(subtasks_data):
-                sid = str(s.get('id') or '')
-                if sid and sid in existing:
-                    obj = existing[sid]
-                    for k, v in s.items():
-                        if k == 'id':
-                            continue
-                        if k == 'order':
-                            obj.order = v
-                        else:
-                            setattr(obj, k, v)
-                    if 'order' not in s:
-                        obj.order = idx
-                    obj.save()
-                    keep.add(sid)
-                else:
-                    new_id = s.get('id') or uuid.uuid4()
-                    Subtask.objects.create(task=instance, id=new_id, order=s.get('order', idx), **{k: v for k, v in s.items() if k not in ['id', 'order']})
-                    keep.add(str(new_id))
-            for eid, obj in existing.items():
-                if eid not in keep:
-                    obj.delete()
+        with transaction.atomic():
+            instance.save()
+            if milestones_data is not None:
+                instance.milestones.set(milestones_data)
+            if subtasks_data is not None:
+                existing = {str(s.id): s for s in instance.subtasks.all()}
+                keep = set()
+                for idx, s in enumerate(subtasks_data):
+                    sid = str(s.get('id') or '')
+                    if sid and sid in existing:
+                        obj = existing[sid]
+                        for k, v in s.items():
+                            if k == 'id':
+                                continue
+                            if k == 'order':
+                                obj.order = v
+                            else:
+                                setattr(obj, k, v)
+                        if 'order' not in s:
+                            obj.order = idx
+                        obj.save()
+                        keep.add(sid)
+                    else:
+                        new_id = s.get('id') or uuid.uuid4()
+                        Subtask.objects.create(task=instance, id=new_id, order=s.get('order', idx), **{k: v for k, v in s.items() if k not in ['id', 'order']})
+                        keep.add(str(new_id))
+                for eid, obj in existing.items():
+                    if eid not in keep:
+                        obj.delete()
         return instance
 
 # ---------- Idea ----------
@@ -759,11 +765,11 @@ class TimeEntrySerializer(serializers.ModelSerializer):
         if validated_data.get('task') and not validated_data.get('task_title'):
             validated_data['task_title'] = validated_data['task'].title
         entry = super().create(validated_data)
-        # update task time_spent_minutes
+        # update task time_spent_minutes atomically without loading all entries
         if entry.task:
-            total = sum(t.duration_seconds for t in entry.task.time_entries.all())
-            entry.task.time_spent_minutes = round(total / 60)
-            entry.task.save(update_fields=['time_spent_minutes'])
+            from django.db.models import F, Sum
+            total = entry.task.time_entries.aggregate(total=Sum('duration_seconds'))['total'] or 0
+            Task.objects.filter(pk=entry.task_id).update(time_spent_minutes=round(total / 60))
         return entry
 
 

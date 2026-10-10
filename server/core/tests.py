@@ -361,7 +361,7 @@ class ProjectDriveSettingsTests(APITestCase):
                 raise RuntimeError('simulated remap failure')
             return original(path, drive)
 
-        with patch('server.core.pathutils.remap_drive', side_effect=fail_after_first):
+        with patch('core.pathutils.remap_drive', side_effect=fail_after_first):
             with self.assertRaises(RuntimeError):
                 self.client.patch('/api/settings/drive/', {'drive': 'G'}, format='json')
 

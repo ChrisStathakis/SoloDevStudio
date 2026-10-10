@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
     'core',
@@ -121,14 +122,27 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 10,
     'DEFAULT_THROTTLE_RATES': {
         'research': '20/hour',
+        'auth': '20/hour',
+        'auth_login': '10/hour',
     },
 }
+
+# Fail fast on insecure production defaults: never run with the dev
+# SECRET_KEY, DEBUG=True, or open ALLOWED_HOSTS outside development.
+INSECURE_DEFAULT_KEY = 'django-insecure-dev-key-change-in-prod-solodev-2026'
+if not DEBUG:
+    if SECRET_KEY == INSECURE_DEFAULT_KEY:
+        raise ValueError('SECRET_KEY must be set to a unique value when DEBUG=False.')
+    if SECRET_KEY is None or len(str(SECRET_KEY)) < 32:
+        raise ValueError('SECRET_KEY must be at least 32 characters when DEBUG=False.')
+    if ALLOWED_HOSTS == ['*']:
+        raise ValueError('ALLOWED_HOSTS must list explicit hosts when DEBUG=False.')
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': False,
+    'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 

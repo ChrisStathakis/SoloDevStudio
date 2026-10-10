@@ -1,8 +1,8 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
-    health_view, register_view, me_view,
+    health_view, register_view, me_view, ThrottledTokenObtainPairView,
     ProjectViewSet, MilestoneViewSet, TaskViewSet, IdeaViewSet, TimeEntryViewSet,
     ProjectDocViewSet, AgentFilterViewSet, IdeaCategoryViewSet, LauncherModelPresetViewSet,
     export_data_view, import_data_view, reset_workspace_view, dashboard_view, timeline_view,
@@ -42,7 +42,7 @@ router.register(r'launcher-model-presets', LauncherModelPresetViewSet, basename=
 urlpatterns = [
     path('health/', health_view, name='health'),
     path('auth/register/', register_view, name='register'),
-    path('auth/login/', TokenObtainPairView.as_view(), name='login'),
+    path('auth/login/', ThrottledTokenObtainPairView.as_view(), name='login'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/me/', me_view, name='me'),
     path('export/', export_data_view, name='export'),

@@ -321,7 +321,17 @@ class TerminalManager:
             self._sessions.pop(sid, None)
 
     def count_alive_for_user(self, owner_id):
-        return sum(1 for s in self._sessions.values() if str(s.owner_id) == str(owner_id) and s.is_alive())
+        # Reap PTYs that died silently first: without this, ghost entries
+        # whose process already exited still count against the live limit and
+        # new consoles are rejected with 429 even though nothing is running.
+        alive = 0
+        for s in self._sessions.values():
+            if str(s.owner_id) != str(owner_id):
+                continue
+            s.finalize_if_dead()
+            if s.exited_at is None:
+                alive += 1
+        return alive
 
     # ---------- public API ----------
 

@@ -12,7 +12,7 @@ import type { IDisposable } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Zap, Terminal as TerminalIcon, X, Square, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
-import { api, authedFetch } from '../services/api';
+import { api, authedFetch, TERMINAL_REQUEST_TIMEOUT_MS } from '../services/api';
 import { scanOutputMarkers } from '../services/initialization';
 import { notifyTerminalsChanged, TERMINAL_OPEN_EVENT, useLiveTerminals } from '../hooks/useLiveTerminals';
 import { useApp } from '../context/AppContext';
@@ -293,7 +293,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         return;
       }
       try {
-        const res = await api.get<TerminalSessionDto[]>('/terminals/', { params: { alive: 'true', project: projectId } });
+        const res = await api.get<TerminalSessionDto[]>('/terminals/', { params: { alive: 'true', project: projectId }, timeout: TERMINAL_REQUEST_TIMEOUT_MS });
         const liveSessions = res.data || [];
         setSessions(liveSessions);
         setActiveId(prev => {
@@ -401,7 +401,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           try {
             for (let index = 0; index < chunks.length; index += 1) {
               if (queue.cancelled) throw new DOMException('Input queue cancelled.', 'AbortError');
-              await api.post('/terminals/' + sessionId + '/input/', { data: chunks[index] }, { signal: queue.abort.signal });
+              await api.post('/terminals/' + sessionId + '/input/', { data: chunks[index] }, { signal: queue.abort.signal, timeout: TERMINAL_REQUEST_TIMEOUT_MS });
               if (item.chunked && chunks[index].includes(BRACKETED_PASTE_END)) queue.activePasteEndPending = false;
               if (item.chunked && index + 1 < chunks.length) await sleep(PASTE_CHUNK_GAP_MS, queue.abort.signal);
             }
@@ -581,7 +581,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
         return;
       }
 
-      const inFlight = api.post(`/terminals/${sessionId}/resize/`, { cols, rows }).then(() => {
+      const inFlight = api.post(`/terminals/${sessionId}/resize/`, { cols, rows }, { timeout: TERMINAL_REQUEST_TIMEOUT_MS }).then(() => {
         if (resizeGenerationRef.current === generation) {
           rt.lastCols = cols;
           rt.lastRows = rows;
@@ -633,9 +633,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             /* the in-flight resize already reported its own failure */
           }
         }
-        await api.post(`/terminals/${sessionId}/resize/`, { cols: target - 1, rows });
+        await api.post(`/terminals/${sessionId}/resize/`, { cols: target - 1, rows }, { timeout: TERMINAL_REQUEST_TIMEOUT_MS });
         await sleep(150);
-        await api.post(`/terminals/${sessionId}/resize/`, { cols: target, rows });
+        await api.post(`/terminals/${sessionId}/resize/`, { cols: target, rows }, { timeout: TERMINAL_REQUEST_TIMEOUT_MS });
         if (sessionId === activeIdRef.current) {
           rt.lastCols = target;
           rt.lastRows = rows;
@@ -658,7 +658,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
       while (queue.items.length) queue.items.shift()!.reject(cancellation);
       queue.pending = [];
       if (queue.activePasteEndPending) {
-        void api.post('/terminals/' + sessionId + '/input/', { data: BRACKETED_PASTE_END }).catch(() => undefined);
+        void api.post('/terminals/' + sessionId + '/input/', { data: BRACKETED_PASTE_END }, { timeout: TERMINAL_REQUEST_TIMEOUT_MS }).catch(() => undefined);
       }
       inputQueuesRef.current.delete(sessionId);
     }, []);
@@ -864,11 +864,14 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
 
       const enableInputAfterInitialRender = () => {
         if (stopped() || rt.inputReady) return;
-        if (session?.alive === false) {
-          // Silent early-return used to wedge the console in "waiting for
-          // prompt" with no error shown. Log it so the next occurrence is
-          // diagnosable instead of mysterious.
-          console.warn('[TerminalDrawer] input enable skipped: session snapshot reports alive=false', { activeId });
+        // The `session` snapshot is captured when the effect mounts and can be
+        // stale after a reconnect. Consult the live record instead so a console
+        // the backend still reports as alive never wedges in "preparing".
+        const live = sessionsRef.current.find(s => s.id === activeId);
+        if (!live || live.alive === false) {
+          console.warn('[TerminalDrawer] input enable skipped: live record reports not-alive', { activeId });
+          setTerminalError('This console has ended. Open a new one with CMD or Run Server.');
+          setConnState('error');
           return;
         }
         rt.inputReady = true;
@@ -1026,12 +1029,15 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             console.error('[TerminalDrawer] stream error:', e);
             setConnState('error');
             failures += 1;
-            setConnectionAttempt(Math.min(failures, 3));
-            if (failures >= 3) {
-              setTerminalError('Console connection failed after 3 attempts. Retry connection to reconnect to this terminal.');
-              break;
+            setConnectionAttempt(failures);
+            // Keep retrying in the background instead of giving up after 3
+            // attempts: long-lived consoles (backend hiccup, 9-minute stream
+            // cutoff race, ConPTY stall) used to wedge in "loading forever"
+            // and only a full app restart recovered them.
+            if (failures === 3) {
+              setTerminalError('Console connection is unstable — still retrying in the background. Use Retry connection to reconnect now.');
             }
-            await sleep(Math.min(500 * failures, 3000), ctrl.signal);
+            await sleep(Math.min(500 * failures, 10000), ctrl.signal);
           }
         }
       };
@@ -1119,7 +1125,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           const res = await api.post<TerminalSessionDto>(`/projects/${projectId}/terminals/`, {
             mode,
             force_new: options?.forceNew === true,
-          });
+          }, { timeout: TERMINAL_REQUEST_TIMEOUT_MS });
           const dto = res.data;
           setSessions(prev => [...prev.filter(s => s.id !== dto.id), dto]);
           activeIdRef.current = dto.id;
@@ -1129,7 +1135,9 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
           notifyTerminalsChanged();
           return dto;
         } catch (error: any) {
-          const message = error?.response?.data?.error || error?.message || 'Unable to create the terminal console.';
+          const message = error?.code === 'ECONNABORTED'
+            ? 'The console request timed out — the backend may be busy. Try again.'
+            : error?.response?.data?.error || error?.message || 'Unable to create the terminal console.';
           setTerminalError(message);
           throw error;
         } finally {
@@ -1648,13 +1656,16 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
             <div className="mx-3 mt-2 flex items-start justify-between gap-3 rounded-xl border border-rose-900/60 bg-rose-950/40 px-3 py-2 text-xs text-rose-200" role="alert">
               <span className="break-words">{terminalError}</span>
               <span className="flex items-center gap-2 shrink-0">
-                {activeSession?.alive && connState === 'error' && (
+                {activeSession && connState === 'error' && (
                   <button
                     type="button"
                     onClick={() => {
                       setTerminalError(null);
                       setConnectionAttempt(0);
-                      setReconnectNonce(value => value + 1);
+                      // Refresh the session list first: the local alive flag
+                      // can be stale (backend restarted, session reaped), and
+                      // the pump decides from the fresh record.
+                      void refreshSessions().finally(() => setReconnectNonce(value => value + 1));
                     }}
                     className="rounded-md border border-rose-300/50 px-2 py-1 text-[11px] font-bold text-rose-100 hover:bg-rose-500/20"
                   >
@@ -1765,7 +1776,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                     ? connState === 'error'
                       ? '◌ connection error'
                       : connState === 'connecting'
-                      ? `◌ connecting${connectionAttempt ? ` — attempt ${connectionAttempt}/3` : ''}`
+                      ? `◌ connecting${connectionAttempt ? ` — attempt ${connectionAttempt}, retrying` : ''}`
                       : connState === 'detached'
                       ? '◌ detached launcher — waiting for output'
                       : connState === 'connected'
@@ -1774,7 +1785,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
                     : connState === 'error'
                     ? '● error'
                     : connState === 'connecting'
-                    ? `◌ connecting${connectionAttempt ? ` — attempt ${connectionAttempt}/3` : ''}`
+                    ? `◌ connecting${connectionAttempt ? ` — attempt ${connectionAttempt}, retrying` : ''}`
                     : connState === 'detached'
                     ? '● detached launcher'
                     : connState === 'connected'

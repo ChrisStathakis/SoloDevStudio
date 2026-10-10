@@ -5,13 +5,13 @@ const netModule = require('net');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
-let buildIdentity = { version: '1.2.0', buildId: 'dev' };
+let buildIdentity = { version: '1.2.2', buildId: 'dev' };
 try {
   buildIdentity = require('./build-identity.cjs');
 } catch {
   // Development checkouts do not have a generated release identity.
 }
-const APP_VERSION = buildIdentity.version || '1.2.0';
+const APP_VERSION = buildIdentity.version || '1.2.2';
 const BUILD_ID = buildIdentity.buildId || 'dev';
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -147,9 +147,19 @@ function frontendDist() {
 
 function registerAppProtocol() {
   protocol.handle(APP_SCHEME, async (request) => {
-    const url = new URL(request.url);
+    let url;
+    try {
+      url = new URL(request.url);
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
     if (url.hostname !== APP_HOST) return new Response('Not found', { status: 404 });
-    let relative = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+    let relative;
+    try {
+      relative = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
     if (!relative || relative.endsWith('/')) relative += 'index.html';
     const root = path.resolve(frontendDist());
     let file = path.resolve(root, relative);

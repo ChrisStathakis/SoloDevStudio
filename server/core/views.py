@@ -14,8 +14,9 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from rest_framework import viewsets, status, permissions, filters
-from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
@@ -61,6 +62,17 @@ User = get_user_model()
 
 # ---------- Auth & Health ----------
 
+class AuthRegisterThrottle(AnonRateThrottle):
+    scope = 'auth'
+
+
+class AuthLoginThrottle(AnonRateThrottle):
+    scope = 'auth_login'
+
+
+class ThrottledTokenObtainPairView(TokenObtainPairView):
+    throttle_classes = [AuthLoginThrottle]
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def health_view(request):
@@ -72,6 +84,7 @@ def health_view(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([AuthRegisterThrottle])
 def register_view(request):
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -2548,6 +2561,8 @@ def filesystem_browse(request):
         names = os.listdir(current)
     except PermissionError:
         return Response({"error": f"Permission denied: {current}"}, status=403)
+    except OSError as exc:
+        return Response({"error": f"Unable to list directory: {exc}"}, status=400)
 
     entries = []
     for name in names:

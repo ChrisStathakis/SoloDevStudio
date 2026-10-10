@@ -86,6 +86,11 @@ api.interceptors.response.use(
   }
 );
 
+// Terminal control-plane calls must never hang the UI forever: the backend
+// spawn path can block for seconds on ConPTY, and axios has no default
+// timeout. Callers pass this explicitly so bulk/data endpoints stay untouched.
+export const TERMINAL_REQUEST_TIMEOUT_MS = 25000;
+
 export const tokenStorage = {
   getAccess: () => localStorage.getItem(ACCESS_KEY),
   getRefresh: () => localStorage.getItem(REFRESH_KEY),

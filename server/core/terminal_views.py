@@ -81,7 +81,13 @@ def create_project_terminal(request, pk=None):
             run_args = []
             raw_port = (project.port or '').strip()
             if raw_port:
-                run_args = raw_port.split()
+                import re as _re
+                if len(raw_port) > 200:
+                    return Response({'error': 'Script arguments are too long.'}, status=status.HTTP_400_BAD_REQUEST)
+                tokens = raw_port.split()
+                if len(tokens) > 20 or any(not _re.fullmatch(r'[A-Za-z0-9._:/-]+', t) for t in tokens):
+                    return Response({'error': 'Script arguments contain unsupported characters.'}, status=status.HTTP_400_BAD_REQUEST)
+                run_args = tokens
             session, reused = terminal_manager.get_or_create_script(
                 owner_id=request.user.id,
                 project_id=project.id,

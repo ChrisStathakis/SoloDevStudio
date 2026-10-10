@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import os
+import secrets
 import threading
 from pathlib import Path
 from signal import SIGINT, SIGTERM, signal
@@ -76,6 +77,39 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+INSECURE_DEFAULT_KEY = 'django-insecure-dev-key-change-in-prod-solodev-2026'
+
+
+def ensure_secret_key(app_dir: Path) -> str:
+    """Return a stable per-install SECRET_KEY, generating one on first run.
+
+    The packaged desktop app runs with DEBUG=False but ships no SECRET_KEY,
+    which trips the production guard in config.settings. Keep a random key
+    next to the per-user database so sessions stay valid across restarts.
+    An explicit SECRET_KEY env var (custom or >=32 chars) always wins.
+    """
+    override = os.environ.get('SECRET_KEY')
+    if override and override != INSECURE_DEFAULT_KEY and len(override) >= 32:
+        return override
+    key_file = app_dir / 'secret.key'
+    try:
+        existing = key_file.read_text(encoding='utf-8').strip()
+    except OSError:
+        existing = ''
+    if len(existing) >= 32:
+        os.environ['SECRET_KEY'] = existing
+        return existing
+    fresh = secrets.token_urlsafe(64)
+    try:
+        fd = os.open(str(key_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(fresh)
+    except OSError:
+        key_file.write_text(fresh, encoding='utf-8')
+    os.environ['SECRET_KEY'] = fresh
+    return fresh
+
+
 def main() -> None:
     args = parse_args()
     if args.terminal_self_test:
@@ -92,6 +126,7 @@ def main() -> None:
 
     db_path = Path(args.db_path).expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_secret_key(db_path.parent)
     backend_lock = BackendInstanceLock(db_path)
     atexit.register(backend_lock.release)
     project_root = db_path.parent / 'projects'

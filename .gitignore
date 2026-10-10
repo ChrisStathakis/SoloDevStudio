@@ -11,3 +11,13 @@ output/
 tmp/
 .terminal-test-venv/
 server/projects/
+server/uploads/
+uploads/
+
+# Local logs and error dumps (never commit runtime logs)
+*.log
+*.err
+server/*.log
+server/*.err
+frontend/*.err
+frontend/*.log

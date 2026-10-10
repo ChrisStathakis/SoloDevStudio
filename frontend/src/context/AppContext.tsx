@@ -161,7 +161,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isAuthenticated]);
 
-  // Data fetch
+  // Data fetch: follow DRF pagination so >100 rows are never silently dropped.
+  const fetchPaginatedAll = async (path: string): Promise<any[]> => {
+    const out: any[] = [];
+    let url: string | null = path;
+    let params: Record<string, unknown> | undefined = { page_size: 100 };
+    let guard = 0;
+    while (url && guard < 50) {
+      guard += 1;
+      const res = await api.get(url, params ? { params } : undefined);
+      const data = res.data;
+      if (Array.isArray(data)) {
+        out.push(...data);
+        break;
+      }
+      if (data && Array.isArray((data as any).results)) {
+        out.push(...(data as any).results);
+        url = (data as any).next
+          ? new URL((data as any).next, api.defaults.baseURL).pathname +
+            new URL((data as any).next, api.defaults.baseURL).search
+          : null;
+        params = undefined;
+        continue;
+      }
+      break;
+    }
+    return out;
+  };
   const fetchAll = useCallback(async () => {
     const generation = ++fetchGenerationRef.current;
     if (!isAuthenticated) {
@@ -172,17 +198,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setIsDataLoading(true);
     try {
-      const [projRes, tasksRes, ideasRes, timeRes] = await Promise.all([
-        api.get('/projects/', { params: { page_size: 100 } }),
-        api.get('/tasks/', { params: { page_size: 100 } }),
-        api.get('/ideas/', { params: { page_size: 100 } }),
-        api.get('/time-entries/', { params: { page_size: 100 } }),
+      const [projRows, taskRows, ideaRows, timeRows] = await Promise.all([
+        fetchPaginatedAll('/projects/'),
+        fetchPaginatedAll('/tasks/'),
+        fetchPaginatedAll('/ideas/'),
+        fetchPaginatedAll('/time-entries/'),
       ]);
       if (generation !== fetchGenerationRef.current) return;
-      setProjects(unwrapPaginated<any>(projRes.data).map(mapProjectFromApi));
-      setTasks(unwrapPaginated<any>(tasksRes.data).map(mapTaskFromApi));
-      setIdeas(unwrapPaginated<any>(ideasRes.data).map(mapIdeaFromApi));
-      setTimeEntries(unwrapPaginated<any>(timeRes.data).map(mapTimeEntryFromApi));
+      setProjects(projRows.map(mapProjectFromApi));
+      setTasks(taskRows.map(mapTaskFromApi));
+      setIdeas(ideaRows.map(mapIdeaFromApi));
+      setTimeEntries(timeRows.map(mapTimeEntryFromApi));
     } catch (e) {
       console.error('Failed to fetch data', e);
     } finally {
@@ -428,8 +454,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProjects(prev => [project, ...prev]);
     setIdeas(prev => prev.map(i => (i.id === ideaId ? idea : i)));
     // refresh tasks (convert creates tasks)
-    const tasksRes = await api.get('/tasks/', { params: { page_size: 100 } });
-    setTasks(unwrapPaginated<any>(tasksRes.data).map(mapTaskFromApi));
+    const taskRows = await fetchPaginatedAll('/tasks/');
+    setTasks(taskRows.map(mapTaskFromApi));
     confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
     return project;
   };

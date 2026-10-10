@@ -52,6 +52,8 @@ app.get("/api/health", (_req, res) => {
 
 // Proxy all /api/* to Django (same-origin for browser, no CORS preflight).
 // The local /api/health handler above runs first and is never proxied.
+const PROXY_TIMEOUT_MS = 30000;
+const PROXY_MAX_BYTES = 12 * 1024 * 1024;
 app.use("/api", async (req, res, next) => {
   // Let local handlers serve their exact paths.
   if (req.method === "GET" && req.path === "/health") return next();
@@ -75,7 +77,7 @@ app.use("/api", async (req, res, next) => {
         (init as any).body = JSON.stringify(req.body);
       }
     }
-    const upstream = await fetch(target, init);
+    const upstream = await fetch(target, { ...init, signal: AbortSignal.timeout(PROXY_TIMEOUT_MS) });
     res.status(upstream.status);
     upstream.headers.forEach((value, key) => {
       const k = key.toLowerCase();
@@ -84,11 +86,19 @@ app.use("/api", async (req, res, next) => {
     });
     if (upstream.body) {
       const buf = Buffer.from(await upstream.arrayBuffer());
+      if (buf.length > PROXY_MAX_BYTES) {
+        res.status(413).json({ detail: "Upstream response too large." });
+        return;
+      }
       res.send(buf);
     } else {
       res.end();
     }
   } catch (err: any) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      res.status(504).json({ detail: `Backend timed out at ${DJANGO_ORIGIN}.` });
+      return;
+    }
     console.error(`[api-proxy] ${req.method} ${req.originalUrl} -> ${DJANGO_ORIGIN} failed:`, err?.message || err);
     res.status(502).json({ detail: `Backend unreachable at ${DJANGO_ORIGIN}. Is Django running on 8001?` });
   }
