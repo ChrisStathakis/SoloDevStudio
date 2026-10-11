@@ -9,7 +9,7 @@ from django.utils.text import slugify
 from .models import (
     Project, ProjectLaunchPrompt, LauncherModelPreset, Milestone, Task, Subtask, Idea, IdeaCategory, TimeEntry, ProjectDoc, ProjectAgentLink, AgentFilter, StageWorkspace, StageChecklistDefault, StageDefinition,
     ProjectStage, AppCategory, PriorityQuadrant, TaskCategory, IdeaStatus, TimeMode, InitializationTool, ReasoningEffort, InitializationMode,
-    OrchestratorRun, OrchestratorStep, CronJob, CronRun, CronScheduleKind, CronNotifyMode, AutomationPrompt,
+    CronJob, CronRun, CronScheduleKind, CronNotifyMode, AutomationPrompt,
 )
 from .stage_workspaces import checklist_ids, builtin_checklists, stage_guidance, initialize_project_workspaces, STAGE_WORKSPACE_CONFIG
 from .model_validation import is_safe_model_id, MODEL_ID_ERROR
@@ -771,37 +771,6 @@ class TimeEntrySerializer(serializers.ModelSerializer):
             total = entry.task.time_entries.aggregate(total=Sum('duration_seconds'))['total'] or 0
             Task.objects.filter(pk=entry.task_id).update(time_spent_minutes=round(total / 60))
         return entry
-
-
-class OrchestratorStepSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = OrchestratorStep
-        fields = [
-            'id', 'run', 'task', 'title', 'tool', 'model_id', 'reasoning_effort',
-            'mode', 'skill_ids', 'terminal_id', 'status', 'attempt',
-            'verification_command', 'output_tail', 'approval_reason',
-            'order', 'instructions', 'dependencies', 'expected_files',
-            'worktree_path', 'branch_name', 'completion_report', 'check_results',
-            'review_status', 'failure_reason', 'started_at', 'finished_at',
-            'launch_phase', 'last_output_at',
-            'created_at', 'updated_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-
-
-class OrchestratorRunSerializer(serializers.ModelSerializer):
-    steps = OrchestratorStepSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = OrchestratorRun
-        fields = [
-            'id', 'project', 'goal', 'status', 'plan', 'max_parallel',
-            'integration_branch', 'integration_worktree', 'base_branch',
-            'original_head', 'snapshot_commit', 'workspace_fingerprint', 'index_fingerprint', 'dirty_files',
-            'snapshot_started_at', 'snapshot_created_at', 'snapshot_finished_at',
-            'autonomous', 'failure_reason', 'last_event', 'steps', 'created_at', 'updated_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class CronRunSerializer(serializers.ModelSerializer):

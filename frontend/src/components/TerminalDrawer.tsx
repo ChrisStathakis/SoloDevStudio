@@ -1155,7 +1155,7 @@ export const TerminalDrawer = forwardRef<TerminalDrawerHandle, Props>(
     }, []);
 
     const adopt = useCallback(async (session: TerminalSessionDto): Promise<void> => {
-      if (!session?.id) throw new Error('The orchestrator did not return a terminal session.');
+      if (!session?.id) throw new Error('The server did not return a terminal session.');
       register(session);
       if (activeIdRef.current === session.id && runtimeRef.current.inputReady) return;
       activeIdRef.current = session.id;

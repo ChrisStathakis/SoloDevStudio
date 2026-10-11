@@ -33,6 +33,17 @@ class WindowsTerminalTests(SimpleTestCase):
             time.sleep(0.05)
         self.fail('Terminal did not produce expected output: ' + session.read_since(0)[1])
 
+    def kill_and_wait(self, session, timeout=15):
+        # taskkill is async: the ConPTY cwd handle stays locked briefly after
+        # kill() returns, which races TemporaryDirectory cleanup on Windows.
+        try:
+            session.kill()
+        finally:
+            deadline = time.monotonic() + timeout
+            while session.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            time.sleep(1.0)
+
     def test_cmd_input_resize_and_batch_path_with_spaces(self):
         manager = TerminalManager()
         with tempfile.TemporaryDirectory(prefix='SoloDev terminal ') as folder:
@@ -43,7 +54,7 @@ class WindowsTerminalTests(SimpleTestCase):
                 session.write('echo SOLODEV_%COMSPEC%\r')
                 self.wait_output(session, 'cmd.exe')
             finally:
-                session.kill()
+                self.kill_and_wait(session)
             script = os.path.join(folder, 'test script.cmd')
             with open(script, 'w') as file:
                 file.write('@echo off\necho SCRIPT_READY_%~1\n')
@@ -53,4 +64,4 @@ class WindowsTerminalTests(SimpleTestCase):
                 self.wait_output(session, 'SCRIPT_READY_hello world')
                 self.assertTrue(session.is_alive())
             finally:
-                session.kill()
+                self.kill_and_wait(session)

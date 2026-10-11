@@ -1,7 +1,6 @@
 """Shared launcher for LLM CLIs inside pywinpty terminals.
 
-Extracted from the orchestrator coordinator so cron jobs reuse the exact
-same flow: write CLI command -> wait for composer ready -> bracketed paste
+Used by cron jobs: write CLI command -> wait for composer ready -> bracketed paste
 prompt + Enter -> poll output.
 """
 from __future__ import annotations
@@ -18,6 +17,8 @@ READY_RES = (
     re.compile(r'ask anything', re.I),
     re.compile(r'type / for commands', re.I),
     re.compile(r'esc to interrupt', re.I),
+    re.compile(r'opencode[^\n]*\d+\.\d+', re.I),
+    re.compile(r'kilo[^\n]*\d+\.\d+', re.I),
     re.compile(r'[─│┌┐└┘]{4,}'),
 )
 
@@ -84,7 +85,6 @@ def cli_command(*, tool: str, model_id: str = '', reasoning_effort: str = 'mediu
 def wait_for_ready(session, timeout: int = 180, on_tick=None, heartbeat=None) -> str:
     appended, _dropped = session.stats()
     deadline = time.time() + timeout
-    ready_at = None
     while time.time() < deadline:
         if heartbeat and not heartbeat():
             return 'lost_lease'
@@ -93,7 +93,6 @@ def wait_for_ready(session, timeout: int = 180, on_tick=None, heartbeat=None) ->
         _truncated, text, _offset, _more = session.read_since(appended)
         if text:
             appended += len(text)
-            ready_at = None
             if on_tick:
                 try:
                     on_tick()
@@ -101,10 +100,10 @@ def wait_for_ready(session, timeout: int = 180, on_tick=None, heartbeat=None) ->
                     pass
             if TRUST_RE.search(text):
                 return 'trust'
+            # Immediate match like frontend waitForOutputMarker; a quiet
+            # period fails on streaming TUIs that never go silent.
             if any(rx.search(text) for rx in READY_RES):
-                ready_at = time.time()
-        elif ready_at and time.time() - ready_at >= 0.8:
-            return 'ready'
+                return 'ready'
         time.sleep(0.25)
     return 'timeout'
 

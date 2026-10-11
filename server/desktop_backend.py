@@ -158,8 +158,6 @@ def main() -> None:
     from config.wsgi import application
 
     call_command("migrate", interactive=False, verbosity=0)
-    from core.services.orchestrator_coordinator import coordinator
-    coordinator.recover_active_runs()
     server = make_server(
         "127.0.0.1",
         args.port,

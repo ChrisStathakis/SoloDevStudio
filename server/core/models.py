@@ -508,7 +508,12 @@ class CloudBackup(models.Model):
 
 
 class OrchestratorRun(models.Model):
-    """A goal-driven autonomous run scoped to one project."""
+    """A goal-driven autonomous run scoped to one project.
+
+    Legacy/dormant: the Orchestrator tab was removed from the app. The table
+    stays for the migration chain (0037+ depends on 0031-0036) and existing
+    installs; no code writes to it anymore.
+    """
 
     PLANNING = 'planning'
     AWAITING_PLAN = 'awaiting_plan'
